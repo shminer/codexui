@@ -862,9 +862,6 @@
               >
                 {{ formatFileChangeCountLabel(diffViewerChanges.length) }}
               </button>
-              <button v-if="!isMobile" class="image-modal-close diff-viewer-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
-                <IconTablerX class="icon-svg" />
-              </button>
             </div>
           </div>
 
@@ -893,7 +890,7 @@
           </div>
         </section>
 
-        <button v-if="isMobile" class="image-modal-close diff-viewer-close diff-viewer-mobile-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
+        <button class="image-modal-close diff-viewer-close diff-viewer-mobile-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
           <IconTablerX class="icon-svg" />
         </button>
 
