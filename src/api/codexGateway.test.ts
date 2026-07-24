@@ -199,6 +199,38 @@ describe('getAvailableModelIds', () => {
       { method: 'model/list', params: { cursor: 'next-page' } },
     ])
   })
+
+  it('reports Max and Ultra capabilities from model/list', async () => {
+    let catalog: unknown = null
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        data: [{
+          id: 'gpt-5.6',
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'xhigh', description: 'Extra high' },
+            { reasoningEffort: 'max', description: 'Max' },
+            { reasoningEffort: 'ultra', description: 'Ultra' },
+          ],
+        }],
+        nextCursor: null,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await getAvailableModelIds({
+      includeProviderModels: false,
+      onModelCatalog: (models: unknown) => {
+        catalog = models
+      },
+    } as never)
+
+    expect(catalog).toEqual([{
+      id: 'gpt-5.6',
+      supportedReasoningEfforts: ['xhigh', 'max', 'ultra'],
+    }])
+  })
 })
 
 describe('getCurrentModelConfig', () => {
@@ -229,6 +261,25 @@ describe('getCurrentModelConfig', () => {
       upstreamCatalogProviderIds: ['codex_local_access'],
       reasoningEffort: '',
       speedMode: 'standard',
+    })
+  })
+
+  it.each(['max', 'ultra'])('preserves the %s reasoning effort returned by config/read', async (reasoningEffort) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        config: {
+          model: 'gpt-5.6',
+          model_reasoning_effort: reasoningEffort,
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getCurrentModelConfig()).resolves.toMatchObject({
+      model: 'gpt-5.6',
+      reasoningEffort,
     })
   })
 })

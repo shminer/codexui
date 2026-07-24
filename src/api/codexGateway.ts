@@ -56,6 +56,7 @@ import type {
   UiThreadAutomation,
   UiThreadAutomationStatus,
 } from '../types/codex'
+import { isReasoningEffort } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 
 type CurrentModelConfig = {
@@ -251,6 +252,11 @@ type DirectoryComposioConnectorPage = {
 type ProviderModelsResponse = {
   data?: unknown
   exclusive?: unknown
+}
+
+export type ModelCatalogEntry = {
+  id: string
+  supportedReasoningEfforts: ReasoningEffort[]
 }
 
 const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
@@ -701,10 +707,7 @@ async function enrichThreadMessagesWithFallback(threadId: string, messages: UiMe
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
-  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
-  return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
-    ? (value as ReasoningEffort)
-    : ''
+  return isReasoningEffort(value) ? value : ''
 }
 
 function normalizeSpeedMode(value: unknown): SpeedMode {
@@ -2037,15 +2040,22 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
   return null
 }
 
-export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+export async function getAvailableModelIds(options: {
+  includeProviderModels?: boolean
+  requireProviderModels?: boolean
+  providerId?: string
+  onModelCatalog?: (models: ModelCatalogEntry[]) => void
+} = {}): Promise<string[]> {
   const shouldIncludeProviderModels = options.includeProviderModels !== false
   const providerModels = shouldIncludeProviderModels ? await fetchProviderModelIds(options.providerId) : null
 
   if (providerModels?.exclusive || options.requireProviderModels) {
+    options.onModelCatalog?.([])
     return providerModels?.ids ?? []
   }
 
   const ids: string[] = []
+  const catalog = new Map<string, ModelCatalogEntry>()
   let cursor: string | null = null
   do {
     const params: { cursor?: string } = {}
@@ -2053,11 +2063,21 @@ export async function getAvailableModelIds(options: { includeProviderModels?: bo
     const payload = await callRpc<ModelListResponse>('model/list', params)
     for (const row of payload.data) {
       const candidate = row.id || row.model
-      if (!candidate || ids.includes(candidate)) continue
-      ids.push(candidate)
+      if (!candidate) continue
+      if (!ids.includes(candidate)) ids.push(candidate)
+      catalog.set(candidate, {
+        id: candidate,
+        supportedReasoningEfforts: Array.isArray(row.supportedReasoningEfforts)
+          ? row.supportedReasoningEfforts
+            .map((option) => option.reasoningEffort)
+            .filter(isReasoningEffort)
+          : [],
+      })
     }
     cursor = payload.nextCursor
   } while (cursor)
+
+  options.onModelCatalog?.([...catalog.values()])
 
   if (!shouldIncludeProviderModels || !providerModels) return ids
 

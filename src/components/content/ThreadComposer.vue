@@ -401,6 +401,7 @@ import type {
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
 } from '../../types/codex'
+import { DEFAULT_REASONING_EFFORTS } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -439,6 +440,7 @@ const props = defineProps<{
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
   selectedModel: string
+  supportedReasoningEfforts?: ReasoningEffort[]
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
   skills?: SkillItem[]
@@ -585,14 +587,22 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: 'None' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'Extra high' },
-]
+const reasoningLabels: Record<ReasoningEffort, string> = {
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+  ultra: 'Ultra',
+}
+const reasoningOptions = computed(() => {
+  const supportedEfforts = props.supportedReasoningEfforts?.length
+    ? props.supportedReasoningEfforts
+    : DEFAULT_REASONING_EFFORTS
+  return supportedEfforts.map((value) => ({ value, label: reasoningLabels[value] }))
+})
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
