@@ -862,6 +862,9 @@
               >
                 {{ formatFileChangeCountLabel(diffViewerChanges.length) }}
               </button>
+              <button class="image-modal-close diff-viewer-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
+                <IconTablerX class="icon-svg" />
+              </button>
             </div>
           </div>
 
@@ -889,10 +892,6 @@
             </div>
           </div>
         </section>
-
-        <button class="image-modal-close diff-viewer-close diff-viewer-mobile-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
-          <IconTablerX class="icon-svg" />
-        </button>
 
         <Transition name="diff-viewer-sheet">
           <div
@@ -5425,7 +5424,7 @@ onBeforeUnmount(() => {
 }
 
 .diff-viewer-backdrop {
-  @apply fixed inset-0 z-50 bg-black/45 p-3 sm:p-6 flex items-center justify-center;
+  @apply fixed inset-0 z-[300] bg-black/45 p-3 sm:p-6 flex items-center justify-center;
 }
 
 .diff-viewer-shell {
@@ -5494,10 +5493,6 @@ onBeforeUnmount(() => {
 
 .diff-viewer-close {
   @apply static shrink-0 border-zinc-200 bg-zinc-100 text-zinc-700;
-}
-
-.diff-viewer-mobile-close {
-  @apply absolute top-3 right-3 z-30;
 }
 
 .diff-viewer-mobile-files-button {
@@ -5649,7 +5644,7 @@ onBeforeUnmount(() => {
   }
 
   .diff-viewer-toolbar {
-    @apply sticky top-0 z-10 bg-white px-3 py-3 pr-16;
+    @apply sticky top-0 z-10 bg-white px-3 py-3;
   }
 
   .diff-viewer-title {

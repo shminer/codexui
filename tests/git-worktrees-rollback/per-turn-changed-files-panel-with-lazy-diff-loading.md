@@ -19,7 +19,7 @@
 11. At a 341px-wide mobile viewport, open one changed file into the full Diff viewer.
 12. Confirm the `X` remains visible at the top right, then tap it.
 13. Switch to the dark theme and repeat steps 11 through 12.
-14. In an Android browser, enable its desktop-site mode and repeat steps 11 through 12.
+14. Confirm the app header, terminal control, and branch control remain behind the Diff viewer while it is open.
 
 #### Expected Results
 - Each worked message can show changed files for its turn.
@@ -30,7 +30,7 @@
 - Changed-files panel appears at the end of the worked message block (after command rows).
 - The mobile expanded summary row displays a tappable `X` and collapses its file list without navigating away from the conversation.
 - The full mobile Diff viewer keeps a tappable top-right `X` at 341px width and closes without relying on its toolbar layout.
-- The top-right `X` remains visible and closes the Diff viewer even when an Android browser reports a desktop viewport width.
+- The app header cannot cover the Diff toolbar or its close control.
 - The same close control remains visible and readable in the dark theme.
 
 #### Rollback/Cleanup
