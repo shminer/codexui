@@ -14,6 +14,8 @@
 6. Verify diff content loads only after expansion (lazy load behavior).
 7. Collapse and re-expand the same file row; verify diff reuses loaded content.
 8. Switch to another thread and back; verify panel reloads for the active thread context.
+9. At a 375px-wide mobile viewport, expand a `x files changed · x edited` summary in either a completed file-change message or an assistant message.
+10. Tap the visible `X` on the expanded summary row.
 
 #### Expected Results
 - Each worked message can show changed files for its turn.
@@ -22,6 +24,7 @@
 - Existing command output expand/collapse behavior remains unchanged.
 - Changed-files panel still resolves after page refresh or app-server restart.
 - Changed-files panel appears at the end of the worked message block (after command rows).
+- The mobile expanded summary row displays a tappable `X` and collapses its file list without navigating away from the conversation.
 
 #### Rollback/Cleanup
 - No cleanup required.

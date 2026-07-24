@@ -127,6 +127,8 @@
                   type="button"
                   class="cmd-row cmd-row-group cmd-compact file-change-summary-row"
                   :class="{ 'cmd-expanded': isFileChangeSummaryExpanded(message) }"
+                  :aria-expanded="isFileChangeSummaryExpanded(message)"
+                  :aria-label="isMobile && isFileChangeSummaryExpanded(message) ? 'Close changed files' : undefined"
                   @click="toggleFileChangeSummary(message)"
                 >
                   <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isFileChangeSummaryExpanded(message) }">▶</span>
@@ -143,6 +145,7 @@
                       {{ part.label }}
                     </span>
                   </span>
+                  <IconTablerX v-if="isMobile && isFileChangeSummaryExpanded(message)" class="icon-svg file-change-summary-close-icon" />
                 </button>
                 <div class="cmd-group-wrap" :class="{ 'cmd-group-visible': isFileChangeSummaryExpanded(message) }">
                   <div class="file-change-panel-inner">
@@ -621,6 +624,8 @@
                   type="button"
                   class="cmd-row cmd-row-group cmd-compact file-change-summary-row"
                   :class="{ 'cmd-expanded': isFileChangeSummaryExpanded(message) }"
+                  :aria-expanded="isFileChangeSummaryExpanded(message)"
+                  :aria-label="isMobile && isFileChangeSummaryExpanded(message) ? 'Close changed files' : undefined"
                   @click="toggleFileChangeSummary(message)"
                 >
                   <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isFileChangeSummaryExpanded(message) }">▶</span>
@@ -637,6 +642,7 @@
                       {{ part.label }}
                     </span>
                   </span>
+                  <IconTablerX v-if="isMobile && isFileChangeSummaryExpanded(message)" class="icon-svg file-change-summary-close-icon" />
                 </button>
                 <div class="cmd-group-wrap" :class="{ 'cmd-group-visible': isFileChangeSummaryExpanded(message) }">
                   <div class="file-change-panel-inner">
@@ -5331,6 +5337,10 @@ onBeforeUnmount(() => {
 
 .file-change-summary-status {
   @apply inline-flex max-w-28 items-center justify-end gap-1.5 text-right text-[11px] font-semibold text-zinc-500 flex-shrink-0;
+}
+
+.file-change-summary-close-icon {
+  @apply shrink-0 text-zinc-600;
 }
 
 .file-change-panel-inner {

@@ -775,6 +775,10 @@
   @apply text-zinc-400;
 }
 
+:root.dark .file-change-summary-close-icon {
+  @apply text-zinc-300;
+}
+
 :root.dark .file-change-list {
   @apply border-zinc-700 bg-zinc-900/70;
 }
