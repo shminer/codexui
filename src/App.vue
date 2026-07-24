@@ -945,6 +945,7 @@
                   :collaboration-modes="availableCollaborationModes"
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :models="availableModelIds" :selected-model="composerSelectedModelId"
+                  :supported-reasoning-efforts="composerSupportedReasoningEfforts"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
@@ -1028,6 +1029,7 @@
                     :selected-collaboration-mode="selectedCollaborationMode"
                     :models="availableModelIds"
                     :selected-model="composerSelectedModelId"
+                    :supported-reasoning-efforts="composerSupportedReasoningEfforts"
                     :selected-reasoning-effort="selectedReasoningEffort"
                     :selected-speed-mode="selectedSpeedMode"
                     :is-updating-speed-mode="isUpdatingSpeedMode"
@@ -1418,6 +1420,7 @@ const {
   selectedThreadId,
   availableCollaborationModes,
   availableModelIds,
+  availableModelReasoningEfforts,
   selectedCollaborationMode,
   selectedModelId,
   selectedReasoningEffort,
@@ -1769,6 +1772,9 @@ const latestUserTurnId = computed(() => {
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerSelectedModelId = computed(() => readModelIdForThread(composerThreadContextId.value))
+const composerSupportedReasoningEfforts = computed(() =>
+  availableModelReasoningEfforts.value[composerSelectedModelId.value] ?? [],
+)
 const selectedThreadPendingRequest = computed<UiServerRequest | null>(() => {
   const rows = selectedThreadServerRequests.value
   return rows.length > 0 ? rows[rows.length - 1] : null

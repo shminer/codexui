@@ -46,7 +46,7 @@ import {
   resolveCodexCommand,
   resolveRipgrepCommand,
 } from '../commandResolution.js'
-import type { CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
+import { isReasoningEffort, type CollaborationModeKind, type ReasoningEffort } from '../types/codex.js'
 import { isAbsoluteLikePath } from '../pathUtils.js'
 import {
   PERMISSIVE_SECURITY_POLICY,
@@ -5678,10 +5678,7 @@ async function appendThreadQueuedMessage(threadId: string, message: StoredQueued
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
-  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
-  return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
-    ? (value as ReasoningEffort)
-    : ''
+  return isReasoningEffort(value) ? value : ''
 }
 
 function normalizeCollaborationModeReasoningEffort(value: ReasoningEffort | '' | null | undefined): ReasoningEffort | null {

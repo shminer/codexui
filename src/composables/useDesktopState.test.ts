@@ -1031,11 +1031,11 @@ describe('provider model selection', () => {
     const state = useDesktopState()
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
 
-    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledWith({
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledWith(expect.objectContaining({
       includeProviderModels: true,
       requireProviderModels: true,
       providerId: 'opencode-zen',
-    })
+    }))
     expect(state.availableModelIds.value).toEqual([
       'big-pickle',
       'deepseek-v4-flash-free',
@@ -1140,14 +1140,63 @@ describe('provider model selection', () => {
     const state = useDesktopState()
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
 
-    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledWith({
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledWith(expect.objectContaining({
       includeProviderModels: false,
       requireProviderModels: false,
       providerId: undefined,
-    })
+    }))
     expect(state.availableModelIds.value).toEqual(['gpt-5.6', 'gpt-5.6-mini'])
     expect(state.availableModelIds.value).not.toContain('gpt-5.6-sol')
     expect(state.selectedModelId.value).toBe('gpt-5.6')
+  })
+
+  it('keeps the Max reasoning effort reported for GPT-5.6', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6',
+      providerId: '',
+      reasoningEffort: 'max',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.6'])
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedReasoningEffort.value).toBe('max')
+  })
+
+  it('falls back from Max when the selected model does not report it', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6',
+      providerId: '',
+      reasoningEffort: 'max',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModelIds.mockImplementation(async (options: {
+      onModelCatalog?: (models: Array<{ id: string; supportedReasoningEfforts: string[] }>) => void
+    }) => {
+      options.onModelCatalog?.([
+        { id: 'gpt-5.6', supportedReasoningEfforts: ['medium', 'high', 'xhigh', 'max', 'ultra'] },
+        { id: 'gpt-5.5', supportedReasoningEfforts: ['medium', 'high', 'xhigh'] },
+      ])
+      return ['gpt-5.6', 'gpt-5.5']
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    state.setSelectedModelId('gpt-5.5')
+
+    expect(state.selectedReasoningEffort.value).toBe('xhigh')
   })
 
   it('drops stale non-Codex selected models from the Codex model list', async () => {
