@@ -1995,10 +1995,14 @@ export function useDesktopState() {
       const normalizedProviderId = normalizeProviderContextId(currentConfig.providerId)
       activeProviderId.value = normalizedProviderId
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
-      const isProviderBacked = targetProviderId !== 'codex'
+      const usesUpstreamCatalog = targetProviderId === 'codex'
+        || (currentConfig.upstreamCatalogProviderIds ?? [])
+          .map(normalizeProviderContextId)
+          .includes(targetProviderId)
+      const isProviderBacked = !usesUpstreamCatalog
       const normalizedSelectedModelId = readModelIdForThread(selectedThreadId.value)
       const modelIds = await getAvailableModelIds({
-        includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
+        includeProviderModels: isProviderBacked && options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
       })

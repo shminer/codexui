@@ -1118,6 +1118,38 @@ describe('provider model selection', () => {
     })
   })
 
+  it('uses only the upstream visible catalog for a provider requiring OpenAI auth', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::codex-local-access': 'gpt-5.6-sol',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6-sol',
+      providerId: 'codex_local_access',
+      upstreamCatalogProviderIds: ['codex_local_access'],
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.6', 'gpt-5.6-mini'])
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledWith({
+      includeProviderModels: false,
+      requireProviderModels: false,
+      providerId: undefined,
+    })
+    expect(state.availableModelIds.value).toEqual(['gpt-5.6', 'gpt-5.6-mini'])
+    expect(state.availableModelIds.value).not.toContain('gpt-5.6-sol')
+    expect(state.selectedModelId.value).toBe('gpt-5.6')
+  })
+
   it('drops stale non-Codex selected models from the Codex model list', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({

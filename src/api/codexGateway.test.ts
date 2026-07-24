@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
+import { getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -172,6 +172,64 @@ describe('getAvailableModelIds', () => {
       includeProviderModels: true,
     })).resolves.toEqual(['gpt-5.5', 'gpt-5.4-mini'])
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
+  })
+
+  it('loads every visible model-list page without provider models', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(body)
+      const cursor = body.params.cursor
+      return new Response(JSON.stringify({
+        result: cursor
+          ? { data: [{ id: 'gpt-5.6-sol' }], nextCursor: null }
+          : { data: [{ id: 'gpt-5.6' }, { id: 'gpt-5.6-sol' }], nextCursor: 'next-page' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(getAvailableModelIds({ includeProviderModels: false })).resolves.toEqual([
+      'gpt-5.6',
+      'gpt-5.6-sol',
+    ])
+    expect(requests).toEqual([
+      { method: 'model/list', params: {} },
+      { method: 'model/list', params: { cursor: 'next-page' } },
+    ])
+  })
+})
+
+describe('getCurrentModelConfig', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('marks providers requiring OpenAI auth as upstream catalog providers', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        config: {
+          model: 'gpt-5.6-sol',
+          model_provider: 'codex_local_access',
+          model_providers: {
+            codex_local_access: { requires_openai_auth: true },
+            custom: { requires_openai_auth: false },
+          },
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getCurrentModelConfig()).resolves.toEqual({
+      model: 'gpt-5.6-sol',
+      providerId: 'codex_local_access',
+      upstreamCatalogProviderIds: ['codex_local_access'],
+      reasoningEffort: '',
+      speedMode: 'standard',
+    })
   })
 })
 

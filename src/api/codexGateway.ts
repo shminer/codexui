@@ -61,6 +61,7 @@ import { normalizePathForUi } from '../pathUtils.js'
 type CurrentModelConfig = {
   model: string
   providerId: string
+  upstreamCatalogProviderIds: string[]
   reasoningEffort: ReasoningEffort | ''
   speedMode: SpeedMode
 }
@@ -2044,13 +2045,19 @@ export async function getAvailableModelIds(options: { includeProviderModels?: bo
     return providerModels?.ids ?? []
   }
 
-  const payload = await callRpc<ModelListResponse>('model/list', {})
   const ids: string[] = []
-  for (const row of payload.data) {
-    const candidate = row.id || row.model
-    if (!candidate || ids.includes(candidate)) continue
-    ids.push(candidate)
-  }
+  let cursor: string | null = null
+  do {
+    const params: { cursor?: string } = {}
+    if (cursor) params.cursor = cursor
+    const payload = await callRpc<ModelListResponse>('model/list', params)
+    for (const row of payload.data) {
+      const candidate = row.id || row.model
+      if (!candidate || ids.includes(candidate)) continue
+      ids.push(candidate)
+    }
+    cursor = payload.nextCursor
+  } while (cursor)
 
   if (!shouldIncludeProviderModels || !providerModels) return ids
 
@@ -2064,9 +2071,13 @@ export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
   const payload = await callRpc<ConfigReadResponse>('config/read', {})
   const model = payload.config.model ?? ''
   const providerId = typeof payload.config.model_provider === 'string' ? payload.config.model_provider : ''
+  const providers = asRecord(payload.config.model_providers)
+  const upstreamCatalogProviderIds = Object.entries(providers ?? {})
+    .filter(([, provider]) => asRecord(provider)?.requires_openai_auth === true)
+    .map(([id]) => id)
   const reasoningEffort = normalizeReasoningEffort(payload.config.model_reasoning_effort)
   const speedMode = normalizeSpeedMode(payload.config.service_tier)
-  return { model, providerId, reasoningEffort, speedMode }
+  return { model, providerId, upstreamCatalogProviderIds, reasoningEffort, speedMode }
 }
 
 function normalizeDirectoryPluginApp(value: unknown): DirectoryPluginAppSummary | null {
