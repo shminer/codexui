@@ -19,7 +19,9 @@
 11. At a 341px-wide mobile viewport, open one changed file into the full Diff viewer.
 12. Confirm the `X` remains visible at the top right, then tap it.
 13. Switch to the dark theme and repeat steps 11 through 12.
-14. Confirm the app header, terminal control, and branch control remain behind the Diff viewer while it is open.
+14. At a 764px-wide viewport, open the full-screen Diff viewer and confirm its `X` remains visible.
+15. At a 768px-wide viewport, reopen the desktop Diff dialog and confirm its `X` remains visible.
+16. At both widths, confirm the app header, terminal control, and branch control remain behind the Diff viewer while it is open.
 
 #### Expected Results
 - Each worked message can show changed files for its turn.
@@ -30,6 +32,8 @@
 - Changed-files panel appears at the end of the worked message block (after command rows).
 - The mobile expanded summary row displays a tappable `X` and collapses its file list without navigating away from the conversation.
 - The full mobile Diff viewer keeps a tappable top-right `X` at 341px width and closes without relying on its toolbar layout.
+- The full-screen Diff viewer keeps its close control visible at 764px width.
+- The desktop Diff dialog keeps its close control visible at 768px width.
 - The app header cannot cover the Diff toolbar or its close control.
 - The same close control remains visible and readable in the dark theme.
 

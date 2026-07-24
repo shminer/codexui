@@ -813,122 +813,124 @@
       </button>
     </div>
 
-    <div v-if="activeDiffViewerChange" class="diff-viewer-backdrop" @click="closeDiffViewer">
-      <div class="diff-viewer-shell" @click.stop>
-        <aside v-if="!isMobile" class="diff-viewer-sidebar">
-          <div class="diff-viewer-sidebar-header">
-            <p class="diff-viewer-sidebar-title">Changed files</p>
-            <p class="diff-viewer-sidebar-count">{{ formatFileChangeCountLabel(diffViewerChanges.length) }}</p>
-          </div>
-          <div class="diff-viewer-sidebar-list">
-            <button
-              v-for="change in diffViewerChanges"
-              :key="`diff-viewer:${fileChangeKey(change)}`"
-              type="button"
-              class="diff-viewer-file-button"
-              :data-active="fileChangeKey(change) === fileChangeKey(activeDiffViewerChange)"
-              @click="selectDiffViewerChange(change)"
-            >
-              <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
-                {{ fileChangeOperationLabel(change) }}
-              </span>
-              <span class="diff-viewer-file-label">
-                {{ displayFileChangePath(change.path) }}
-                <template v-if="change.movedToPath"> → {{ displayFileChangePath(change.movedToPath) }}</template>
-              </span>
-              <span v-if="formatFileChangeDelta(change)" class="diff-viewer-file-delta">{{ formatFileChangeDelta(change) }}</span>
-            </button>
-          </div>
-        </aside>
-
-        <section class="diff-viewer-main">
-          <div class="diff-viewer-toolbar">
-            <div class="diff-viewer-title-wrap">
-              <p class="diff-viewer-title">
-                {{ displayFileChangePath(activeDiffViewerChange.path) }}
-                <template v-if="activeDiffViewerChange.movedToPath"> → {{ displayFileChangePath(activeDiffViewerChange.movedToPath) }}</template>
-              </p>
-              <p class="diff-viewer-subtitle">
-                {{ fileChangeOperationLabel(activeDiffViewerChange) }}
-                <span v-if="formatFileChangeDelta(activeDiffViewerChange)"> · {{ formatFileChangeDelta(activeDiffViewerChange) }}</span>
-              </p>
+    <Teleport to="body">
+      <div v-if="activeDiffViewerChange" class="diff-viewer-backdrop" @click="closeDiffViewer">
+        <div class="diff-viewer-shell" @click.stop>
+          <aside v-if="!isMobile" class="diff-viewer-sidebar">
+            <div class="diff-viewer-sidebar-header">
+              <p class="diff-viewer-sidebar-title">Changed files</p>
+              <p class="diff-viewer-sidebar-count">{{ formatFileChangeCountLabel(diffViewerChanges.length) }}</p>
             </div>
-            <div class="diff-viewer-toolbar-actions">
+            <div class="diff-viewer-sidebar-list">
               <button
-                v-if="isMobile"
+                v-for="change in diffViewerChanges"
+                :key="`diff-viewer:${fileChangeKey(change)}`"
                 type="button"
-                class="diff-viewer-mobile-files-button"
-                @click="toggleDiffViewerFileList"
+                class="diff-viewer-file-button"
+                :data-active="fileChangeKey(change) === fileChangeKey(activeDiffViewerChange)"
+                @click="selectDiffViewerChange(change)"
               >
-                {{ formatFileChangeCountLabel(diffViewerChanges.length) }}
+                <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
+                  {{ fileChangeOperationLabel(change) }}
+                </span>
+                <span class="diff-viewer-file-label">
+                  {{ displayFileChangePath(change.path) }}
+                  <template v-if="change.movedToPath"> → {{ displayFileChangePath(change.movedToPath) }}</template>
+                </span>
+                <span v-if="formatFileChangeDelta(change)" class="diff-viewer-file-delta">{{ formatFileChangeDelta(change) }}</span>
               </button>
-              <button class="image-modal-close diff-viewer-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
-                <IconTablerX class="icon-svg" />
-              </button>
             </div>
-          </div>
+          </aside>
 
-          <div v-if="!hasDiffViewerContent(activeDiffViewerChange)" class="diff-viewer-empty">
-            <p class="diff-viewer-empty-title">No diff available</p>
-            <p class="diff-viewer-empty-text">This summary was restored from the final answer text, but the thread history does not include patch diff content for this file.</p>
-          </div>
-
-          <div v-else class="diff-viewer-panel">
-            <div class="diff-viewer-meta">
-              <span class="diff-viewer-language">{{ inferDiffViewerLanguage(activeDiffViewerChange) || 'diff' }}</span>
-            </div>
-            <div class="diff-viewer-lines">
-              <div
-                v-for="line in activeDiffViewerLines"
-                :key="line.key"
-                class="diff-viewer-line"
-                :data-kind="line.kind"
-              >
-                <span class="diff-viewer-line-number">{{ line.oldLine ?? '' }}</span>
-                <span class="diff-viewer-line-number">{{ line.newLine ?? '' }}</span>
-                <span class="diff-viewer-line-marker">{{ diffViewerMarker(line) }}</span>
-                <code class="diff-viewer-line-code" v-html="escapeHtml(line.text) || '&nbsp;'"></code>
+          <section class="diff-viewer-main">
+            <div class="diff-viewer-toolbar">
+              <div class="diff-viewer-title-wrap">
+                <p class="diff-viewer-title">
+                  {{ displayFileChangePath(activeDiffViewerChange.path) }}
+                  <template v-if="activeDiffViewerChange.movedToPath"> → {{ displayFileChangePath(activeDiffViewerChange.movedToPath) }}</template>
+                </p>
+                <p class="diff-viewer-subtitle">
+                  {{ fileChangeOperationLabel(activeDiffViewerChange) }}
+                  <span v-if="formatFileChangeDelta(activeDiffViewerChange)"> · {{ formatFileChangeDelta(activeDiffViewerChange) }}</span>
+                </p>
               </div>
-            </div>
-          </div>
-        </section>
-
-        <Transition name="diff-viewer-sheet">
-          <div
-            v-if="isMobile && isDiffViewerFileListOpen"
-            class="diff-viewer-mobile-sheet-backdrop"
-            @click="closeDiffViewerFileList"
-          >
-            <div class="diff-viewer-mobile-sheet" @click.stop>
-              <div class="diff-viewer-mobile-sheet-handle" aria-hidden="true"></div>
-              <div class="diff-viewer-mobile-sheet-header">
-                <p class="diff-viewer-sidebar-title">Changed files</p>
-                <p class="diff-viewer-sidebar-count">{{ formatFileChangeCountLabel(diffViewerChanges.length) }}</p>
-              </div>
-              <div class="diff-viewer-mobile-sheet-list">
+              <div class="diff-viewer-toolbar-actions">
                 <button
-                  v-for="change in diffViewerChanges"
-                  :key="`diff-viewer-sheet:${fileChangeKey(change)}`"
+                  v-if="isMobile"
                   type="button"
-                  class="diff-viewer-file-button"
-                  :data-active="fileChangeKey(change) === fileChangeKey(activeDiffViewerChange)"
-                  @click="selectDiffViewerChange(change)"
+                  class="diff-viewer-mobile-files-button"
+                  @click="toggleDiffViewerFileList"
                 >
-                  <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
-                    {{ fileChangeOperationLabel(change) }}
-                  </span>
-                  <span class="diff-viewer-file-label">
-                    {{ displayFileChangePath(change.path) }}
-                    <template v-if="change.movedToPath"> → {{ displayFileChangePath(change.movedToPath) }}</template>
-                  </span>
-                  <span v-if="formatFileChangeDelta(change)" class="diff-viewer-file-delta">{{ formatFileChangeDelta(change) }}</span>
+                  {{ formatFileChangeCountLabel(diffViewerChanges.length) }}
+                </button>
+                <button class="image-modal-close diff-viewer-close" type="button" aria-label="Close diff viewer" @click="closeDiffViewer">
+                  <IconTablerX class="icon-svg" />
                 </button>
               </div>
             </div>
-          </div>
-        </Transition>
+
+            <div v-if="!hasDiffViewerContent(activeDiffViewerChange)" class="diff-viewer-empty">
+              <p class="diff-viewer-empty-title">No diff available</p>
+              <p class="diff-viewer-empty-text">This summary was restored from the final answer text, but the thread history does not include patch diff content for this file.</p>
+            </div>
+
+            <div v-else class="diff-viewer-panel">
+              <div class="diff-viewer-meta">
+                <span class="diff-viewer-language">{{ inferDiffViewerLanguage(activeDiffViewerChange) || 'diff' }}</span>
+              </div>
+              <div class="diff-viewer-lines">
+                <div
+                  v-for="line in activeDiffViewerLines"
+                  :key="line.key"
+                  class="diff-viewer-line"
+                  :data-kind="line.kind"
+                >
+                  <span class="diff-viewer-line-number">{{ line.oldLine ?? '' }}</span>
+                  <span class="diff-viewer-line-number">{{ line.newLine ?? '' }}</span>
+                  <span class="diff-viewer-line-marker">{{ diffViewerMarker(line) }}</span>
+                  <code class="diff-viewer-line-code" v-html="escapeHtml(line.text) || '&nbsp;'"></code>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <Transition name="diff-viewer-sheet">
+            <div
+              v-if="isMobile && isDiffViewerFileListOpen"
+              class="diff-viewer-mobile-sheet-backdrop"
+              @click="closeDiffViewerFileList"
+            >
+              <div class="diff-viewer-mobile-sheet" @click.stop>
+                <div class="diff-viewer-mobile-sheet-handle" aria-hidden="true"></div>
+                <div class="diff-viewer-mobile-sheet-header">
+                  <p class="diff-viewer-sidebar-title">Changed files</p>
+                  <p class="diff-viewer-sidebar-count">{{ formatFileChangeCountLabel(diffViewerChanges.length) }}</p>
+                </div>
+                <div class="diff-viewer-mobile-sheet-list">
+                  <button
+                    v-for="change in diffViewerChanges"
+                    :key="`diff-viewer-sheet:${fileChangeKey(change)}`"
+                    type="button"
+                    class="diff-viewer-file-button"
+                    :data-active="fileChangeKey(change) === fileChangeKey(activeDiffViewerChange)"
+                    @click="selectDiffViewerChange(change)"
+                  >
+                    <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
+                      {{ fileChangeOperationLabel(change) }}
+                    </span>
+                    <span class="diff-viewer-file-label">
+                      {{ displayFileChangePath(change.path) }}
+                      <template v-if="change.movedToPath"> → {{ displayFileChangePath(change.movedToPath) }}</template>
+                    </span>
+                    <span v-if="formatFileChangeDelta(change)" class="diff-viewer-file-delta">{{ formatFileChangeDelta(change) }}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Transition>
+        </div>
       </div>
-    </div>
+    </Teleport>
   </section>
 </template>
 
