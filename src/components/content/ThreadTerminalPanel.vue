@@ -1,41 +1,86 @@
 <template>
-  <section class="thread-terminal-panel" :class="{ 'is-error': Boolean(errorMessage) }">
-    <header class="thread-terminal-header">
-      <div class="thread-terminal-tabs">
+  <Teleport to="body">
+    <section
+      class="thread-terminal-panel"
+      :class="{ 'is-error': Boolean(errorMessage) }"
+      :style="terminalWindowStyle"
+    >
+      <header class="thread-terminal-header" @pointerdown="onTerminalHeaderPointerDown">
+        <div class="thread-terminal-tabs">
+          <button
+            v-for="(tab, index) in tabs"
+            :key="tab.id"
+            class="thread-terminal-tab"
+            :class="{ 'is-active': tab.id === activeSessionId }"
+            type="button"
+            :title="terminalTabTitle(tab, index)"
+            @click="onSelectTab(tab.id)"
+          >
+            <span class="thread-terminal-dot" :data-status="tab.status" />
+            <span class="thread-terminal-title">{{ terminalTabTitle(tab, index) }}</span>
+          </button>
+        </div>
+        <div class="thread-terminal-actions">
+          <button class="thread-terminal-action" type="button" title="New" @click="onNewTerminal">
+            New
+          </button>
+          <button class="thread-terminal-action" type="button" :title="t('Hide terminal')" @click="onHideTerminal">
+            {{ t('Hide') }}
+          </button>
+          <button class="thread-terminal-action" type="button" :title="t('Close')" @click="onCloseTerminal">
+            {{ t('Close') }}
+          </button>
+        </div>
+      </header>
+      <p v-if="errorMessage" class="thread-terminal-error">{{ errorMessage }}</p>
+      <div
+        ref="terminalHostRef"
+        class="thread-terminal-host"
+        @pointerdown="emit('terminalFocusChange', true)"
+        @focusin="emit('terminalFocusChange', true)"
+        @focusout="onTerminalFocusOut"
+      />
+      <div class="thread-terminal-shortcuts" aria-label="Terminal shortcuts">
+        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('tab')">
+          Tab
+        </button>
         <button
-          v-for="(tab, index) in tabs"
-          :key="tab.id"
-          class="thread-terminal-tab"
-          :class="{ 'is-active': tab.id === activeSessionId }"
+          class="thread-terminal-shortcut"
           type="button"
-          :title="terminalTabTitle(tab, index)"
-          @click="onSelectTab(tab.id)"
+          :disabled="isTerminalInputUnavailable"
+          :aria-pressed="ctrlShortcutArmed"
+          @pointerdown.prevent
+          @click="toggleCtrlShortcut"
         >
-          <span class="thread-terminal-dot" :data-status="tab.status" />
-          <span class="thread-terminal-title">{{ terminalTabTitle(tab, index) }}</span>
+          Ctrl
+        </button>
+        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('escape')">
+          Esc
+        </button>
+        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('pageUp')">
+          PgUp
+        </button>
+        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('pageDown')">
+          PgDn
+        </button>
+        <button class="thread-terminal-shortcut thread-terminal-shortcut-icon" type="button" aria-label="Arrow left" title="Arrow left" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('arrowLeft')">
+          <IconTablerArrowUp class="thread-terminal-shortcut-arrow thread-terminal-shortcut-arrow-left" />
+        </button>
+        <button class="thread-terminal-shortcut thread-terminal-shortcut-icon" type="button" aria-label="Arrow up" title="Arrow up" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('arrowUp')">
+          <IconTablerArrowUp class="thread-terminal-shortcut-arrow" />
+        </button>
+        <button class="thread-terminal-shortcut thread-terminal-shortcut-icon" type="button" aria-label="Arrow down" title="Arrow down" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('arrowDown')">
+          <IconTablerArrowUp class="thread-terminal-shortcut-arrow thread-terminal-shortcut-arrow-down" />
+        </button>
+        <button class="thread-terminal-shortcut thread-terminal-shortcut-icon" type="button" aria-label="Arrow right" title="Arrow right" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('arrowRight')">
+          <IconTablerArrowUp class="thread-terminal-shortcut-arrow thread-terminal-shortcut-arrow-right" />
         </button>
       </div>
-      <div class="thread-terminal-actions">
-        <button class="thread-terminal-action" type="button" title="New" @click="onNewTerminal">
-          New
-        </button>
-        <button class="thread-terminal-action" type="button" :title="t('Hide terminal')" @click="$emit('hide')">
-          {{ t('Hide') }}
-        </button>
-        <button class="thread-terminal-action" type="button" :title="t('Close')" @click="onCloseTerminal">
-          {{ t('Close') }}
-        </button>
+      <div class="thread-terminal-resize-handle" role="separator" aria-label="Resize terminal" @pointerdown="onTerminalResizePointerDown">
+        <IconTablerMaximize class="thread-terminal-resize-icon" />
       </div>
-    </header>
-    <p v-if="errorMessage" class="thread-terminal-error">{{ errorMessage }}</p>
-    <div
-      ref="terminalHostRef"
-      class="thread-terminal-host"
-      @pointerdown="emit('terminalFocusChange', true)"
-      @focusin="emit('terminalFocusChange', true)"
-      @focusout="onTerminalFocusOut"
-    />
-  </section>
+    </section>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -54,6 +99,15 @@ import {
   type RpcNotification,
   type ThreadTerminalQuickCommand,
 } from '../../api/codexGateway'
+import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
+import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
+import {
+  clampTerminalWindowRect,
+  initialTerminalWindowRect,
+  type TerminalFloatingWindowRect,
+  type TerminalVisualViewport,
+} from './terminalFloatingWindow'
+import { terminalVirtualKeyInput, type TerminalVirtualKey } from './terminalVirtualKeys'
 
 const props = defineProps<{
   threadId: string
@@ -62,6 +116,15 @@ const props = defineProps<{
 
 type ThreadTerminalPanelExposed = {
   runQuickCommand: (command: string, custom?: boolean) => Promise<void>
+}
+
+type TerminalWindowGesture = {
+  kind: 'drag' | 'resize'
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  startRect: TerminalFloatingWindowRect
+  target: HTMLElement
 }
 
 const emit = defineEmits<{
@@ -73,6 +136,8 @@ const terminalHostRef = ref<HTMLElement | null>(null)
 const activeSessionId = ref('')
 const errorMessage = ref('')
 const tabs = ref<TerminalTab[]>([])
+const ctrlShortcutArmed = ref(false)
+const terminalWindow = ref<TerminalFloatingWindowRect>({ left: 8, top: 8, width: 640, height: 420 })
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -80,6 +145,8 @@ let resizeObserver: ResizeObserver | null = null
 let unsubscribeNotifications: (() => void) | null = null
 let resizeFrame = 0
 let attachPromise: Promise<void> | null = null
+let terminalWindowGesture: TerminalWindowGesture | null = null
+let lastResizedTerminalGrid: { sessionId: string, cols: number, rows: number } | null = null
 const { t } = useUiLanguage()
 
 type TerminalTab = {
@@ -105,6 +172,13 @@ const storedQuickCommands = ref<QuickCommand[]>(loadStoredQuickCommands())
 const projectQuickCommands = ref<ThreadTerminalQuickCommand[]>([])
 
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeSessionId.value) ?? null)
+const isTerminalInputUnavailable = computed(() => !activeSessionId.value)
+const terminalWindowStyle = computed<Record<string, string>>(() => ({
+  left: `${terminalWindow.value.left}px`,
+  top: `${terminalWindow.value.top}px`,
+  width: `${terminalWindow.value.width}px`,
+  height: `${terminalWindow.value.height}px`,
+}))
 const quickCommands = computed<QuickCommand[]>(() => {
   const storedByValue = new Map(storedQuickCommands.value.map((command) => [command.value, command]))
   const combined = [
@@ -126,6 +200,10 @@ const quickCommands = computed<QuickCommand[]>(() => {
 
 onMounted(() => {
   restoreSavedTabs()
+  resetTerminalWindow()
+  window.addEventListener('resize', onTerminalViewportResize)
+  window.visualViewport?.addEventListener('resize', onTerminalViewportResize)
+  window.visualViewport?.addEventListener('scroll', clampTerminalWindowToViewport)
   createTerminal()
   unsubscribeNotifications = subscribeCodexNotifications(handleNotification)
   void refreshProjectQuickCommands()
@@ -141,6 +219,10 @@ onBeforeUnmount(() => {
   resizeObserver = null
   unsubscribeNotifications?.()
   unsubscribeNotifications = null
+  stopTerminalWindowGesture()
+  window.removeEventListener('resize', onTerminalViewportResize)
+  window.visualViewport?.removeEventListener('resize', onTerminalViewportResize)
+  window.visualViewport?.removeEventListener('scroll', clampTerminalWindowToViewport)
   terminal?.dispose()
   terminal = null
   fitAddon = null
@@ -149,6 +231,7 @@ onBeforeUnmount(() => {
 watch(
   () => [props.threadId, props.cwd] as const,
   () => {
+    ctrlShortcutArmed.value = false
     restoreSavedTabs()
     void refreshProjectQuickCommands()
     void attachToThread(false)
@@ -182,10 +265,7 @@ function createTerminal(): void {
   terminal.loadAddon(fitAddon)
   terminal.open(terminalHostRef.value)
   terminal.onData((data) => {
-    if (!activeSessionId.value) return
-    void sendThreadTerminalInput(activeSessionId.value, data).catch((error: unknown) => {
-      errorMessage.value = error instanceof Error ? error.message : t('Terminal input failed')
-    })
+    sendTerminalInput(data, t('Terminal input failed'))
   })
 
   resizeObserver = new ResizeObserver(() => {
@@ -231,6 +311,11 @@ async function doAttachToThread(newSession: boolean, targetSessionId = ''): Prom
       status: 'attached',
     })
     activeSessionId.value = session.id
+    lastResizedTerminalGrid = {
+      sessionId: session.id,
+      cols: terminal.cols,
+      rows: terminal.rows,
+    }
     saveTabsState()
     renderSessionBuffer(session.buffer)
   } catch (error) {
@@ -278,8 +363,154 @@ function handleNotification(notification: RpcNotification): void {
   }
 }
 
+function terminalViewportSize(): TerminalVisualViewport {
+  if (typeof window === 'undefined') {
+    return {
+      width: 1200,
+      height: 640,
+      offsetLeft: 0,
+      offsetTop: 0,
+    }
+  }
+  const viewport = window.visualViewport
+  return {
+    width: Math.max(1, Math.round(viewport?.width ?? window.innerWidth)),
+    height: Math.max(1, Math.round(viewport?.height ?? window.innerHeight)),
+    offsetLeft: Math.max(0, Math.round(viewport?.offsetLeft ?? 0)),
+    offsetTop: Math.max(0, Math.round(viewport?.offsetTop ?? 0)),
+  }
+}
+
+function resetTerminalWindow(): void {
+  terminalWindow.value = initialTerminalWindowRect(terminalViewportSize())
+}
+
+function clampTerminalWindowToViewport(): void {
+  terminalWindow.value = clampTerminalWindowRect(terminalWindow.value, terminalViewportSize())
+}
+
+function onTerminalViewportResize(): void {
+  clampTerminalWindowToViewport()
+  scheduleFitAndResize()
+}
+
+function onTerminalHeaderPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !event.isPrimary) return
+  const target = event.target
+  if (target instanceof Element && target.closest('button')) return
+  startTerminalWindowGesture('drag', event)
+}
+
+function onTerminalResizePointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !event.isPrimary) return
+  startTerminalWindowGesture('resize', event)
+}
+
+function startTerminalWindowGesture(kind: TerminalWindowGesture['kind'], event: PointerEvent): void {
+  event.preventDefault()
+  stopTerminalWindowGesture()
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  terminalWindowGesture = {
+    kind,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startRect: { ...terminalWindow.value },
+    target,
+  }
+  try {
+    target.setPointerCapture(event.pointerId)
+  } catch {
+    // Pointer capture is unavailable in some embedded browser contexts.
+  }
+  target.addEventListener('lostpointercapture', onTerminalWindowPointerCaptureLost)
+  window.addEventListener('pointermove', onTerminalWindowPointerMove)
+  window.addEventListener('pointerup', onTerminalWindowPointerEnd)
+  window.addEventListener('pointercancel', onTerminalWindowPointerEnd)
+  window.addEventListener('blur', onTerminalWindowBlur)
+}
+
+function onTerminalWindowPointerMove(event: PointerEvent): void {
+  const gesture = terminalWindowGesture
+  if (!gesture || event.pointerId !== gesture.pointerId) return
+  const deltaX = event.clientX - gesture.startClientX
+  const deltaY = event.clientY - gesture.startClientY
+  terminalWindow.value = clampTerminalWindowRect(
+    gesture.kind === 'drag'
+      ? {
+          ...gesture.startRect,
+          left: gesture.startRect.left + deltaX,
+          top: gesture.startRect.top + deltaY,
+        }
+      : {
+          ...gesture.startRect,
+          width: gesture.startRect.width + deltaX,
+          height: gesture.startRect.height + deltaY,
+        },
+    terminalViewportSize(),
+  )
+}
+
+function onTerminalWindowPointerEnd(event: PointerEvent): void {
+  if (!terminalWindowGesture || event.pointerId !== terminalWindowGesture.pointerId) return
+  stopTerminalWindowGesture()
+}
+
+function onTerminalWindowPointerCaptureLost(event: PointerEvent): void {
+  if (!terminalWindowGesture || event.pointerId !== terminalWindowGesture.pointerId) return
+  stopTerminalWindowGesture()
+}
+
+function onTerminalWindowBlur(): void {
+  stopTerminalWindowGesture()
+}
+
+function stopTerminalWindowGesture(): void {
+  const gesture = terminalWindowGesture
+  terminalWindowGesture = null
+  if (typeof window === 'undefined') return
+  window.removeEventListener('pointermove', onTerminalWindowPointerMove)
+  window.removeEventListener('pointerup', onTerminalWindowPointerEnd)
+  window.removeEventListener('pointercancel', onTerminalWindowPointerEnd)
+  window.removeEventListener('blur', onTerminalWindowBlur)
+  if (!gesture) return
+  gesture.target.removeEventListener('lostpointercapture', onTerminalWindowPointerCaptureLost)
+  if (gesture.target.hasPointerCapture(gesture.pointerId)) {
+    gesture.target.releasePointerCapture(gesture.pointerId)
+  }
+}
+
 function onNewTerminal(): void {
+  ctrlShortcutArmed.value = false
   void attachToThread(true)
+}
+
+function onHideTerminal(): void {
+  ctrlShortcutArmed.value = false
+  emit('hide')
+}
+
+function toggleCtrlShortcut(): void {
+  if (isTerminalInputUnavailable.value) return
+  ctrlShortcutArmed.value = !ctrlShortcutArmed.value
+  terminal?.focus()
+}
+
+function onVirtualTerminalKey(key: TerminalVirtualKey): void {
+  if (isTerminalInputUnavailable.value) return
+  const data = terminalVirtualKeyInput(key, ctrlShortcutArmed.value)
+  ctrlShortcutArmed.value = false
+  terminal?.focus()
+  sendTerminalInput(data, t('Terminal input failed'))
+}
+
+function sendTerminalInput(data: string, fallbackMessage: string): void {
+  const sessionId = activeSessionId.value
+  if (!sessionId || !data) return
+  void sendThreadTerminalInput(sessionId, data).catch((error: unknown) => {
+    errorMessage.value = error instanceof Error ? error.message : fallbackMessage
+  })
 }
 
 function onTerminalFocusOut(): void {
@@ -292,10 +523,12 @@ function onTerminalFocusOut(): void {
 
 function onSelectTab(tabId: string): void {
   if (!tabId || tabId === activeSessionId.value) return
+  ctrlShortcutArmed.value = false
   void attachToThread(false, tabId)
 }
 
 function onCloseTerminal(): void {
+  ctrlShortcutArmed.value = false
   const currentSessionId = activeSessionId.value
   if (!currentSessionId) {
     emit('hide')
@@ -317,6 +550,7 @@ function onCloseTerminal(): void {
     return
   }
   activeSessionId.value = ''
+  lastResizedTerminalGrid = null
   terminal?.clear()
   saveTabsState()
   emit('hide')
@@ -327,9 +561,7 @@ function scheduleFitAndResize(): void {
   resizeFrame = window.requestAnimationFrame(() => {
     resizeFrame = 0
     fitTerminal()
-    if (terminal && activeSessionId.value) {
-      void resizeThreadTerminal(activeSessionId.value, terminal.cols, terminal.rows).catch(() => {})
-    }
+    reportTerminalGridSize()
   })
 }
 
@@ -339,6 +571,31 @@ function fitTerminal(): void {
   } catch {
     // xterm-fit can throw before fonts/layout settle; the next resize observer tick retries.
   }
+}
+
+function reportTerminalGridSize(): void {
+  const sessionId = activeSessionId.value
+  if (!terminal || !sessionId || terminal.cols < 1 || terminal.rows < 1) return
+  const nextGrid = {
+    sessionId,
+    cols: terminal.cols,
+    rows: terminal.rows,
+  }
+  if (
+    lastResizedTerminalGrid?.sessionId === nextGrid.sessionId
+    && lastResizedTerminalGrid.cols === nextGrid.cols
+    && lastResizedTerminalGrid.rows === nextGrid.rows
+  ) return
+  lastResizedTerminalGrid = nextGrid
+  void resizeThreadTerminal(sessionId, nextGrid.cols, nextGrid.rows).catch(() => {
+    if (
+      lastResizedTerminalGrid?.sessionId === nextGrid.sessionId
+      && lastResizedTerminalGrid.cols === nextGrid.cols
+      && lastResizedTerminalGrid.rows === nextGrid.rows
+    ) {
+      lastResizedTerminalGrid = null
+    }
+  })
 }
 
 function upsertTab(tab: TerminalTab): void {
@@ -602,13 +859,13 @@ function readString(value: unknown): string {
 @reference "tailwindcss";
 
 .thread-terminal-panel {
-  @apply overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-lg;
-  height: min(34vh, 20rem);
-  min-height: 13rem;
+  @apply fixed z-[260] flex min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-lg;
 }
 
 .thread-terminal-header {
-  @apply flex h-9 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-2;
+  @apply flex h-9 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-2 select-none;
+  cursor: move;
+  touch-action: none;
 }
 
 .thread-terminal-tabs {
@@ -616,7 +873,7 @@ function readString(value: unknown): string {
 }
 
 .thread-terminal-tab {
-  @apply flex h-7 min-w-20 max-w-36 shrink-0 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-300 transition hover:border-zinc-700 hover:text-white;
+  @apply flex h-7 min-w-20 max-w-36 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-300 transition hover:border-zinc-700 hover:text-white;
 }
 
 .thread-terminal-tab.is-active {
@@ -644,19 +901,15 @@ function readString(value: unknown): string {
 }
 
 .thread-terminal-action {
-  @apply rounded-md border border-transparent px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-900 hover:text-white;
+  @apply cursor-pointer rounded-md border border-transparent px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-900 hover:text-white;
 }
 
 .thread-terminal-error {
-  @apply m-0 border-b border-rose-900 bg-rose-950 px-3 py-1.5 text-xs text-rose-200;
+  @apply m-0 shrink-0 border-b border-rose-900 bg-rose-950 px-3 py-1.5 text-xs text-rose-200;
 }
 
 .thread-terminal-host {
-  @apply h-[calc(100%-2.25rem)] min-h-0 w-full overflow-hidden px-2 py-2;
-}
-
-.thread-terminal-panel.is-error .thread-terminal-host {
-  @apply h-[calc(100%-4.625rem)];
+  @apply min-h-0 w-full flex-1 overflow-hidden px-2 py-2;
 }
 
 .thread-terminal-host :deep(.xterm) {
@@ -667,12 +920,48 @@ function readString(value: unknown): string {
   @apply bg-black;
 }
 
-@media (max-width: 767px) {
-  .thread-terminal-panel {
-    height: min(28vh, 14rem);
-    min-height: 9rem;
-  }
+.thread-terminal-shortcuts {
+  @apply flex shrink-0 flex-wrap items-center gap-1 border-t border-zinc-800 bg-zinc-950 px-1.5 py-1.5 pr-9;
+}
 
+.thread-terminal-shortcut {
+  @apply inline-flex h-8 min-w-9 cursor-pointer items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-45;
+}
+
+.thread-terminal-shortcut[aria-pressed='true'] {
+  @apply border-cyan-400 bg-cyan-500 text-zinc-950;
+}
+
+.thread-terminal-shortcut-icon {
+  @apply w-8 min-w-8 px-0;
+}
+
+.thread-terminal-shortcut-arrow {
+  @apply h-4 w-4;
+}
+
+.thread-terminal-shortcut-arrow-left {
+  transform: rotate(-90deg);
+}
+
+.thread-terminal-shortcut-arrow-down {
+  transform: rotate(180deg);
+}
+
+.thread-terminal-shortcut-arrow-right {
+  transform: rotate(90deg);
+}
+
+.thread-terminal-resize-handle {
+  @apply absolute bottom-0 right-0 z-10 flex h-8 w-8 cursor-nwse-resize items-end justify-end p-1 text-zinc-500 transition hover:text-zinc-200;
+  touch-action: none;
+}
+
+.thread-terminal-resize-icon {
+  @apply h-3.5 w-3.5;
+}
+
+@media (max-width: 767px) {
   .thread-terminal-header {
     @apply px-1.5;
   }

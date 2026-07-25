@@ -18,6 +18,7 @@ Return to the [manual test index](../../tests.md).
 | [Fix: Delete/rename thread dialog height cap](delete-rename-thread-dialog-height-cap.md) |
 | [Integrated terminal mobile keyboard avoidance](integrated-terminal-mobile-keyboard-avoidance.md) |
 | [Codex.app-style integrated terminal](codex-app-style-integrated-terminal.md) |
+| [Floating terminal window and virtual keys](floating-terminal-window-and-virtual-keys.md) |
 | [Integrated terminal manager edge cases](integrated-terminal-manager-edge-cases.md) |
 | [Content header actions remain right aligned](content-header-actions-remain-right-aligned.md) |
 | [Dark theme plan card contrast](dark-theme-plan-card-contrast.md) |
