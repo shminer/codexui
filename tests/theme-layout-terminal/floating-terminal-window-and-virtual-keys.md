@@ -17,13 +17,15 @@ The integrated Bash terminal is a draggable, resizable floating window on deskto
 6. Open a second terminal tab, switch tabs, and resize the window again.
 7. Confirm only the active session receives the new terminal grid size and neither session is restarted.
 8. In the bottom shortcut row, press Tab, Esc, PgUp, PgDn, and each direction key while Bash is focused.
-9. Confirm each press is accepted once by the active PTY and the xterm cursor remains focused after the press.
-10. Tap Ctrl, then press C on the physical keyboard; confirm the active Bash command is interrupted and Ctrl returns to its inactive appearance immediately.
-11. Repeat step 10 with a physical direction key, PgUp, and PgDn.
-12. On a narrow touch viewport, press and hold the top horizontal grip, then drag continuously with touch input; resize with the bottom-right grip and rotate, pinch-zoom, or otherwise offset the visual viewport while the terminal is open.
-13. Open the virtual keyboard, then confirm the floating terminal is clamped inside the visible viewport with its title bar and Close action still available.
-14. Switch the app between light and dark themes and repeat steps 1 through 5.
-15. Hide the terminal, reopen it, and confirm it starts at the default centered geometry rather than restoring the prior drag or resize state.
+9. Start `vim`, press `i`, type text, press Esc, enter `:q!`, and press Enter.
+10. Confirm Vim enters insert mode, displays the typed text, exits normally, and no xterm parser error appears in the browser console.
+11. Confirm each shortcut press is accepted once by the active PTY and the xterm cursor remains focused after the press.
+12. Tap Ctrl, then press C on the physical keyboard; confirm the active Bash command is interrupted and Ctrl returns to its inactive appearance immediately.
+13. Repeat step 12 with a physical direction key, PgUp, and PgDn.
+14. On a narrow touch viewport, press and hold the top horizontal grip, then drag continuously with touch input; resize with the bottom-right grip and rotate, pinch-zoom, or otherwise offset the visual viewport while the terminal is open.
+15. Open the virtual keyboard, then confirm the floating terminal is clamped inside the visible viewport with its title bar and Close action still available.
+16. Switch the app between light and dark themes and repeat steps 1 through 5.
+17. Hide the terminal, reopen it, and confirm it starts at the default centered geometry rather than restoring the prior drag or resize state.
 
 #### Expected Results
 - The terminal is a non-modal floating window above the application header and conversation, while Diff overlays remain above the terminal.
@@ -31,6 +33,7 @@ The integrated Bash terminal is a draggable, resizable floating window on deskto
 - Window geometry never extends beyond the visible viewport after dragging, resizing, orientation changes, pinch zoom, visual-viewport offsets, or virtual-keyboard changes.
 - The xterm grid fits its visible host and reports only changed column or row dimensions to the active PTY.
 - Tab, Esc, PgUp, PgDn, and all four direction controls send one input each to the active session.
+- Vim handles its terminal mode query without an xterm parser error, accepts input, and exits normally.
 - Ctrl applies only to the next physical keyboard key, then resets; physical keyboard Ctrl combinations remain native xterm input.
 - Existing New, Hide, Close, tab switching, quick commands, terminal output, and error handling remain usable.
 
