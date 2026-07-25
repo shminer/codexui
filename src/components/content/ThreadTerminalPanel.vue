@@ -54,6 +54,9 @@
         >
           Ctrl
         </button>
+        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" title="Ctrl+C" @pointerdown.prevent @click="onVirtualTerminalKey('c')">
+          C
+        </button>
         <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('escape')">
           Esc
         </button>
@@ -145,6 +148,7 @@ let resizeObserver: ResizeObserver | null = null
 let unsubscribeNotifications: (() => void) | null = null
 let resizeFrame = 0
 let attachPromise: Promise<void> | null = null
+let latestAttachRequest = 0
 let terminalWindowGesture: TerminalWindowGesture | null = null
 let lastResizedTerminalGrid: { sessionId: string, cols: number, rows: number } | null = null
 const { t } = useUiLanguage()
@@ -280,7 +284,8 @@ async function attachToThread(newSession: boolean, targetSessionId = ''): Promis
     await attachPromise
     return
   }
-  const nextAttach = doAttachToThread(newSession, targetSessionId)
+  const requestId = ++latestAttachRequest
+  const nextAttach = doAttachToThread(newSession, targetSessionId, requestId)
   attachPromise = nextAttach
   try {
     await nextAttach
@@ -291,7 +296,7 @@ async function attachToThread(newSession: boolean, targetSessionId = ''): Promis
   }
 }
 
-async function doAttachToThread(newSession: boolean, targetSessionId = ''): Promise<void> {
+async function doAttachToThread(newSession: boolean, targetSessionId = '', requestId: number): Promise<void> {
   if (!props.threadId || !props.cwd || !terminal) return
   errorMessage.value = ''
   await nextTick()
@@ -310,6 +315,7 @@ async function doAttachToThread(newSession: boolean, targetSessionId = ''): Prom
       shell: session.shell || 'terminal',
       status: 'attached',
     })
+    if (requestId !== latestAttachRequest) return
     activeSessionId.value = session.id
     lastResizedTerminalGrid = {
       sessionId: session.id,
@@ -319,6 +325,7 @@ async function doAttachToThread(newSession: boolean, targetSessionId = ''): Prom
     saveTabsState()
     renderSessionBuffer(session.buffer)
   } catch (error) {
+    if (requestId !== latestAttachRequest) return
     errorMessage.value = error instanceof Error ? error.message : t('Terminal attach failed')
   }
 }
@@ -524,6 +531,8 @@ function onTerminalFocusOut(): void {
 function onSelectTab(tabId: string): void {
   if (!tabId || tabId === activeSessionId.value) return
   ctrlShortcutArmed.value = false
+  activeSessionId.value = tabId
+  terminal?.clear()
   void attachToThread(false, tabId)
 }
 

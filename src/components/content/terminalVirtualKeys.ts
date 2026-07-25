@@ -1,4 +1,5 @@
 export type TerminalVirtualKey =
+  | 'c'
   | 'tab'
   | 'escape'
   | 'pageUp'
@@ -9,6 +10,7 @@ export type TerminalVirtualKey =
   | 'arrowLeft'
 
 const terminalKeyInput: Record<TerminalVirtualKey, string> = {
+  c: 'c',
   tab: '\t',
   escape: '\u001b',
   pageUp: '\u001b[5~',
@@ -20,6 +22,7 @@ const terminalKeyInput: Record<TerminalVirtualKey, string> = {
 }
 
 const ctrlTerminalKeyInput: Partial<Record<TerminalVirtualKey, string>> = {
+  c: '\u0003',
   pageUp: '\u001b[5;5~',
   pageDown: '\u001b[6;5~',
   arrowUp: '\u001b[1;5A',

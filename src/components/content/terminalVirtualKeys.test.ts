@@ -14,6 +14,7 @@ describe('terminalVirtualKeyInput', () => {
   })
 
   it('encodes Ctrl-modified navigation keys', () => {
+    expect(terminalVirtualKeyInput('c', true)).toBe('\u0003')
     expect(terminalVirtualKeyInput('tab', true)).toBe('\t')
     expect(terminalVirtualKeyInput('escape', true)).toBe('\u001b')
     expect(terminalVirtualKeyInput('arrowUp', true)).toBe('\u001b[1;5A')

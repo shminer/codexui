@@ -16,4 +16,12 @@ describe('ThreadTerminalPanel floating terminal wiring', () => {
     expect(source).toContain('lostpointercapture')
     expect(source).toContain("window.addEventListener('blur', onTerminalWindowBlur)")
   })
+
+  it('activates the selected terminal before its attach response and ignores stale responses', async () => {
+    const source = await readFile(new URL('./ThreadTerminalPanel.vue', import.meta.url), 'utf8')
+
+    expect(source).toMatch(/function onSelectTab\(tabId: string\): void \{[\s\S]*activeSessionId\.value = tabId[\s\S]*terminal\?\.clear\(\)[\s\S]*attachToThread\(false, tabId\)/u)
+    expect(source).toContain('let latestAttachRequest = 0')
+    expect(source).toContain('if (requestId !== latestAttachRequest) return')
+  })
 })
