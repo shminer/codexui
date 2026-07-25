@@ -733,6 +733,52 @@ export type ThreadTurnPage = {
   turnIndexByTurnId: ThreadTurnIndexById
 }
 
+export type UiSubagent = {
+  threadId: string
+  prompt: string
+  status: string
+  message: string
+}
+
+function readThreadSubagents(payload: ThreadReadResponse): UiSubagent[] {
+  const subagents = new Map<string, UiSubagent>()
+  const parentThreadId = payload.thread.id
+  const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
+
+  for (const turn of turns) {
+    for (const item of turn.items) {
+      if (item.type !== 'collabAgentToolCall' || item.senderThreadId !== parentThreadId) continue
+
+      const prompt = item.prompt?.trim() ?? ''
+      for (const receiverThreadId of item.receiverThreadIds) {
+        const threadId = receiverThreadId.trim()
+        if (!threadId) continue
+
+        const existing = subagents.get(threadId)
+        const state = item.agentsStates[threadId]
+        if (!existing && item.tool !== 'spawnAgent') continue
+        if (existing) {
+          if (!existing.prompt && prompt) existing.prompt = prompt
+          if (state) {
+            existing.status = state.status
+            existing.message = state.message?.trim() ?? ''
+          }
+          continue
+        }
+
+        subagents.set(threadId, {
+          threadId,
+          prompt,
+          status: state?.status ?? 'pendingInit',
+          message: state?.message?.trim() ?? '',
+        })
+      }
+    }
+  }
+
+  return [...subagents.values()]
+}
+
 async function getThreadGroupsPageV2(cursor: string | null, limit: number): Promise<ThreadGroupsPage> {
   const payload = await callRpc<ThreadListResponse>('thread/list', {
     archived: false,
@@ -773,6 +819,7 @@ async function getThreadDetailV2(threadId: string): Promise<{
   activeTurnId: string
   hasMoreOlder: boolean
   turnIndexByTurnId: ThreadTurnIndexById
+  subagents: UiSubagent[]
 }> {
   const payload = await callRpc<ThreadReadResponse>('thread/read', {
     threadId,
@@ -788,6 +835,7 @@ async function getThreadDetailV2(threadId: string): Promise<{
     activeTurnId: readActiveTurnIdFromResponse(payload),
     hasMoreOlder: startTurnIndex > 0,
     turnIndexByTurnId: buildTurnIndexByTurnId(payload, startTurnIndex),
+    subagents: readThreadSubagents(payload),
   }
 }
 
@@ -868,6 +916,7 @@ export async function getThreadDetail(threadId: string): Promise<{
   activeTurnId: string
   hasMoreOlder: boolean
   turnIndexByTurnId: ThreadTurnIndexById
+  subagents: UiSubagent[]
 }> {
   try {
     return await getThreadDetailV2(threadId)
@@ -1509,6 +1558,7 @@ export type ResumedThread = {
   activeTurnId: string
   hasMoreOlder: boolean
   turnIndexByTurnId: ThreadTurnIndexById
+  subagents: UiSubagent[]
 }
 
 const RESUME_THREAD_COALESCE_TTL_MS = 30_000
@@ -1530,6 +1580,7 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
       activeTurnId: readActiveTurnIdFromResponse(payload),
       hasMoreOlder: startTurnIndex > 0,
       turnIndexByTurnId: buildTurnIndexByTurnId(payload, startTurnIndex),
+      subagents: readThreadSubagents(payload),
     }
   })()
 

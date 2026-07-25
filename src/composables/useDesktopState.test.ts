@@ -831,6 +831,53 @@ describe('turn completion lifecycle', () => {
     })
   })
 
+  it('refreshes a background parent after a known subagent completes', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.resumeThread.mockResolvedValue({
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      subagents: [{
+        threadId: 'agent-1',
+        prompt: 'Inspect the gateway',
+        status: 'running',
+        message: 'Reading files',
+      }],
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      subagents: [{
+        threadId: 'agent-1',
+        prompt: 'Inspect the gateway',
+        status: 'completed',
+        message: 'Gateway checked',
+      }],
+    })
+
+    await state.loadMessages('thread-1')
+    state.primeSelectedThread('other-thread')
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'agent-1', turn: { id: 'agent-turn-1', status: 'completed' } },
+    })
+
+    state.primeSelectedThread('thread-1')
+    await state.loadMessages('thread-1')
+
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('thread-1')
+    expect(state.selectedThreadSubagents.value).toMatchObject([{
+      threadId: 'agent-1',
+      status: 'completed',
+      message: 'Gateway checked',
+    }])
+  })
+
   it.each(['failed', 'interrupted', 'declined', 'timeout', 'future-terminal-status'])(
     'does not mark a background %s completion unread',
     async (status) => {

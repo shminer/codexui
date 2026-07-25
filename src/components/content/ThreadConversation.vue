@@ -345,6 +345,10 @@
                     </button>
                   </div>
                 </div>
+                <details v-else-if="message.messageType === 'reasoning'" class="reasoning-summary-card">
+                  <summary class="reasoning-summary-label">Thinking summary</summary>
+                  <p class="reasoning-summary-text">{{ message.text }}</p>
+                </details>
                 <div
                   v-else
                   class="message-text-flow"
@@ -1066,7 +1070,8 @@ function buildPlanMessageText(explanation: string, steps: UiPlanStep[]): string 
 }
 
 function showImplementPlanButton(message: UiMessage): boolean {
-  return isPlanMessage(message)
+  return !props.readonly
+    && isPlanMessage(message)
     && message.messageType !== 'plan.live'
     && message.role === 'assistant'
     && Boolean(message.turnId)
@@ -1340,6 +1345,7 @@ const props = defineProps<{
   isLoading: boolean
   activeThreadId: string
   cwd: string
+  readonly?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -1873,7 +1879,7 @@ function showCopyResponseButton(message: UiMessage): boolean {
 }
 
 function showForkResponseButton(message: UiMessage): boolean {
-  return typeof forkableTurnIndexByAnchorId.value[message.id] === 'number'
+  return !props.readonly && typeof forkableTurnIndexByAnchorId.value[message.id] === 'number'
 }
 
 function mergeFileChangeDiff(first: string, second: string): string {
@@ -2038,7 +2044,7 @@ function fileChangeActionKey(summary: TurnFileChangeSummary | null): string {
 }
 
 function isFileChangeActionable(summary: TurnFileChangeSummary | null): boolean {
-  return fileChangeActionKey(summary).length > 0
+  return !props.readonly && fileChangeActionKey(summary).length > 0
 }
 
 function fileChangeActionStatus(summary: TurnFileChangeSummary | null): 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone' {
@@ -2065,7 +2071,7 @@ function fileChangeActionLabel(summary: TurnFileChangeSummary | null): string {
 
 async function runFileChangeAction(summary: TurnFileChangeSummary | null, action: 'undo' | 'redo'): Promise<void> {
   const key = fileChangeActionKey(summary)
-  if (!summary || !key || !props.activeThreadId || !props.cwd) return
+  if (props.readonly || !summary || !key || !props.activeThreadId || !props.cwd) return
   const previousState = fileChangeActionStatus(summary)
   const pendingState = action === 'undo' ? 'undoing' : 'redoing'
   fileChangeActionState.value = { ...fileChangeActionState.value, [key]: pendingState }
@@ -2385,6 +2391,7 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
 }
 
 function forkResponse(anchorMessageId: string): void {
+  if (props.readonly) return
   const turnIndex = forkableTurnIndexByAnchorId.value[anchorMessageId]
   if (typeof turnIndex !== 'number') return
   if (!props.activeThreadId) return
@@ -2406,10 +2413,11 @@ const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
 })
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return !props.readonly && typeof editableTurnIdByMessageId.value[message.id] === 'string'
 }
 
 function editMessage(messageId: string): void {
+  if (props.readonly) return
   const turnId = editableTurnIdByMessageId.value[messageId]
   if (!turnId) return
   emit('rollback', { turnId })
@@ -4785,6 +4793,18 @@ onBeforeUnmount(() => {
   @apply max-w-[min(var(--chat-card-max,76ch),100%)] px-0 py-0 bg-transparent border-none rounded-none;
 }
 
+.reasoning-summary-card {
+  @apply max-w-[min(var(--chat-card-max,76ch),100%)] rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-slate-700;
+}
+
+.reasoning-summary-label {
+  @apply cursor-pointer font-medium text-violet-900;
+}
+
+.reasoning-summary-text {
+  @apply mb-0 mt-2 whitespace-pre-wrap leading-6;
+}
+
 .message-text-flow {
   @apply flex flex-col gap-2;
 }
@@ -5157,6 +5177,14 @@ onBeforeUnmount(() => {
 
 :global(.dark) .message-skill-chip-prefix {
   @apply text-emerald-300;
+}
+
+:global(.dark) .reasoning-summary-card {
+  @apply border-violet-900 bg-violet-950/40 text-slate-300;
+}
+
+:global(.dark) .reasoning-summary-label {
+  @apply text-violet-200;
 }
 
 .conversation-item[data-message-type='worked'] .message-stack,

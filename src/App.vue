@@ -978,18 +978,25 @@
               />
 
               <template v-else>
-                <div class="content-thread">
-                  <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
-                    :active-thread-id="composerThreadContextId" :cwd="composerCwd"
-                    :live-overlay="liveOverlay"
-                    :pending-requests="selectedThreadServerRequests"
-                    :has-more-persisted-above="hasMoreOlderMessages"
-                    :is-loading-persisted-above="isLoadingOlderMessages"
-                    :load-earlier-messages="loadOlderMessages"
-                    @fork-thread="onForkThreadFromMessage"
-                    @rollback="onRollback"
-                    @implement-plan="onImplementPlan"
-                    @respond-server-request="onRespondServerRequest" />
+                <div class="content-thread-layout">
+                  <div class="content-thread">
+                    <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
+                      :active-thread-id="composerThreadContextId" :cwd="composerCwd"
+                      :live-overlay="liveOverlay"
+                      :pending-requests="selectedThreadServerRequests"
+                      :has-more-persisted-above="hasMoreOlderMessages"
+                      :is-loading-persisted-above="isLoadingOlderMessages"
+                      :load-earlier-messages="loadOlderMessages"
+                      @fork-thread="onForkThreadFromMessage"
+                      @rollback="onRollback"
+                      @implement-plan="onImplementPlan"
+                      @respond-server-request="onRespondServerRequest" />
+                  </div>
+                  <ThreadSubagentPanel
+                    :agents="selectedThreadSubagents"
+                    :cwd="composerCwd"
+                    :live-overlay-for-thread="getLiveOverlayForThread"
+                  />
                 </div>
 
                 <div class="composer-with-queue">
@@ -1235,6 +1242,7 @@ import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathFor
 import { copyTextToClipboard } from './utils/clipboard'
 
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
+const ThreadSubagentPanel = defineAsyncComponent(() => import('./components/content/ThreadSubagentPanel.vue'))
 const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/content/ThreadTerminalPanel.vue'))
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
 const DirectoryHub = defineAsyncComponent(() => import('./components/content/DirectoryHub.vue'))
@@ -1415,7 +1423,9 @@ const {
   selectedThreadTokenUsage,
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
+  selectedThreadSubagents,
   selectedLiveOverlay,
+  getLiveOverlayForThread,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,
@@ -5145,7 +5155,11 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .content-thread {
-  @apply flex-1 min-h-0;
+  @apply flex-1 min-h-0 min-w-0;
+}
+
+.content-thread-layout {
+  @apply flex flex-1 min-h-0 min-w-0 gap-3;
 }
 
 .composer-with-queue {

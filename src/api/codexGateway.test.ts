@@ -289,6 +289,87 @@ describe('getThreadDetail', () => {
     vi.unstubAllGlobals()
   })
 
+  it('returns direct subagents in first-spawn order with their latest status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        thread: {
+          id: 'parent-thread',
+          turns: [{
+            id: 'turn-1',
+            items: [
+              {
+                id: 'spawn-1',
+                type: 'collabAgentToolCall',
+                tool: 'spawnAgent',
+                senderThreadId: 'parent-thread',
+                prompt: 'Inspect the gateway',
+                receiverThreadIds: ['agent-a'],
+                agentsStates: {
+                  'agent-a': { status: 'running', message: 'Reading files' },
+                },
+              },
+              {
+                id: 'spawn-2',
+                type: 'collabAgentToolCall',
+                tool: 'spawnAgent',
+                senderThreadId: 'parent-thread',
+                prompt: 'Check permissions',
+                receiverThreadIds: ['agent-b'],
+                agentsStates: {
+                  'agent-b': { status: 'running', message: 'Checking access' },
+                },
+              },
+              {
+                id: 'wait-1',
+                type: 'collabAgentToolCall',
+                tool: 'wait',
+                senderThreadId: 'parent-thread',
+                prompt: 'Ignore this later prompt',
+                receiverThreadIds: ['agent-a', 'agent-b', 'agent-orphan'],
+                agentsStates: {
+                  'agent-a': { status: 'completed', message: 'Gateway checked' },
+                  'agent-b': { status: 'failed', message: 'No permission' },
+                  'agent-orphan': { status: 'running', message: 'Do not show without spawn' },
+                },
+              },
+              {
+                id: 'nested-spawn',
+                type: 'collabAgentToolCall',
+                tool: 'spawnAgent',
+                senderThreadId: 'agent-a',
+                prompt: 'Do not show this grandchild',
+                receiverThreadIds: ['agent-child'],
+                agentsStates: {
+                  'agent-child': { status: 'running', message: 'Nested work' },
+                },
+              },
+            ],
+          }],
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    const detail = await getThreadDetail('parent-thread')
+
+    expect(detail.subagents).toEqual([
+      {
+        threadId: 'agent-a',
+        prompt: 'Inspect the gateway',
+        status: 'completed',
+        message: 'Gateway checked',
+      },
+      {
+        threadId: 'agent-b',
+        prompt: 'Check permissions',
+        status: 'failed',
+        message: 'No permission',
+      },
+    ])
+  })
+
   it('reads modelProvider from nested thread payloads returned by thread/read', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = typeof init?.body === 'string'

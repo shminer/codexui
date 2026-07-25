@@ -35,6 +35,7 @@ import {
   type RpcNotification,
   type SkillInfo,
   type ThreadQueueState,
+  type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
 import { CodexApiError } from '../api/codexErrors'
@@ -1402,6 +1403,7 @@ export function useDesktopState() {
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
+  const subagentsByParentThreadId = ref<Record<string, UiSubagent[]>>({})
   const inProgressById = ref<Record<string, boolean>>({})
   type FileAttachment = { label: string; path: string; fsPath: string }
   type QueuedMessage = {
@@ -1528,6 +1530,7 @@ export function useDesktopState() {
   let pendingThreadsRefresh = false
   let pendingThreadsRefreshForce = false
   const pendingThreadMessageRefresh = new Set<string>()
+  const pendingSubagentParentRefresh = new Set<string>()
   const lastMessageLoadAtByThreadId = new Map<string, number>()
   const lastMessageLoadFailureAtByThreadId = new Map<string, number>()
   let threadListNextCursor: string | null = null
@@ -1537,7 +1540,7 @@ export function useDesktopState() {
   let loadedThreadListGroups: UiProjectGroup[] = []
   let loadedThreadListRootsState: WorkspaceRootsState | null = null
   let hasHydratedWorkspaceRootsState = false
-  let activeReasoningItemId = ''
+  const activeReasoningItemIdByThreadId = new Map<string, string>()
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
@@ -1568,8 +1571,11 @@ export function useDesktopState() {
     }
     return rows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso))
   })
-  const selectedLiveOverlay = computed<UiLiveOverlay | null>(() => {
+  const selectedThreadSubagents = computed<UiSubagent[]>(() => {
     const threadId = selectedThreadId.value
+    return threadId ? subagentsByParentThreadId.value[threadId] ?? [] : []
+  })
+  function getLiveOverlayForThread(threadId: string): UiLiveOverlay | null {
     if (!threadId) return null
 
     const isInProgress = inProgressById.value[threadId] === true
@@ -1600,7 +1606,8 @@ export function useDesktopState() {
       reasoningText,
       errorText,
     }
-  })
+  }
+  const selectedLiveOverlay = computed<UiLiveOverlay | null>(() => getLiveOverlayForThread(selectedThreadId.value))
   const codexQuota = computed<UiRateLimitSnapshot | null>(() => codexRateLimit.value)
   const selectedThreadTokenUsage = computed<UiThreadTokenUsage | null>(() => {
     const threadId = selectedThreadId.value
@@ -1690,7 +1697,7 @@ export function useDesktopState() {
       selectedCollaborationModeByContext.value,
       nextThreadId,
     )
-    activeReasoningItemId = ''
+    activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
   }
 
@@ -2286,6 +2293,7 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = pruneThreadStateMap(liveReasoningTextByThreadId.value, activeThreadIds)
     liveCommandsByThreadId.value = pruneThreadStateMap(liveCommandsByThreadId.value, activeThreadIds)
     liveFileChangeMessagesByThreadId.value = pruneThreadStateMap(liveFileChangeMessagesByThreadId.value, activeThreadIds)
+    subagentsByParentThreadId.value = pruneThreadStateMap(subagentsByParentThreadId.value, activeThreadIds)
     turnSummaryByThreadId.value = pruneThreadStateMap(turnSummaryByThreadId.value, activeThreadIds)
     turnActivityByThreadId.value = pruneThreadStateMap(turnActivityByThreadId.value, activeThreadIds)
     turnErrorByThreadId.value = pruneThreadStateMap(turnErrorByThreadId.value, activeThreadIds)
@@ -2722,9 +2730,7 @@ export function useDesktopState() {
     clearLivePlansForThread(threadId)
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
-    if (threadId === selectedThreadId.value) {
-      activeReasoningItemId = ''
-    }
+    activeReasoningItemIdByThreadId.delete(threadId)
     if (liveCommandsByThreadId.value[threadId]) {
       liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
     }
@@ -3327,8 +3333,7 @@ export function useDesktopState() {
 
     if (
       notification.method === 'item/reasoning/summaryTextDelta' ||
-      notification.method === 'item/reasoning/summaryPartAdded' ||
-      notification.method === 'item/reasoning/textDelta'
+      notification.method === 'item/reasoning/summaryPartAdded'
     ) {
       return {
         threadId,
@@ -3506,17 +3511,6 @@ export function useDesktopState() {
 
     // Канонический источник дельт для UI — уже нормализованный item/*.
     if (notification.method === 'item/reasoning/summaryTextDelta') {
-      const itemId = readString(params.itemId)
-      const delta = readString(params.delta)
-      if (!itemId || !delta) return null
-      return { messageId: liveReasoningMessageId(itemId), delta }
-    }
-
-    // codex also emits the full reasoning-chain stream as item/reasoning/textDelta
-    // (alongside the summary stream). Without handling it, reasoning text the
-    // model streams via this channel is dropped and the UI shows only the
-    // summary, making long thinking phases look like a stall.
-    if (notification.method === 'item/reasoning/textDelta') {
       const itemId = readString(params.itemId)
       const delta = readString(params.delta)
       if (!itemId || !delta) return null
@@ -3811,6 +3805,65 @@ export function useDesktopState() {
     return false
   }
 
+  function mergeSubagentNotification(parentThreadId: string, notification: RpcNotification): void {
+    if (parentThreadId !== selectedThreadId.value) return
+    if (notification.method !== 'item/started' && notification.method !== 'item/completed') return
+
+    const params = asRecord(notification.params)
+    const item = asRecord(params?.item)
+    if (
+      !item ||
+      item.type !== 'collabAgentToolCall' ||
+      readString(item.senderThreadId) !== parentThreadId
+    ) return
+
+    const receiverThreadIds = Array.isArray(item.receiverThreadIds)
+      ? item.receiverThreadIds.map((value) => readString(value).trim()).filter(Boolean)
+      : []
+    if (receiverThreadIds.length === 0) return
+
+    const prompt = readString(item.prompt).trim()
+    const agentStates = asRecord(item.agentsStates) ?? {}
+    const existing = subagentsByParentThreadId.value[parentThreadId] ?? []
+    const next = existing.map((agent) => ({ ...agent }))
+    const indexByThreadId = new Map(next.map((agent, index) => [agent.threadId, index]))
+
+    for (const threadId of receiverThreadIds) {
+      const state = asRecord(agentStates[threadId])
+      const index = indexByThreadId.get(threadId)
+      if (index === undefined && item.tool !== 'spawnAgent') continue
+      if (index === undefined) {
+        indexByThreadId.set(threadId, next.length)
+        next.push({
+          threadId,
+          prompt,
+          status: readString(state?.status) || 'pendingInit',
+          message: readString(state?.message),
+        })
+        continue
+      }
+
+      const agent = next[index]
+      if (!agent.prompt && prompt) agent.prompt = prompt
+      if (state) {
+        agent.status = readString(state.status) || agent.status
+        agent.message = readString(state.message)
+      }
+    }
+
+    subagentsByParentThreadId.value = {
+      ...subagentsByParentThreadId.value,
+      [parentThreadId]: next,
+    }
+  }
+
+  function findSubagentParentThreadId(threadId: string): string {
+    for (const [parentThreadId, subagents] of Object.entries(subagentsByParentThreadId.value)) {
+      if (subagents.some((subagent) => subagent.threadId === threadId)) return parentThreadId
+    }
+    return ''
+  }
+
   function applyRealtimeUpdates(notification: RpcNotification): void {
     if (handleServerRequestNotification(notification)) {
       return
@@ -3848,6 +3901,9 @@ export function useDesktopState() {
     }
 
     const notificationThreadId = extractThreadIdFromNotification(notification)
+    if (notificationThreadId) {
+      mergeSubagentNotification(notificationThreadId, notification)
+    }
     const notificationErrorState = readNotificationErrorState(notification)
     if (!notificationErrorState && notificationThreadId) {
       clearTransientTurnErrorForThread(notificationThreadId)
@@ -3977,11 +4033,16 @@ export function useDesktopState() {
       })
     }
 
-    if (!notificationThreadId || notificationThreadId !== selectedThreadId.value) return
+    const selectedThreadIdForNotification = selectedThreadId.value
+    const isSelectedSubagent = selectedThreadIdForNotification
+      ? (subagentsByParentThreadId.value[selectedThreadIdForNotification] ?? [])
+        .some((subagent) => subagent.threadId === notificationThreadId)
+      : false
+    if (!notificationThreadId || (notificationThreadId !== selectedThreadIdForNotification && !isSelectedSubagent)) return
 
     const startedAgentMessageId = readAgentMessageStartedId(notification)
     if (startedAgentMessageId) {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
     }
 
     const liveAgentMessageDelta = readAgentMessageDelta(notification)
@@ -4010,7 +4071,7 @@ export function useDesktopState() {
 
     const startedReasoningItemId = readReasoningStartedItemId(notification)
     if (startedReasoningItemId) {
-      activeReasoningItemId = startedReasoningItemId
+      activeReasoningItemIdByThreadId.set(notificationThreadId, startedReasoningItemId)
     }
 
     const liveReasoningDelta = readReasoningDelta(notification)
@@ -4028,8 +4089,8 @@ export function useDesktopState() {
 
     const completedReasoningMessageId = readReasoningCompletedId(notification)
     if (completedReasoningMessageId) {
-      if (completedReasoningMessageId === liveReasoningMessageId(activeReasoningItemId)) {
-        activeReasoningItemId = ''
+      if (completedReasoningMessageId === liveReasoningMessageId(activeReasoningItemIdByThreadId.get(notificationThreadId) ?? '')) {
+        activeReasoningItemIdByThreadId.delete(notificationThreadId)
       }
     }
 
@@ -4061,12 +4122,12 @@ export function useDesktopState() {
     }
 
     if (isAgentContentEvent(notification)) {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
       clearLiveReasoningForThread(notificationThreadId)
     }
 
     if (notification.method === 'turn/completed') {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
       shouldAutoScrollOnNextAgentEvent = false
       clearLiveReasoningForThread(notificationThreadId)
       if (liveCommandsByThreadId.value[notificationThreadId]) {
@@ -4084,15 +4145,24 @@ export function useDesktopState() {
       method === 'turn/started' ||
       method === 'turn/completed' ||
       method === 'error'
+    const threadId = extractThreadIdFromNotification(notification)
+    const parentThreadId = selectedThreadId.value
+    const subagentParentThreadId = threadId ? findSubagentParentThreadId(threadId) : ''
+    const isKnownSubagent = subagentParentThreadId.length > 0
     const shouldRefreshThreads =
-      method.startsWith('thread/') ||
-      method === 'turn/completed'
+      !isKnownSubagent &&
+      (method.startsWith('thread/') || method === 'turn/completed')
 
     if (!shouldRefreshMessages && !shouldRefreshThreads) return
 
-    const threadId = extractThreadIdFromNotification(notification)
     if (threadId && shouldRefreshMessages) {
       pendingThreadMessageRefresh.add(threadId)
+    }
+    if (method === 'turn/completed' && isKnownSubagent) {
+      pendingSubagentParentRefresh.add(subagentParentThreadId)
+    }
+    if (method === 'turn/completed' && subagentParentThreadId === parentThreadId) {
+      pendingThreadMessageRefresh.add(parentThreadId)
     }
 
     if (shouldRefreshThreads) {
@@ -4443,19 +4513,23 @@ export function useDesktopState() {
     await loadThreadsPromise
   }
 
-  async function loadMessages(threadId: string, options: { silent?: boolean } = {}) {
+  async function loadMessages(threadId: string, options: { silent?: boolean; force?: boolean } = {}) {
     if (!threadId) {
       return
     }
+    const force = options.force === true || pendingSubagentParentRefresh.has(threadId)
     const recentLoadFailure =
       Date.now() - (lastMessageLoadFailureAtByThreadId.get(threadId) ?? 0) < RECENT_THREAD_MESSAGE_LOAD_REUSE_MS
-    if (turnErrorByThreadId.value[threadId]?.transient && (options.silent === true || recentLoadFailure)) {
+    if (!force && turnErrorByThreadId.value[threadId]?.transient && (options.silent === true || recentLoadFailure)) {
       return
     }
 
     const existingLoad = loadMessagePromiseByThreadId.get(threadId)
     if (existingLoad) {
       await existingLoad
+      if (force) {
+        await loadMessages(threadId, { ...options, force: true })
+      }
       return
     }
 
@@ -4472,6 +4546,7 @@ export function useDesktopState() {
       const loadedRecently =
         Date.now() - (lastMessageLoadAtByThreadId.get(threadId) ?? 0) < RECENT_THREAD_MESSAGE_LOAD_REUSE_MS
       const canReuseLoadedMessages =
+        !force &&
         alreadyLoaded &&
         (
           loadedRecently ||
@@ -4504,6 +4579,10 @@ export function useDesktopState() {
       }
 
       const { messages: nextMessages, inProgress: serverInProgress, activeTurnId, turnIndexByTurnId } = detail
+      subagentsByParentThreadId.value = {
+        ...subagentsByParentThreadId.value,
+        [threadId]: detail.subagents,
+      }
       const retainLocalInProgress =
         inProgressById.value[threadId] === true &&
         pendingTurnRequestByThreadId.value[threadId]?.fallbackRetried === true
@@ -4558,6 +4637,7 @@ export function useDesktopState() {
         clearCompletedTurnLiveState(threadId)
       }
       markThreadAsRead(threadId)
+      pendingSubagentParentRefresh.delete(threadId)
       } catch (unknownError) {
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         if (selectedThreadId.value === threadId) {
@@ -5559,6 +5639,7 @@ export function useDesktopState() {
       if (!activeThreadId) return
 
       const isActiveDirty = threadIdsToRefresh.has(activeThreadId)
+      const hasPendingSubagentRefresh = pendingSubagentParentRefresh.has(activeThreadId)
       const isInProgress = inProgressById.value[activeThreadId] === true
       const currentVersion = currentThreadVersion(activeThreadId)
       const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
@@ -5567,11 +5648,15 @@ export function useDesktopState() {
       const shouldRefreshActiveThread =
         hasVersionChange ||
         isActiveDirty ||
+        hasPendingSubagentRefresh ||
         (isInProgress && loadedMessagesByThreadId.value[activeThreadId] !== true) ||
         (shouldRefreshThreads && loadedMessagesByThreadId.value[activeThreadId] !== true)
 
       if (shouldRefreshActiveThread) {
-        await loadMessages(activeThreadId, { silent: true })
+        await loadMessages(activeThreadId, {
+          silent: true,
+          force: hasPendingSubagentRefresh,
+        })
       }
     } catch {
       // Keep UI stable on transient event sync failures.
@@ -5653,6 +5738,7 @@ export function useDesktopState() {
 
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
+    pendingSubagentParentRefresh.clear()
     pendingTurnStartsById.clear()
     nonSuccessCompletionReadBaselineByThreadId.clear()
     if (eventSyncTimer !== null && typeof window !== 'undefined') {
@@ -5673,7 +5759,7 @@ export function useDesktopState() {
       }
     }
     delayedTurnSyncTimerByThreadId.clear()
-    activeReasoningItemId = ''
+    activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
     livePlanMessagesByThreadId.value = {}
@@ -5681,6 +5767,7 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = {}
     liveCommandsByThreadId.value = {}
     liveFileChangeMessagesByThreadId.value = {}
+    subagentsByParentThreadId.value = {}
     turnIndexByTurnIdByThreadId.value = {}
     turnActivityByThreadId.value = {}
     turnSummaryByThreadId.value = {}
@@ -5758,7 +5845,9 @@ export function useDesktopState() {
     selectedThreadTerminalOpen,
     isSelectedThreadInterruptPending,
     selectedThreadServerRequests,
+    selectedThreadSubagents,
     selectedLiveOverlay,
+    getLiveOverlayForThread,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,
