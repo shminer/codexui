@@ -3,6 +3,7 @@ import {
   DEFAULT_DESKTOP_PANEL_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
+  isActiveSubagentStatus,
   maximumDesktopPanelWidth,
   readStoredDesktopPanelWidth,
 } from './threadSubagentPanelState'
@@ -27,5 +28,19 @@ describe('desktop subagent sidebar width', () => {
     expect(maximumDesktopPanelWidth(763)).toBe(431)
     expect(effectiveDesktopPanelWidth(960, 763)).toBe(431)
     expect(effectiveDesktopPanelWidth(480, 1440)).toBe(480)
+  })
+})
+
+describe('subagent activity visibility', () => {
+  it('keeps in-progress statuses and hides terminal statuses', () => {
+    expect(isActiveSubagentStatus('pendingInit')).toBe(true)
+    expect(isActiveSubagentStatus('running')).toBe(true)
+    expect(isActiveSubagentStatus(undefined)).toBe(false)
+    expect(isActiveSubagentStatus('queued')).toBe(false)
+    expect(isActiveSubagentStatus('completed')).toBe(false)
+    expect(isActiveSubagentStatus('shutdown')).toBe(false)
+    expect(isActiveSubagentStatus('errored')).toBe(false)
+    expect(isActiveSubagentStatus('failed')).toBe(false)
+    expect(isActiveSubagentStatus('notFound')).toBe(false)
   })
 })

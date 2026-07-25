@@ -1,19 +1,19 @@
 <template>
   <button
-    v-if="agents.length > 0"
+    v-if="activeAgents.length > 0"
     type="button"
     class="subagent-mobile-trigger"
-    :aria-label="`Show ${agents.length} agents`"
-    :title="`Show ${agents.length} agents`"
+    :aria-label="`Show ${activeAgents.length} agents`"
+    :title="`Show ${activeAgents.length} agents`"
     @click="mobileSheetOpen = true"
   >
     <IconTablerBolt class="subagent-mobile-trigger-icon" />
-    <span>{{ agents.length }}</span>
+    <span>{{ activeAgents.length }}</span>
   </button>
 
   <Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">
     <div
-      v-if="agents.length > 0"
+      v-if="activeAgents.length > 0"
       ref="desktopHostRef"
       class="subagent-panel-host"
       :class="{ 'is-desktop-collapsed': !isMobile && desktopPanelCollapsed }"
@@ -55,7 +55,7 @@
               <p class="subagent-panel-title">{{ selectedAgent ? `Agent ${selectedAgentIndex + 1}` : 'Agents' }}</p>
               <p v-if="selectedAgent" class="subagent-detail-status" :data-status="selectedAgent.status">{{ selectedAgent.status }}</p>
             </div>
-            <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ agents.length }}</span>
+            <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ activeAgents.length }}</span>
             <button
               v-if="isMobile && mobileSheetOpen"
               type="button"
@@ -70,7 +70,7 @@
 
           <div v-if="!selectedAgent" class="subagent-list">
             <button
-              v-for="(agent, index) in agents"
+              v-for="(agent, index) in activeAgents"
               :key="agent.threadId"
               type="button"
               class="subagent-row"
@@ -147,6 +147,7 @@ import {
   DEFAULT_DESKTOP_PANEL_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
+  isActiveSubagentStatus,
   MAX_DESKTOP_PANEL_WIDTH,
   maximumDesktopPanelWidth,
   MIN_DESKTOP_PANEL_WIDTH,
@@ -185,8 +186,9 @@ let detailRequestId = 0
 let desktopPanelResizeGesture: DesktopPanelResizeGesture | null = null
 let desktopLayoutResizeObserver: ResizeObserver | null = null
 
-const selectedAgent = computed(() => props.agents.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
-const selectedAgentIndex = computed(() => props.agents.findIndex((agent) => agent.threadId === selectedThreadId.value))
+const activeAgents = computed(() => props.agents.filter((agent) => isActiveSubagentStatus(agent.status)))
+const selectedAgent = computed(() => activeAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
+const selectedAgentIndex = computed(() => activeAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
 const selectedLiveOverlay = computed(() => selectedAgent.value ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
@@ -331,12 +333,8 @@ function onDesktopResizerKeyDown(event: KeyboardEvent): void {
   saveDesktopPanelWidth()
 }
 
-function isTerminalStatus(status: string | undefined): boolean {
-  return status === 'completed' || status === 'errored' || status === 'failed' || status === 'shutdown' || status === 'notFound'
-}
-
 async function selectAgent(threadId: string): Promise<void> {
-  if (!props.agents.some((agent) => agent.threadId === threadId)) return
+  if (!activeAgents.value.some((agent) => agent.threadId === threadId)) return
   if (selectedThreadId.value !== threadId) selectedDetail.value = null
   selectedThreadId.value = threadId
   detailError.value = ''
@@ -367,7 +365,7 @@ function closeDetail(): void {
 }
 
 watch(
-  () => props.agents,
+  activeAgents,
   (agents) => {
     if (agents.length === 0) mobileSheetOpen.value = false
     if (selectedThreadId.value && !agents.some((agent) => agent.threadId === selectedThreadId.value)) {
@@ -379,16 +377,6 @@ watch(
 watch(desktopHostRef, (host) => {
   observeDesktopLayout(host)
 }, { flush: 'post' })
-
-watch(
-  () => selectedAgent.value?.status,
-  (status, previousStatus) => {
-    const threadId = selectedAgent.value?.threadId
-    if (!threadId || !isTerminalStatus(status) || isTerminalStatus(previousStatus)) return
-    selectedDetail.value = null
-    void selectAgent(threadId)
-  },
-)
 
 watch(isMobile, (mobile) => {
   if (mobile) finishDesktopResizeGesture()

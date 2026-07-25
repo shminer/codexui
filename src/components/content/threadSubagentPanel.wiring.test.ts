@@ -33,6 +33,12 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
   it('keeps mobile sheet behavior separate and allows desktop details to shrink', async () => {
     const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
 
+    expect(source).toContain('const activeAgents = computed')
+    expect(source).toContain('v-if="activeAgents.length > 0"')
+    expect(source).toContain('v-for="(agent, index) in activeAgents"')
+    expect(source).toContain('if (!activeAgents.value.some((agent) => agent.threadId === threadId)) return')
+    expect(source).toMatch(/watch\(\s*activeAgents,[\s\S]*closeDetail\(\)/u)
+    expect(source).not.toContain('void selectAgent(threadId)')
     expect(source).toContain('class="subagent-mobile-trigger"')
     expect(source).toContain('<Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">')
     expect(source).toContain('if (agents.length === 0) mobileSheetOpen.value = false')

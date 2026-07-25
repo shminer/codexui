@@ -3,6 +3,11 @@ export const MIN_DESKTOP_PANEL_WIDTH = 280
 export const MAX_DESKTOP_PANEL_WIDTH = 960
 
 const MIN_DESKTOP_THREAD_SPACE = 332
+const ACTIVE_SUBAGENT_STATUSES = new Set(['pendingInit', 'running'])
+
+export function isActiveSubagentStatus(status: string | undefined): boolean {
+  return ACTIVE_SUBAGENT_STATUSES.has(status ?? '')
+}
 
 export function clampDesktopPanelWidth(value: number, maximum = MAX_DESKTOP_PANEL_WIDTH): number {
   const upperBound = Math.max(MIN_DESKTOP_PANEL_WIDTH, Math.min(MAX_DESKTOP_PANEL_WIDTH, maximum))
