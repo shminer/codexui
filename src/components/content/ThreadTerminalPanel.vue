@@ -5,6 +5,7 @@
       :class="{ 'is-error': Boolean(errorMessage) }"
       :style="terminalWindowStyle"
     >
+      <div class="thread-terminal-drag-handle" @pointerdown.stop="onTerminalHeaderPointerDown" />
       <header class="thread-terminal-header" @pointerdown="onTerminalHeaderPointerDown">
         <div class="thread-terminal-tabs">
           <button
@@ -867,6 +868,20 @@ function readString(value: unknown): string {
 
 .thread-terminal-panel {
   @apply fixed z-[260] flex min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-lg;
+}
+
+.thread-terminal-drag-handle {
+  @apply flex h-5 shrink-0 cursor-grab items-center justify-center border-b border-zinc-800 bg-zinc-950 select-none;
+  touch-action: none;
+}
+
+.thread-terminal-drag-handle::before {
+  content: '';
+  @apply h-1 w-10 rounded-full bg-zinc-600;
+}
+
+.thread-terminal-drag-handle:active {
+  cursor: grabbing;
 }
 
 .thread-terminal-header {
