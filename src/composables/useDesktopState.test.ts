@@ -659,6 +659,91 @@ describe('startup request deduplication', () => {
 })
 
 describe('turn completion lifecycle', () => {
+  it('adds current subAgentActivity notifications to the selected parent', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'activity-1',
+          type: 'subAgentActivity',
+          kind: 'started',
+          agentThreadId: 'agent-1',
+          agentPath: '/root/agent-1',
+        },
+      },
+    })
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'activity-2',
+          type: 'subAgentActivity',
+          kind: 'interacted',
+          agentThreadId: 'agent-1',
+          agentPath: '/root/agent-1',
+        },
+      },
+    })
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'activity-3',
+          type: 'subAgentActivity',
+          kind: 'interacted',
+          agentThreadId: 'agent-2',
+          agentPath: '/root/agent-2',
+        },
+      },
+    })
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'activity-4',
+          type: 'subAgentActivity',
+          kind: 'interrupted',
+          agentThreadId: 'agent-1',
+          agentPath: '/root/agent-1',
+        },
+      },
+    })
+    emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'activity-5',
+          type: 'subAgentActivity',
+          kind: 'started',
+          agentThreadId: '',
+          agentPath: '/root/ignored',
+        },
+      },
+    })
+
+    expect(state.selectedThreadSubagents.value).toEqual([
+      {
+        threadId: 'agent-1',
+        prompt: '',
+        status: 'shutdown',
+        message: '/root/agent-1',
+      },
+      {
+        threadId: 'agent-2',
+        prompt: '',
+        status: 'pendingInit',
+        message: '/root/agent-2',
+      },
+    ])
+  })
+
   it('keeps a thread running and unread false while fallback retry starts', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     gatewayMocks.resumeThread.mockResolvedValue({

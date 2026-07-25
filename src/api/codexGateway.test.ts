@@ -370,6 +370,120 @@ describe('getThreadDetail', () => {
     ])
   })
 
+  it('returns direct subagents from current subAgentActivity payloads', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        thread: {
+          id: 'parent-thread',
+          turns: [{
+            id: 'turn-1',
+            items: [
+              {
+                id: 'activity-1',
+                type: 'subAgentActivity',
+                kind: 'started',
+                agentThreadId: 'agent-a',
+                agentPath: '/root/agent-a',
+              },
+              {
+                id: 'activity-2',
+                type: 'subAgentActivity',
+                kind: 'interacted',
+                agentThreadId: 'agent-a',
+                agentPath: '/root/agent-a',
+              },
+              {
+                id: 'activity-3',
+                type: 'subAgentActivity',
+                kind: 'interacted',
+                agentThreadId: 'agent-b',
+                agentPath: '/root/agent-b',
+              },
+              {
+                id: 'spawn-1',
+                type: 'collabAgentToolCall',
+                tool: 'spawnAgent',
+                senderThreadId: 'parent-thread',
+                prompt: 'Inspect the gateway',
+                receiverThreadIds: ['agent-b'],
+                agentsStates: {
+                  'agent-b': { status: 'completed', message: 'Gateway checked' },
+                },
+              },
+              {
+                id: 'activity-4',
+                type: 'subAgentActivity',
+                kind: 'interacted',
+                agentThreadId: 'agent-b',
+                agentPath: '/root/agent-b',
+              },
+              {
+                id: 'activity-5',
+                type: 'subAgentActivity',
+                kind: 'interrupted',
+                agentThreadId: 'agent-a',
+                agentPath: '/root/agent-a',
+              },
+              {
+                id: 'activity-6',
+                type: 'subAgentActivity',
+                kind: 'interacted',
+                agentThreadId: 'agent-c',
+                agentPath: '/root/agent-c',
+              },
+              {
+                id: 'activity-7',
+                type: 'subAgentActivity',
+                kind: 'future-kind',
+                agentThreadId: 'agent-d',
+                agentPath: '',
+              },
+              {
+                id: 'activity-8',
+                type: 'subAgentActivity',
+                kind: 'started',
+                agentThreadId: '',
+                agentPath: '/root/ignored',
+              },
+            ],
+          }],
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    const detail = await getThreadDetail('parent-thread')
+
+    expect(detail.subagents).toEqual([
+      {
+        threadId: 'agent-a',
+        prompt: '',
+        status: 'shutdown',
+        message: '/root/agent-a',
+      },
+      {
+        threadId: 'agent-b',
+        prompt: 'Inspect the gateway',
+        status: 'completed',
+        message: 'Gateway checked',
+      },
+      {
+        threadId: 'agent-c',
+        prompt: '',
+        status: 'pendingInit',
+        message: '/root/agent-c',
+      },
+      {
+        threadId: 'agent-d',
+        prompt: '',
+        status: 'pendingInit',
+        message: '',
+      },
+    ])
+  })
+
   it('reads modelProvider from nested thread payloads returned by thread/read', async () => {
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = typeof init?.body === 'string'

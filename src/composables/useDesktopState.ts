@@ -3811,6 +3811,35 @@ export function useDesktopState() {
 
     const params = asRecord(notification.params)
     const item = asRecord(params?.item)
+    if (item?.type === 'subAgentActivity') {
+      const threadId = readString(item.agentThreadId).trim()
+      const agentPath = readString(item.agentPath).trim()
+      const kind = readString(item.kind)
+      if (!threadId) return
+
+      const existing = subagentsByParentThreadId.value[parentThreadId] ?? []
+      const next = existing.map((agent) => ({ ...agent }))
+      const index = next.findIndex((agent) => agent.threadId === threadId)
+      if (index === -1) {
+        next.push({
+          threadId,
+          prompt: '',
+          status: kind === 'started' ? 'running' : kind === 'interrupted' ? 'shutdown' : 'pendingInit',
+          message: agentPath,
+        })
+      } else {
+        const agent = next[index]
+        if (!agent.message && agentPath) agent.message = agentPath
+        if (kind === 'started') agent.status = 'running'
+        if (kind === 'interrupted') agent.status = 'shutdown'
+      }
+      subagentsByParentThreadId.value = {
+        ...subagentsByParentThreadId.value,
+        [parentThreadId]: next,
+      }
+      return
+    }
+
     if (
       !item ||
       item.type !== 'collabAgentToolCall' ||

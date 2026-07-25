@@ -747,6 +747,29 @@ function readThreadSubagents(payload: ThreadReadResponse): UiSubagent[] {
 
   for (const turn of turns) {
     for (const item of turn.items) {
+      const itemRecord = asRecord(item)
+      if (itemRecord?.type === 'subAgentActivity') {
+        const threadId = readString(itemRecord.agentThreadId)?.trim() ?? ''
+        const agentPath = readString(itemRecord.agentPath)?.trim() ?? ''
+        const kind = readString(itemRecord.kind)
+        if (!threadId) continue
+
+        const existing = subagents.get(threadId)
+        if (!existing) {
+          subagents.set(threadId, {
+            threadId,
+            prompt: '',
+            status: kind === 'started' ? 'running' : kind === 'interrupted' ? 'shutdown' : 'pendingInit',
+            message: agentPath,
+          })
+        } else {
+          if (!existing.message && agentPath) existing.message = agentPath
+          if (kind === 'started') existing.status = 'running'
+          if (kind === 'interrupted') existing.status = 'shutdown'
+        }
+        continue
+      }
+
       if (item.type !== 'collabAgentToolCall' || item.senderThreadId !== parentThreadId) continue
 
       const prompt = item.prompt?.trim() ?? ''
