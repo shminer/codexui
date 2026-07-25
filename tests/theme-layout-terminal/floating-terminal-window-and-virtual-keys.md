@@ -18,8 +18,8 @@ The integrated Bash terminal is a draggable, resizable floating window on deskto
 7. Confirm only the active session receives the new terminal grid size and neither session is restarted.
 8. In the bottom shortcut row, press Tab, Esc, PgUp, PgDn, and each direction key while Bash is focused.
 9. Confirm each press is accepted once by the active PTY and the xterm cursor remains focused after the press.
-10. Tap Ctrl, then tap C; confirm the active Bash command is interrupted and Ctrl returns to its inactive appearance immediately.
-11. Repeat step 10 with one direction key, PgUp, and PgDn.
+10. Tap Ctrl, then press C on the physical keyboard; confirm the active Bash command is interrupted and Ctrl returns to its inactive appearance immediately.
+11. Repeat step 10 with a physical direction key, PgUp, and PgDn.
 12. On a narrow touch viewport, drag the title bar and resize grip with touch input; rotate, pinch-zoom, or otherwise offset the visual viewport while the terminal is open.
 13. Open the virtual keyboard, then confirm the floating terminal is clamped inside the visible viewport with its title bar and Close action still available.
 14. Switch the app between light and dark themes and repeat steps 1 through 5.
@@ -30,8 +30,8 @@ The integrated Bash terminal is a draggable, resizable floating window on deskto
 - Title-bar dragging and bottom-right resizing work with mouse and touch without activating terminal tabs or header actions accidentally.
 - Window geometry never extends beyond the visible viewport after dragging, resizing, orientation changes, pinch zoom, visual-viewport offsets, or virtual-keyboard changes.
 - The xterm grid fits its visible host and reports only changed column or row dimensions to the active PTY.
-- Tab, Ctrl+C, Esc, PgUp, PgDn, and all four direction controls send one input each to the active session.
-- Ctrl applies only to the next bottom-row virtual key, then resets; physical keyboard Ctrl combinations remain native xterm input.
+- Tab, Esc, PgUp, PgDn, and all four direction controls send one input each to the active session.
+- Ctrl applies only to the next physical keyboard key, then resets; physical keyboard Ctrl combinations remain native xterm input.
 - Existing New, Hide, Close, tab switching, quick commands, terminal output, and error handling remain usable.
 
 #### Rollback/Cleanup

@@ -54,9 +54,6 @@
         >
           Ctrl
         </button>
-        <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" title="Ctrl+C" @pointerdown.prevent @click="onVirtualTerminalKey('c')">
-          C
-        </button>
         <button class="thread-terminal-shortcut" type="button" :disabled="isTerminalInputUnavailable" @pointerdown.prevent @click="onVirtualTerminalKey('escape')">
           Esc
         </button>
@@ -110,7 +107,7 @@ import {
   type TerminalFloatingWindowRect,
   type TerminalVisualViewport,
 } from './terminalFloatingWindow'
-import { terminalVirtualKeyInput, type TerminalVirtualKey } from './terminalVirtualKeys'
+import { terminalCtrlKeyboardInput, terminalVirtualKeyInput, type TerminalVirtualKey } from './terminalVirtualKeys'
 
 const props = defineProps<{
   threadId: string
@@ -269,7 +266,9 @@ function createTerminal(): void {
   terminal.loadAddon(fitAddon)
   terminal.open(terminalHostRef.value)
   terminal.onData((data) => {
-    sendTerminalInput(data, t('Terminal input failed'))
+    const ctrlInput = ctrlShortcutArmed.value ? terminalCtrlKeyboardInput(data) : null
+    ctrlShortcutArmed.value = false
+    sendTerminalInput(ctrlInput ?? data, t('Terminal input failed'))
   })
 
   resizeObserver = new ResizeObserver(() => {
@@ -506,8 +505,7 @@ function toggleCtrlShortcut(): void {
 
 function onVirtualTerminalKey(key: TerminalVirtualKey): void {
   if (isTerminalInputUnavailable.value) return
-  const data = terminalVirtualKeyInput(key, ctrlShortcutArmed.value)
-  ctrlShortcutArmed.value = false
+  const data = terminalVirtualKeyInput(key, false)
   terminal?.focus()
   sendTerminalInput(data, t('Terminal input failed'))
 }
