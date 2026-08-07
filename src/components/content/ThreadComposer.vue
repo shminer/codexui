@@ -1897,7 +1897,7 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-0 z-50 max-w-none bg-white/95 p-3 sm:p-6;
+  @apply fixed inset-x-0 bottom-0 top-12 sm:top-14 z-50 max-w-none bg-white/95 p-3 sm:p-6;
 }
 
 .thread-composer-shell {
