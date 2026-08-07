@@ -12,8 +12,11 @@
             class="sidebar-thread-controls-host"
             :is-sidebar-collapsed="isSidebarCollapsed"
             :show-new-thread-button="true"
+            :show-file-browser-button="true"
+            :file-browser-disabled="composerCwd.length === 0"
             @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
             @start-new-thread="onStartNewThreadFromToolbar"
+            @browse-files="onBrowseComposerFiles"
           >
             <button
               class="sidebar-search-toggle"
@@ -2803,6 +2806,12 @@ function onBrowseThreadFiles(threadId: string): void {
       break
     }
   }
+  if (!targetCwd || typeof window === 'undefined') return
+  window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
+}
+
+function onBrowseComposerFiles(): void {
+  const targetCwd = composerCwd.value.trim()
   if (!targetCwd || typeof window === 'undefined') return
   window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
 }
