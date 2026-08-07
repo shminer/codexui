@@ -24,7 +24,8 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toContain('new ResizeObserver(onDesktopLayoutResize)')
     expect(source).toContain('desktopLayoutResizeObserver?.disconnect()')
     expect(source).toContain('is-desktop-collapsed')
-    expect(source).toContain('subagent-desktop-collapsed-toggle')
+    expect(source).not.toContain('subagent-panel-footer')
+    expect(source).toContain('@click="toggleSubagentPanel"')
     const toggleBody = source.match(/function toggleDesktopPanel\(\): void \{([\s\S]*?)\n\}/u)?.[1] ?? ''
     expect(toggleBody).not.toContain('getThreadDetail')
     expect(source).not.toMatch(/<aside\s+v-if=/u)
@@ -34,12 +35,16 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('const activeAgents = computed')
-    expect(source).toContain('v-if="activeAgents.length > 0"')
+    const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('v-if="activeAgents.length > 0 && (!isMobile || !mobileSheetOpen)"')
     expect(source).toContain('v-for="(agent, index) in activeAgents"')
     expect(source).toContain('if (!activeAgents.value.some((agent) => agent.threadId === threadId)) return')
     expect(source).toMatch(/watch\(\s*activeAgents,[\s\S]*closeDetail\(\)/u)
     expect(source).not.toContain('void selectAgent(threadId)')
-    expect(source).toContain('class="subagent-mobile-trigger"')
+    expect(source).toContain('<Teleport to="#thread-subagent-header-target">')
+    expect(source).toContain('class="subagent-header-trigger"')
+    expect(appSource).toContain('id="thread-subagent-header-target"')
     expect(source).toContain('<Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">')
     expect(source).toContain('if (agents.length === 0) mobileSheetOpen.value = false')
     expect(source).toContain('.subagent-panel.is-mobile-open')

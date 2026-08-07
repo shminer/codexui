@@ -1,15 +1,17 @@
 <template>
-  <button
-    v-if="activeAgents.length > 0"
-    type="button"
-    class="subagent-mobile-trigger"
-    :aria-label="`Show ${activeAgents.length} agents`"
-    :title="`Show ${activeAgents.length} agents`"
-    @click="mobileSheetOpen = true"
-  >
-    <IconTablerBolt class="subagent-mobile-trigger-icon" />
-    <span>{{ activeAgents.length }}</span>
-  </button>
+  <Teleport to="#thread-subagent-header-target">
+    <button
+      v-if="activeAgents.length > 0 && (!isMobile || !mobileSheetOpen)"
+      type="button"
+      class="subagent-header-trigger"
+      :aria-label="`Show ${activeAgents.length} agents`"
+      :title="`Show ${activeAgents.length} agents`"
+      @click="toggleSubagentPanel"
+    >
+      <IconTablerLayoutSidebarFilled v-if="isMobile || desktopPanelCollapsed" class="subagent-header-trigger-icon" />
+      <IconTablerLayoutSidebar v-else class="subagent-header-trigger-icon" />
+    </button>
+  </Teleport>
 
   <Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">
     <div
@@ -102,31 +104,8 @@
               :readonly="true"
             />
           </template>
-
-          <footer v-if="!isMobile && !desktopPanelCollapsed" class="subagent-panel-footer">
-            <button
-              type="button"
-              class="subagent-icon-button subagent-desktop-toggle"
-              aria-label="Collapse agents sidebar"
-              title="Collapse agents sidebar"
-              @click="toggleDesktopPanel"
-            >
-              <IconTablerLayoutSidebar />
-            </button>
-          </footer>
         </section>
       </aside>
-
-      <button
-        v-if="!isMobile && desktopPanelCollapsed"
-        type="button"
-        class="subagent-icon-button subagent-desktop-collapsed-toggle"
-        aria-label="Expand agents sidebar"
-        title="Expand agents sidebar"
-        @click="toggleDesktopPanel"
-      >
-        <IconTablerLayoutSidebarFilled />
-      </button>
     </div>
   </Teleport>
 </template>
@@ -136,7 +115,6 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getThreadDetail, type UiSubagent } from '../../api/codexGateway'
 import { useMobile } from '../../composables/useMobile'
 import type { UiLiveOverlay } from '../../types/codex'
-import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
 import IconTablerLayoutSidebar from '../icons/IconTablerLayoutSidebar.vue'
 import IconTablerLayoutSidebarFilled from '../icons/IconTablerLayoutSidebarFilled.vue'
@@ -217,6 +195,11 @@ function toggleDesktopPanel(): void {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(DESKTOP_PANEL_COLLAPSED_KEY, desktopPanelCollapsed.value ? '1' : '0')
   }
+}
+
+function toggleSubagentPanel(): void {
+  if (isMobile.value) mobileSheetOpen.value = true
+  else toggleDesktopPanel()
 }
 
 function closeMobileSheet(): void {
@@ -404,11 +387,11 @@ onBeforeUnmount(() => {
   @apply flex min-h-0 min-w-0 w-full flex-1 flex-col;
 }
 
-.subagent-mobile-trigger {
-  @apply fixed bottom-20 right-4 z-30 hidden h-11 min-w-11 items-center justify-center gap-1 rounded-full border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-lg shadow-slate-900/10;
+.subagent-header-trigger {
+  @apply inline-flex h-6.75 w-6.75 shrink-0 items-center justify-center rounded-md border border-transparent bg-transparent text-zinc-600 transition hover:border-zinc-200 hover:bg-zinc-50;
 }
 
-.subagent-mobile-trigger-icon,
+.subagent-header-trigger-icon,
 .subagent-icon-button :deep(svg) {
   @apply h-4 w-4;
 }
@@ -510,14 +493,11 @@ onBeforeUnmount(() => {
   @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900;
 }
 
-.subagent-panel-resizer,
-.subagent-panel-footer,
-.subagent-desktop-collapsed-toggle {
+.subagent-panel-resizer {
   @apply hidden;
 }
 
-.subagent-desktop-toggle :deep(svg),
-.subagent-desktop-collapsed-toggle :deep(svg) {
+.subagent-header-trigger :deep(svg) {
   transform: scaleX(-1);
 }
 
@@ -568,22 +548,11 @@ onBeforeUnmount(() => {
     @apply w-0.5 bg-sky-500;
   }
 
-  .subagent-panel-footer {
-    @apply flex shrink-0 justify-end border-t border-slate-200 px-2 py-1.5;
-  }
-
-  .subagent-desktop-collapsed-toggle {
-    @apply absolute bottom-2 right-0 z-20 inline-flex border border-slate-200 bg-white shadow-sm;
-  }
 }
 
 @media (max-width: 767px) {
   .subagent-panel-host {
     display: contents;
-  }
-
-  .subagent-mobile-trigger {
-    @apply inline-flex;
   }
 
   .subagent-panel.is-mobile-open {
@@ -600,8 +569,7 @@ onBeforeUnmount(() => {
 }
 
 :global(:root.dark) .subagent-panel-header,
-:global(:root.dark) .subagent-detail-prompt,
-:global(:root.dark) .subagent-panel-footer {
+:global(:root.dark) .subagent-detail-prompt {
   @apply border-slate-700;
 }
 
@@ -636,9 +604,11 @@ onBeforeUnmount(() => {
   @apply border-slate-700 bg-slate-800 text-slate-100;
 }
 
-:global(:root.dark) .subagent-mobile-trigger,
-:global(:root.dark) .subagent-panel.is-mobile-open .subagent-panel-surface,
-:global(:root.dark) .subagent-desktop-collapsed-toggle {
+:global(:root.dark) .subagent-header-trigger {
+  @apply text-zinc-400 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-100;
+}
+
+:global(:root.dark) .subagent-panel.is-mobile-open .subagent-panel-surface {
   @apply border-slate-700 bg-slate-900 text-slate-100;
 }
 

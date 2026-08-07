@@ -581,6 +581,7 @@
               @load-commit-files="loadThreadCommitFiles"
               @open-commit-file="onOpenContentHeaderCommitFile"
             />
+            <span id="thread-subagent-header-target" class="content-header-subagent-target" />
           </template>
         </ContentHeader>
 
@@ -5089,6 +5090,10 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .sidebar-thread-controls-header-host {
   @apply ml-1;
+}
+
+.content-header-subagent-target {
+  display: contents;
 }
 
 .skills-route-header-icon {
