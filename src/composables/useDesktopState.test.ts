@@ -1442,6 +1442,75 @@ describe('side conversation lifecycle', () => {
     expect(state.selectedThreadServerRequests.value[0]?.id).toBe(34)
   })
 
+  it('retries the bridge snapshot after two consecutive realtime conflicts', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    let retrySnapshot: () => void = () => {}
+    let resolveFirstSnapshot: (rows: unknown[]) => void = () => {}
+    let resolveSecondSnapshot: (rows: unknown[]) => void = () => {}
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler) => {
+      if (typeof callback === 'function') retrySnapshot = () => callback()
+      return 1
+    }) as typeof window.setTimeout)
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSnapshot = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecondSnapshot = resolve
+      }))
+      .mockResolvedValueOnce([
+        {
+          id: 35,
+          method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'current-thread', turnId: 'turn-35', itemId: 'item-35' },
+        },
+        {
+          id: 36,
+          method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'current-thread', turnId: 'turn-36', itemId: 'item-36' },
+        },
+        {
+          id: 37,
+          method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'current-thread', turnId: 'turn-37', itemId: 'item-37' },
+        },
+      ])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('current-thread')
+    state.startPolling()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 36,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-36', itemId: 'item-36' },
+      },
+    })
+    resolveFirstSnapshot([])
+    await flushMicrotasks()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 37,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-37', itemId: 'item-37' },
+      },
+    })
+    resolveSecondSnapshot([])
+    await flushMicrotasks()
+    retrySnapshot()
+    await flushMicrotasks()
+
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(3)
+    expect(state.selectedThreadServerRequests.value.map((request) => request.id)).toEqual([35, 36, 37])
+  })
+
   it('reuses explicit cleanup when navigation happens before it finishes', async () => {
     installTestWindow()
     gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-closing' })
@@ -1501,6 +1570,42 @@ describe('side conversation lifecycle', () => {
       error: { code: -32000, message: 'Side conversation closed' },
     })
     expect(state.isSideConversationOpen.value).toBe(false)
+  })
+
+  it('keeps turn lifecycle updates while explicit cleanup is pending', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-cleanup-lifecycle' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-cleanup-lifecycle')
+    let rejectCleanup: (reason?: unknown) => void = () => {}
+    gatewayMocks.discardSideConversationThread.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectCleanup = reject
+    }))
+
+    const state = useDesktopState()
+    state.startPolling()
+    await state.openSideConversation('parent-thread')
+    await state.sendSideConversationMessage('question')
+    const closePromise = state.closeSideConversation()
+    await Promise.resolve()
+    notificationHandler({
+      method: 'turn/completed',
+      params: {
+        threadId: 'side-cleanup-lifecycle',
+        turnId: 'turn-cleanup-lifecycle',
+        turn: { id: 'turn-cleanup-lifecycle', status: 'completed' },
+      },
+    })
+    rejectCleanup(new Error('cleanup failed'))
+    await closePromise
+
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.isSideConversationInProgress.value).toBe(false)
   })
 
   it('retries only unsubscribe after an explicit unsubscribe failure', async () => {

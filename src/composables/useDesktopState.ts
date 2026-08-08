@@ -1537,6 +1537,7 @@ export function useDesktopState() {
   }
   let stopNotificationStream: (() => void) | null = null
   let eventSyncTimer: number | null = null
+  let pendingServerRequestSnapshotRetryTimer: number | null = null
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
   let loadThreadsPromise: Promise<void> | null = null
@@ -3947,17 +3948,16 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
-    if (
-      notificationThreadId
-      && (
-        discardedSideConversationThreadIds.has(notificationThreadId)
-        || notificationThreadId === sideConversationCleanupThreadId
-      )
-    ) {
+    if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) {
       if (notification.method === 'server/request') {
         const request = normalizeServerRequest(notification.params)
         if (request) void rejectSideConversationServerRequest(request).catch(() => {})
       }
+      return
+    }
+    if (notificationThreadId === sideConversationCleanupThreadId && notification.method === 'server/request') {
+      const request = normalizeServerRequest(notification.params)
+      if (request) void rejectSideConversationServerRequest(request).catch(() => {})
       return
     }
     if (handleServerRequestNotification(notification)) {
@@ -6128,10 +6128,20 @@ export function useDesktopState() {
         if (discardedRequests.length > 0) {
           void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
         }
+        if (pendingServerRequestSnapshotRetryTimer !== null && typeof window !== 'undefined') {
+          window.clearTimeout(pendingServerRequestSnapshotRetryTimer)
+          pendingServerRequestSnapshotRetryTimer = null
+        }
         replacePendingServerRequests(normalizedRequests.filter((request) => (
           !discardedSideConversationThreadIds.has(request.threadId)
         )))
         return
+      }
+      if (pendingServerRequestSnapshotRetryTimer === null && typeof window !== 'undefined') {
+        pendingServerRequestSnapshotRetryTimer = window.setTimeout(() => {
+          pendingServerRequestSnapshotRetryTimer = null
+          void loadPendingServerRequestsFromBridge()
+        }, EVENT_SYNC_DEBOUNCE_MS)
       }
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
@@ -6166,6 +6176,10 @@ export function useDesktopState() {
     if (eventSyncTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(eventSyncTimer)
       eventSyncTimer = null
+    }
+    if (pendingServerRequestSnapshotRetryTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(pendingServerRequestSnapshotRetryTimer)
+      pendingServerRequestSnapshotRetryTimer = null
     }
     if (rateLimitRefreshTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(rateLimitRefreshTimer)
