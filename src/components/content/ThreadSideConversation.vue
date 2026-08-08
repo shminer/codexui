@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div class="side-conversation-host" @click.self="emit('close')">
+    <div class="side-conversation-host" @click.self="requestClose">
       <section
         class="side-conversation-panel"
         role="dialog"
@@ -16,8 +16,8 @@
             type="button"
             :aria-label="t('Close side conversation')"
             :title="t('Close side conversation')"
-            :disabled="isClosing"
-            @click="emit('close')"
+            :disabled="isOpening"
+            @click="requestClose"
           >
             <IconTablerX />
           </button>
@@ -56,7 +56,7 @@
             rows="2"
             :placeholder="t('Ask a side question...')"
             :aria-label="t('Side conversation message')"
-            :disabled="isOpening || isClosing || !threadId"
+            :disabled="isOpening || !threadId"
             @keydown="onInputKeydown"
           />
           <button
@@ -65,7 +65,6 @@
             type="button"
             :aria-label="t('Stop')"
             :title="t('Stop')"
-            :disabled="isClosing"
             @click="emit('interrupt')"
           >
             <IconTablerPlayerStopFilled />
@@ -107,7 +106,6 @@ const props = defineProps<{
   liveOverlay: UiLiveOverlay | null
   error: string
   isOpening: boolean
-  isClosing: boolean
   isTurnInProgress: boolean
   sendWithEnter?: boolean
 }>()
@@ -128,7 +126,6 @@ const canSend = computed(() => (
   props.threadId.length > 0
   && draft.value.trim().length > 0
   && !props.isOpening
-  && !props.isClosing
   && !props.isTurnInProgress
 ))
 
@@ -136,6 +133,10 @@ function submit(): void {
   if (!canSend.value) return
   emit('send', draft.value.trim())
   draft.value = ''
+}
+
+function requestClose(): void {
+  if (!props.isOpening) emit('close')
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
@@ -152,6 +153,7 @@ watch(
   },
   { immediate: true },
 )
+
 </script>
 
 <style scoped>

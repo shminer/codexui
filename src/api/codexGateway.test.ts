@@ -107,7 +107,9 @@ describe('side conversation lifecycle', () => {
       modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
       ephemeral: true,
+      sideConversation: true,
       excludeTurns: true,
+      persistExtendedHistory: false,
     })
     expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
     expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
@@ -195,6 +197,24 @@ describe('side conversation lifecycle', () => {
       'turn/interrupt',
       'thread/unsubscribe',
     ])
+  })
+
+  it('unsubscribes an idle side thread without an empty background interrupt', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
+      return new Response(JSON.stringify({ result: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThreadInBackground('side-thread-idle')
+
+    expect(requests).toEqual([{
+      method: 'thread/unsubscribe',
+      params: { threadId: 'side-thread-idle' },
+    }])
   })
 
   it('retries a background interrupt with the active turn id from a mismatch', async () => {

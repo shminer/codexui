@@ -10,7 +10,6 @@ import {
 } from './useDesktopState'
 import type { UiProjectGroup } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
-import { CodexApiError } from '../api/codexErrors'
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
@@ -1178,7 +1177,7 @@ describe('side conversation lifecycle', () => {
     )
   })
 
-  it('does not fork after navigation discards an opening side conversation', async () => {
+  it('does not fork after background disposal during parent restore', async () => {
     installTestWindow()
     let resolveResume: (value: unknown) => void = () => {}
     gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => {
@@ -1286,6 +1285,30 @@ describe('side conversation lifecycle', () => {
     )
   })
 
+  it('uses the creation model and Thinking value for later side turns', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-snapshot' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.openSideConversation('parent-thread', 'gpt-5.6', 'high')
+    state.setSelectedModelId('gpt-5.4-mini')
+    state.setSelectedReasoningEffort('low')
+    await state.sendSideConversationMessage('question')
+
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledWith(
+      'side-snapshot',
+      'question',
+      [],
+      'gpt-5.6',
+      'high',
+      undefined,
+      [],
+      'default',
+    )
+  })
+
   it('does not reload an already restored default-provider parent', async () => {
     installTestWindow()
     gatewayMocks.resumeThread.mockResolvedValue({
@@ -1311,27 +1334,13 @@ describe('side conversation lifecycle', () => {
     expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the panel open when explicit cleanup fails', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-explicit' })
-    gatewayMocks.discardSideConversationThread.mockRejectedValue(new Error('cleanup failed'))
-
-    const state = useDesktopState()
-    await state.openSideConversation('parent-thread')
-    await state.closeSideConversation()
-
-    expect(state.isSideConversationOpen.value).toBe(true)
-    expect(state.sideConversationThreadId.value).toBe('side-explicit')
-    expect(state.sideConversationError.value).toBe('cleanup failed')
-  })
-
-  it('clears navigation-discarded state immediately and cleans up in the background', async () => {
+  it('clears the UI immediately and cleans up in the background', async () => {
     installTestWindow()
     gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-background' })
 
     const state = useDesktopState()
     await state.openSideConversation('parent-thread')
-    state.discardSideConversationInBackground()
+    state.closeSideConversation()
 
     expect(state.isSideConversationOpen.value).toBe(false)
     expect(state.sideConversationThreadId.value).toBe('')
@@ -1339,6 +1348,22 @@ describe('side conversation lifecycle', () => {
       'side-background',
       '',
     )
+    expect(gatewayMocks.discardSideConversationThread).not.toHaveBeenCalled()
+  })
+
+  it('keeps the side conversation open when the main thread changes', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-stays-open' })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.openSideConversation('parent-thread')
+    state.primeSelectedThread('other-main-thread')
+
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.sideConversationParentThreadId.value).toBe('parent-thread')
+    expect(state.sideConversationThreadId.value).toBe('side-stays-open')
+    expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
   })
 
   it('rejects pending side requests before background cleanup', async () => {
@@ -1580,156 +1605,45 @@ describe('side conversation lifecycle', () => {
     expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(2)
   })
 
-  it('reuses explicit cleanup when navigation happens before it finishes', async () => {
+  it('waits for a pending turn/start before background cleanup', async () => {
     installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-closing' })
-    let rejectCleanup: (reason?: unknown) => void = () => {}
-    gatewayMocks.discardSideConversationThread.mockImplementationOnce(() => new Promise((_resolve, reject) => {
-      rejectCleanup = reject
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-pending-turn' })
+    let resolveTurnStart: (turnId: string) => void = () => {}
+    gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveTurnStart = resolve
     }))
 
     const state = useDesktopState()
     await state.openSideConversation('parent-thread')
-    const closePromise = state.closeSideConversation()
+    const sendPromise = state.sendSideConversationMessage('question')
     await Promise.resolve()
-    state.discardSideConversationInBackground()
+    state.closeSideConversation()
 
-    expect(gatewayMocks.discardSideConversationThread).toHaveBeenCalledTimes(1)
+    expect(state.isSideConversationOpen.value).toBe(false)
     expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
-    rejectCleanup(new Error('cleanup failed during navigation'))
-    await closePromise
+    resolveTurnStart('side-turn-id')
+    await sendPromise
     await flushMicrotasks()
 
-    expect(gatewayMocks.discardSideConversationThread).toHaveBeenCalledTimes(1)
-    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledWith(
+      'side-pending-turn',
+      'side-turn-id',
+    )
   })
 
-  it('rejects a side request that arrives during explicit cleanup', async () => {
+  it('does not restore a closed side conversation in a new state instance', async () => {
     installTestWindow()
-    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
-    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
-      notificationHandler = handler
-      return vi.fn()
-    })
-    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-late-request' })
-    let resolveCleanup: (value: unknown) => void = () => {}
-    gatewayMocks.discardSideConversationThread.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveCleanup = resolve
-    }))
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-not-restored' })
 
     const state = useDesktopState()
-    state.startPolling()
     await state.openSideConversation('parent-thread')
-    const closePromise = state.closeSideConversation()
-    await Promise.resolve()
-    notificationHandler({
-      method: 'server/request',
-      params: {
-        id: 33,
-        method: 'item/commandExecution/requestApproval',
-        params: { threadId: 'side-late-request', turnId: 'turn-33', itemId: 'item-33' },
-      },
-    })
-    resolveCleanup(undefined)
-    await closePromise
+    state.closeSideConversation()
     await flushMicrotasks()
 
-    expect(gatewayMocks.replyToServerRequest).toHaveBeenCalledWith(33, {
-      error: { code: -32000, message: 'Side conversation closed' },
-    })
-    expect(state.isSideConversationOpen.value).toBe(false)
-  })
+    const reloadedState = useDesktopState()
 
-  it('keeps turn lifecycle updates while explicit cleanup is pending', async () => {
-    installTestWindow()
-    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
-    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
-      notificationHandler = handler
-      return vi.fn()
-    })
-    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-cleanup-lifecycle' })
-    gatewayMocks.startThreadTurn.mockResolvedValue('turn-cleanup-lifecycle')
-    let rejectCleanup: (reason?: unknown) => void = () => {}
-    gatewayMocks.discardSideConversationThread.mockImplementationOnce(() => new Promise((_resolve, reject) => {
-      rejectCleanup = reject
-    }))
-
-    const state = useDesktopState()
-    state.startPolling()
-    await state.openSideConversation('parent-thread')
-    await state.sendSideConversationMessage('question')
-    const closePromise = state.closeSideConversation()
-    await Promise.resolve()
-    notificationHandler({
-      method: 'turn/completed',
-      params: {
-        threadId: 'side-cleanup-lifecycle',
-        turnId: 'turn-cleanup-lifecycle',
-        turn: { id: 'turn-cleanup-lifecycle', status: 'completed' },
-      },
-    })
-    rejectCleanup(new Error('cleanup failed'))
-    await closePromise
-
-    expect(state.isSideConversationOpen.value).toBe(true)
-    expect(state.isSideConversationInProgress.value).toBe(false)
-  })
-
-  it('retries only unsubscribe after an explicit unsubscribe failure', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-unsubscribe-retry' })
-    gatewayMocks.discardSideConversationThread
-      .mockRejectedValueOnce(new CodexApiError('unsubscribe failed', {
-        code: 'rpc_error',
-        method: 'thread/unsubscribe',
-      }))
-      .mockResolvedValueOnce(undefined)
-
-    const state = useDesktopState()
-    await state.openSideConversation('parent-thread')
-    await state.closeSideConversation()
-    await state.closeSideConversation()
-
-    expect(gatewayMocks.discardSideConversationThread).toHaveBeenNthCalledWith(
-      1,
-      'side-unsubscribe-retry',
-      undefined,
-      { skipInterrupt: false },
-    )
-    expect(gatewayMocks.discardSideConversationThread).toHaveBeenNthCalledWith(
-      2,
-      'side-unsubscribe-retry',
-      undefined,
-      { skipInterrupt: true },
-    )
-    expect(state.isSideConversationOpen.value).toBe(false)
-  })
-
-  it('interrupts a new turn after an earlier unsubscribe failure', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-new-turn-after-failure' })
-    gatewayMocks.startThreadTurn.mockResolvedValue('new-side-turn')
-    gatewayMocks.discardSideConversationThread
-      .mockRejectedValueOnce(new CodexApiError('unsubscribe failed', {
-        code: 'rpc_error',
-        method: 'thread/unsubscribe',
-      }))
-      .mockResolvedValueOnce(undefined)
-
-    const state = useDesktopState()
-    await state.openSideConversation('parent-thread')
-    await state.closeSideConversation()
-    await state.sendSideConversationMessage('new question')
-    await state.closeSideConversation()
-
-    expect(gatewayMocks.discardSideConversationThread).toHaveBeenNthCalledWith(
-      2,
-      'side-new-turn-after-failure',
-      'new-side-turn',
-      { skipInterrupt: false },
-    )
+    expect(reloadedState.isSideConversationOpen.value).toBe(false)
+    expect(reloadedState.sideConversationThreadId.value).toBe('')
   })
 
   it('ignores late notifications from every discarded side thread', async () => {
@@ -1816,7 +1730,7 @@ describe('provider model selection', () => {
     expect(state.selectedModelId.value).toBe('big-pickle')
     expect(state.readModelIdForThread('').trim()).toBe('big-pickle')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::opencode-zen': 'big-pickle',
+      '__new-thread-provider__::__default__::opencode-zen': 'big-pickle',
     })
     expect(window.localStorage.getItem('codex-web-local.selected-model-id.v1')).toBe(null)
   })
@@ -1824,7 +1738,7 @@ describe('provider model selection', () => {
   it('restores a valid provider-scoped OpenCode Zen selected model from localStorage', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::opencode-zen': 'ring-2.6-1t-free',
+        '__new-thread-provider__::__default__::opencode-zen': 'ring-2.6-1t-free',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1854,14 +1768,14 @@ describe('provider model selection', () => {
     expect(state.selectedModelId.value).toBe('ring-2.6-1t-free')
     expect(state.readModelIdForThread('').trim()).toBe('ring-2.6-1t-free')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::opencode-zen': 'ring-2.6-1t-free',
+      '__new-thread-provider__::__default__::opencode-zen': 'ring-2.6-1t-free',
     })
   })
 
   it('stores the new-thread Codex model in a provider-scoped slot', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::openrouter-free': 'openrouter/free',
+        '__new-thread-provider__::__default__::openrouter-free': 'openrouter/free',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1885,15 +1799,15 @@ describe('provider model selection', () => {
     expect(state.selectedModelId.value).toBe('gpt-5.5')
     expect(state.readModelIdForThread('').trim()).toBe('gpt-5.5')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::openrouter-free': 'openrouter/free',
-      '__new-thread-provider__::codex': 'gpt-5.5',
+      '__new-thread-provider__::__default__::openrouter-free': 'openrouter/free',
+      '__new-thread-provider__::__default__::codex': 'gpt-5.5',
     })
   })
 
   it('uses only the upstream visible catalog for a provider requiring OpenAI auth', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::codex-local-access': 'gpt-5.6-sol',
+        '__new-thread-provider__::__default__::codex-local-access': 'gpt-5.6-sol',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1922,6 +1836,100 @@ describe('provider model selection', () => {
     expect(state.selectedModelId.value).toBe('gpt-5.6')
   })
 
+  it('restores new-chat model and Thinking defaults for the active account', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::account-a::codex': 'gpt-5.6',
+      }),
+      'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::account-a::codex': 'ultra',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.6'])
+
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6')
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
+    expect(state.readModelIdForThread('')).toBe('gpt-5.6')
+  })
+
+  it('does not apply a new-chat Thinking default to an existing thread', async () => {
+    installTestWindow({
+      'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::account-a::codex': 'ultra',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'high',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    state.primeSelectedThread('existing-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedReasoningEffort.value).toBe('high')
+  })
+
+  it('ignores a late model preference response from the previous account', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    type ModelConfig = { model: string, providerId: string, reasoningEffort: 'high', speedMode: 'standard' }
+    let resolveAccountA: (config: ModelConfig) => void = () => {}
+    gatewayMocks.getCurrentModelConfig
+      .mockImplementationOnce(() => new Promise<ModelConfig>((resolve) => {
+        resolveAccountA = resolve
+      }))
+      .mockResolvedValueOnce({
+        model: 'gpt-5.6',
+        providerId: '',
+        reasoningEffort: 'high',
+        speedMode: 'standard',
+      })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.6'])
+
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    const accountARefresh = state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await flushMicrotasks()
+    state.setActiveAccountStorageId('account-b')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    resolveAccountA({
+      model: 'gpt-5.4-mini',
+      providerId: '',
+      reasoningEffort: 'high',
+      speedMode: 'standard',
+    })
+    await accountARefresh
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6')
+    expect(state.readModelIdForThread('')).toBe('gpt-5.6')
+  })
+
   it('keeps the Max reasoning effort reported for GPT-5.6', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1942,7 +1950,7 @@ describe('provider model selection', () => {
     expect(state.selectedReasoningEffort.value).toBe('max')
   })
 
-  it('falls back from Max when the selected model does not report it', async () => {
+  it('keeps the selected Thinking value when the refreshed model catalog omits it', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
     gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
@@ -1968,13 +1976,14 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     state.setSelectedModelId('gpt-5.5')
 
-    expect(state.selectedReasoningEffort.value).toBe('xhigh')
+    expect(state.selectedReasoningEffort.value).toBe('max')
+    expect(state.availableModelReasoningEfforts.value['gpt-5.5']).toContain('max')
   })
 
   it('drops stale non-Codex selected models from the Codex model list', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::codex': 'big-pickle',
+        '__new-thread-provider__::__default__::codex': 'big-pickle',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -2003,7 +2012,7 @@ describe('provider model selection', () => {
     expect(state.selectedModelId.value).toBe('gpt-5.5')
     expect(state.readModelIdForThread('').trim()).toBe('gpt-5.5')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::codex': 'gpt-5.5',
+      '__new-thread-provider__::__default__::codex': 'gpt-5.5',
     })
   })
 

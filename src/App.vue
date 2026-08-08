@@ -1054,7 +1054,6 @@
     :live-overlay="sideConversationLiveOverlay"
     :error="sideConversationError"
     :is-opening="isSideConversationOpening"
-    :is-closing="isSideConversationClosing"
     :is-turn-in-progress="isSideConversationInProgress"
     :send-with-enter="sendWithEnter"
     @close="closeSideConversation"
@@ -1319,7 +1318,6 @@ const {
   selectedThreadServerRequests,
   selectedThreadSubagents,
   selectedLiveOverlay,
-  sideConversationParentThreadId,
   sideConversationThreadId,
   sideConversationMessages,
   sideConversationLiveOverlay,
@@ -1327,7 +1325,6 @@ const {
   sideConversationError,
   isSideConversationOpen,
   isSideConversationOpening,
-  isSideConversationClosing,
   isSideConversationInProgress,
   getLiveOverlayForThread,
   codexQuota,
@@ -1372,6 +1369,7 @@ const {
   interruptSideConversationTurn,
   closeSideConversation,
   discardSideConversationInBackground,
+  setActiveAccountStorageId,
   selectedThreadQueuedMessages,
   removeQueuedMessage,
   reorderQueuedMessage,
@@ -1634,6 +1632,7 @@ const visualViewportOffsetTop = ref(typeof window !== 'undefined' ? window.visua
 const layoutViewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 0)
 let accountStatePollTimer: number | null = null
 let isAccountStatePollInFlight = false
+let accountStateRequestEpoch = 0
 let externalCodexAuthAvailable = false
 let externalAuthImportAttempted = false
 let existingFolderBrowseRequestId = 0
@@ -2171,11 +2170,15 @@ async function maybeImportExternalCodexAuthAccount(): Promise<boolean> {
   if (accounts.value.length > 0) return false
   if (accountRateLimitSnapshots.value.length === 0) return false
   externalAuthImportAttempted = true
+  const requestEpoch = ++accountStateRequestEpoch
   const previousAccountsJson = JSON.stringify(accounts.value.map((account) => account.accountId).sort())
   try {
     const result = await refreshAccountsFromAuth()
+    if (requestEpoch !== accountStateRequestEpoch) return false
     accounts.value = result.accounts
+    syncActiveAccountStorageId(getActiveAccountStorageId(result.accounts))
   } catch {
+    if (requestEpoch !== accountStateRequestEpoch) return false
     await loadAccountsState({ silent: true })
   }
   const nextAccountsJson = JSON.stringify(accounts.value.map((account) => account.accountId).sort())
@@ -2502,9 +2505,18 @@ function buildAccountTitle(account: UiAccountEntry): string {
 }
 
 async function loadAccountsState(options: { silent?: boolean } = {}): Promise<void> {
+  const requestEpoch = accountStateRequestEpoch
   try {
     const result = await getAccounts()
+    if (
+      requestEpoch !== accountStateRequestEpoch
+      || isRefreshingAccounts.value
+      || isSwitchingAccounts.value
+      || isCompletingCodexLogin.value
+      || removingAccountId.value.length > 0
+    ) return
     accounts.value = result.accounts
+    syncActiveAccountStorageId(getActiveAccountStorageId(result.accounts))
     if (!result.accounts.some((account) => account.storageId === hoveredAccountId.value)) {
       hoveredAccountId.value = ''
     }
@@ -2512,13 +2524,23 @@ async function loadAccountsState(options: { silent?: boolean } = {}): Promise<vo
       confirmingRemoveAccountId.value = ''
     }
   } catch (error) {
+    if (requestEpoch !== accountStateRequestEpoch) return
     if (options.silent === true) return
     accountActionError.value = error instanceof Error ? error.message : t('Failed to load accounts')
   }
 }
 
+function getActiveAccountStorageId(entries: UiAccountEntry[]): string {
+  return entries.find((account) => account.isActive)?.storageId ?? ''
+}
+
+function syncActiveAccountStorageId(storageId: string): void {
+  setActiveAccountStorageId(storageId)
+}
+
 async function onRefreshAccounts(): Promise<void> {
   if (isRefreshingAccounts.value || isSwitchingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value) return
+  accountStateRequestEpoch += 1
   accountActionError.value = ''
   hoveredAccountId.value = ''
   confirmingRemoveAccountId.value = ''
@@ -2527,6 +2549,7 @@ async function onRefreshAccounts(): Promise<void> {
     const result = await refreshAccountsFromAuth()
     accounts.value = result.accounts
     stopPolling()
+    syncActiveAccountStorageId(getActiveAccountStorageId(result.accounts))
     startPolling()
     void refreshAll({
       includeSelectedThreadMessages: true,
@@ -2544,11 +2567,13 @@ async function onSwitchAccount(storageId: string): Promise<void> {
     accountActionError.value = t('Finish the current turn and pending requests before switching accounts.')
     return
   }
+  accountStateRequestEpoch += 1
   accountActionError.value = ''
   hoveredAccountId.value = ''
   confirmingRemoveAccountId.value = ''
   isSwitchingAccounts.value = true
   try {
+    discardSideConversationInBackground()
     const nextActiveAccount = await switchAccount(storageId)
     accounts.value = accounts.value.map((account) => (
       account.storageId === storageId
@@ -2556,6 +2581,7 @@ async function onSwitchAccount(storageId: string): Promise<void> {
         : { ...account, isActive: false }
     ))
     stopPolling()
+    syncActiveAccountStorageId(nextActiveAccount.storageId)
     startPolling()
     void refreshAll({
       includeSelectedThreadMessages: true,
@@ -2601,6 +2627,7 @@ async function onSubmitCodexLoginCallback(): Promise<void> {
 
 async function completeCodexLoginFromCallback(callbackUrl: string): Promise<void> {
   if (isCompletingCodexLogin.value || callbackUrl.length === 0) return
+  accountStateRequestEpoch += 1
   accountActionError.value = ''
   isCompletingCodexLogin.value = true
   try {
@@ -2610,6 +2637,7 @@ async function completeCodexLoginFromCallback(callbackUrl: string): Promise<void
     codexLoginCallbackUrl.value = ''
     isCodexLoginModalOpen.value = false
     stopPolling()
+    syncActiveAccountStorageId(getActiveAccountStorageId(result.accounts))
     startPolling()
     void refreshAll({
       includeSelectedThreadMessages: true,
@@ -2635,13 +2663,16 @@ async function onRemoveAccount(storageId: string): Promise<void> {
   }
 
   const removedWasActive = targetAccount.isActive
+  accountStateRequestEpoch += 1
   accountActionError.value = ''
   confirmingRemoveAccountId.value = ''
   removingAccountId.value = storageId
   try {
+    if (targetAccount.isActive) discardSideConversationInBackground()
     const result = await removeAccount(storageId)
     accounts.value = result.accounts
     stopPolling()
+    syncActiveAccountStorageId(getActiveAccountStorageId(result.accounts))
     startPolling()
     if (removedWasActive) {
       void refreshAll({
@@ -4505,10 +4536,10 @@ async function initialize(): Promise<void> {
     primeSelectedThread('', { persist: false })
   }
 
+  await loadAccountsState({ silent: true })
   await refreshAll({
     includeSelectedThreadMessages: route.name === 'thread',
   })
-  void loadAccountsState({ silent: true })
   await applyLaunchProjectPathFromUrl()
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
@@ -4608,15 +4639,6 @@ watch(
 
     if (route.name === 'thread' && routeThreadId.value === threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
-  },
-)
-
-watch(
-  () => [selectedThreadId.value, sideConversationParentThreadId.value] as const,
-  ([threadId, parentThreadId]) => {
-    if (parentThreadId && parentThreadId !== threadId) {
-      discardSideConversationInBackground()
-    }
   },
 )
 

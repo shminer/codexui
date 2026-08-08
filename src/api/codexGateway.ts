@@ -1889,7 +1889,9 @@ export async function startSideConversation(
       ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
       developerInstructions,
       ephemeral: true,
+      sideConversation: true,
       excludeTurns: true,
+      persistExtendedHistory: false,
     })
     childThreadId = normalizeThreadIdFromPayload(payload)
     if (!childThreadId) {
@@ -1937,20 +1939,23 @@ export async function discardSideConversationThreadInBackground(threadId: string
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
+  const normalizedTurnId = turnId?.trim() || ''
   let interruptError: unknown = null
-  try {
-    await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: turnId?.trim() || '' })
-  } catch (error) {
-    interruptError = error
-  }
-  const actualTurnId = interruptError instanceof Error
-    ? /expected active turn id `?[^`\s]+`? but found `?([^`\s]+)`?/u.exec(interruptError.message)?.[1] ?? ''
-    : ''
-  if (actualTurnId) {
+  if (normalizedTurnId) {
     try {
-      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: actualTurnId })
-    } catch {
-      // Background cleanup continues to unsubscribe after the official mismatch retry.
+      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+    } catch (error) {
+      interruptError = error
+    }
+    const actualTurnId = interruptError instanceof Error
+      ? /expected active turn id `?[^`\s]+`? but found `?([^`\s]+)`?/u.exec(interruptError.message)?.[1] ?? ''
+      : ''
+    if (actualTurnId) {
+      try {
+        await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: actualTurnId })
+      } catch {
+        // Background cleanup continues to unsubscribe after the official mismatch retry.
+      }
     }
   }
   try {
