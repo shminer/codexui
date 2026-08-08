@@ -1888,6 +1888,8 @@ export async function startSideConversation(
       ...(selectedProvider ? { modelProvider: selectedProvider } : {}),
       ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
       developerInstructions,
+      ephemeral: true,
+      excludeTurns: true,
       persistExtendedHistory: false,
     })
     childThreadId = normalizeThreadIdFromPayload(payload)

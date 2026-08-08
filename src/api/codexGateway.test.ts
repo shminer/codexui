@@ -106,11 +106,11 @@ describe('side conversation lifecycle', () => {
       model: 'gpt-5.4',
       modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
+      ephemeral: true,
+      excludeTurns: true,
       persistExtendedHistory: false,
     })
-    expect(requests[1].params).not.toHaveProperty('ephemeral')
     expect(requests[1].params).not.toHaveProperty('sideConversation')
-    expect(requests[1].params).not.toHaveProperty('excludeTurns')
     expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
     expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
     expect(requests[2].params).toMatchObject({
