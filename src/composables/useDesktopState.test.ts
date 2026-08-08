@@ -1145,7 +1145,7 @@ describe('live error overlay', () => {
 })
 
 describe('side conversation lifecycle', () => {
-  it('waits for an in-flight parent restore before forking with its provider', async () => {
+  it('waits for an in-flight parent restore before forking with its model and provider', async () => {
     installTestWindow()
     let resolveResume: (value: unknown) => void = () => {}
     gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => {
@@ -1156,7 +1156,7 @@ describe('side conversation lifecycle', () => {
     const state = useDesktopState()
     state.primeSelectedThread('parent-delayed-provider')
     const loadPromise = state.loadMessages('parent-delayed-provider')
-    const openPromise = state.openSideConversation('parent-delayed-provider', 'big-pickle', 'medium')
+    const openPromise = state.openSideConversation('parent-delayed-provider', 'stale-model', 'medium')
 
     expect(gatewayMocks.startSideConversation).not.toHaveBeenCalled()
     resolveResume({
@@ -1509,6 +1509,75 @@ describe('side conversation lifecycle', () => {
 
     expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(3)
     expect(state.selectedThreadServerRequests.value.map((request) => request.id)).toEqual([35, 36, 37])
+  })
+
+  it('reuses the startup pending snapshot when ready arrives before it resolves', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    let resolveSnapshot: (rows: unknown[]) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSnapshot = resolve
+    }))
+
+    const state = useDesktopState()
+    state.startPolling()
+    notificationHandler({ method: 'ready' })
+
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(1)
+    resolveSnapshot([])
+    await flushMicrotasks()
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+
+  it('does not schedule a snapshot retry after polling stops', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    let resolveFirstSnapshot: (rows: unknown[]) => void = () => {}
+    let resolveSecondSnapshot: (rows: unknown[]) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSnapshot = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecondSnapshot = resolve
+      }))
+
+    const state = useDesktopState()
+    state.startPolling()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 38,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-38', itemId: 'item-38' },
+      },
+    })
+    resolveFirstSnapshot([])
+    await flushMicrotasks()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 39,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-39', itemId: 'item-39' },
+      },
+    })
+    vi.mocked(window.setTimeout).mockClear()
+    state.stopPolling()
+    resolveSecondSnapshot([])
+    await flushMicrotasks()
+
+    expect(window.setTimeout).not.toHaveBeenCalled()
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(2)
   })
 
   it('reuses explicit cleanup when navigation happens before it finishes', async () => {

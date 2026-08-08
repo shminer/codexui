@@ -121,7 +121,7 @@ describe('side conversation lifecycle', () => {
     })
   })
 
-  it('sends the startup interrupt before unsubscribing an idle side thread', async () => {
+  it('unsubscribes an idle side thread without interrupting a missing turn', async () => {
     const requests: Array<{ method: string, params: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
@@ -133,15 +133,31 @@ describe('side conversation lifecycle', () => {
 
     await discardSideConversationThread('side-thread-idle')
 
-    expect(requests).toEqual([
-      {
-        method: 'turn/interrupt',
-        params: { threadId: 'side-thread-idle', turnId: '' },
-      },
-      {
-        method: 'thread/unsubscribe',
-        params: { threadId: 'side-thread-idle' },
-      },
+    expect(requests).toEqual([{
+      method: 'thread/unsubscribe',
+      params: { threadId: 'side-thread-idle' },
+    }])
+  })
+
+  it('still unsubscribes when the active turn completes before interrupt arrives', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      const isInterrupt = request.method === 'turn/interrupt'
+      return new Response(JSON.stringify(isInterrupt
+        ? { error: 'no active turn to interrupt' }
+        : { result: {} }), {
+        status: isInterrupt ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThread('side-thread-completed', 'completed-turn')
+
+    expect(requests.map((request) => request.method)).toEqual([
+      'turn/interrupt',
+      'thread/unsubscribe',
     ])
   })
 

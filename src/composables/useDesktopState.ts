@@ -1538,6 +1538,8 @@ export function useDesktopState() {
   let stopNotificationStream: (() => void) | null = null
   let eventSyncTimer: number | null = null
   let pendingServerRequestSnapshotRetryTimer: number | null = null
+  let pendingServerRequestSnapshotPromise: Promise<void> | null = null
+  let pollingEpoch = 0
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
   let loadThreadsPromise: Promise<void> | null = null
@@ -5201,10 +5203,11 @@ export function useDesktopState() {
     sideConversationInterruptedThreadId = ''
     isSideConversationOpening.value = true
     try {
-      if (
+      const shouldRestoreParent = (
         !threadModelProviderByThreadId.value[normalizedParentThreadId]
         && loadedMessagesByThreadId.value[normalizedParentThreadId] !== true
-      ) {
+      )
+      if (shouldRestoreParent) {
         const existingLoad = loadMessagePromiseByThreadId.get(normalizedParentThreadId)
         if (existingLoad) {
           await existingLoad
@@ -5218,7 +5221,7 @@ export function useDesktopState() {
       }
       const started = await startSideConversationThread(
         normalizedParentThreadId,
-        modelId,
+        shouldRestoreParent ? readModelIdForThread(normalizedParentThreadId) || modelId : modelId,
         effort,
         readRuntimeProviderIdForThread(normalizedParentThreadId),
       )
@@ -6084,8 +6087,9 @@ export function useDesktopState() {
     }
   }
 
-  async function recoverBridgeState(): Promise<void> {
-    await loadPendingServerRequestsFromBridge()
+  async function recoverBridgeState(epoch: number): Promise<void> {
+    await loadPendingServerRequestsFromBridge(epoch)
+    if (epoch !== pollingEpoch) return
     pendingThreadsRefresh = !hasLoadedThreads.value
     if (
       selectedThreadId.value &&
@@ -6100,11 +6104,13 @@ export function useDesktopState() {
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
-    void loadPendingServerRequestsFromBridge()
+    const epoch = ++pollingEpoch
+    void loadPendingServerRequestsFromBridge(epoch)
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      if (epoch !== pollingEpoch) return
       if (notification.method === 'ready') {
         clearAllTransientTurnErrors()
-        void recoverBridgeState()
+        void recoverBridgeState(epoch)
         return
       }
       applyRealtimeUpdates(notification)
@@ -6112,40 +6118,57 @@ export function useDesktopState() {
     })
   }
 
-  async function loadPendingServerRequestsFromBridge(): Promise<void> {
-    try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const revisionAtStart = pendingServerRequestsRevision
-        const rows = await getPendingServerRequests()
-        if (pendingServerRequestsRevision !== revisionAtStart) continue
+  function loadPendingServerRequestsFromBridge(epoch: number): Promise<void> {
+    if (epoch !== pollingEpoch) return Promise.resolve()
+    if (pendingServerRequestSnapshotPromise) return pendingServerRequestSnapshotPromise
 
-        const normalizedRequests = rows
-          .map((row) => normalizeServerRequest(row))
-          .filter((request): request is UiServerRequest => request !== null)
-        const discardedRequests = normalizedRequests.filter((request) => (
-          discardedSideConversationThreadIds.has(request.threadId)
-        ))
-        if (discardedRequests.length > 0) {
-          void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
+    const promise = (async () => {
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const revisionAtStart = pendingServerRequestsRevision
+          const rows = await getPendingServerRequests()
+          if (epoch !== pollingEpoch) return
+          if (pendingServerRequestsRevision !== revisionAtStart) continue
+
+          const normalizedRequests = rows
+            .map((row) => normalizeServerRequest(row))
+            .filter((request): request is UiServerRequest => request !== null)
+          const discardedRequests = normalizedRequests.filter((request) => (
+            discardedSideConversationThreadIds.has(request.threadId)
+          ))
+          if (discardedRequests.length > 0) {
+            void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
+          }
+          if (pendingServerRequestSnapshotRetryTimer !== null && typeof window !== 'undefined') {
+            window.clearTimeout(pendingServerRequestSnapshotRetryTimer)
+            pendingServerRequestSnapshotRetryTimer = null
+          }
+          replacePendingServerRequests(normalizedRequests.filter((request) => (
+            !discardedSideConversationThreadIds.has(request.threadId)
+          )))
+          return
         }
-        if (pendingServerRequestSnapshotRetryTimer !== null && typeof window !== 'undefined') {
-          window.clearTimeout(pendingServerRequestSnapshotRetryTimer)
-          pendingServerRequestSnapshotRetryTimer = null
+        if (
+          epoch === pollingEpoch
+          && pendingServerRequestSnapshotRetryTimer === null
+          && typeof window !== 'undefined'
+        ) {
+          pendingServerRequestSnapshotRetryTimer = window.setTimeout(() => {
+            pendingServerRequestSnapshotRetryTimer = null
+            if (epoch === pollingEpoch) void loadPendingServerRequestsFromBridge(epoch)
+          }, EVENT_SYNC_DEBOUNCE_MS)
         }
-        replacePendingServerRequests(normalizedRequests.filter((request) => (
-          !discardedSideConversationThreadIds.has(request.threadId)
-        )))
-        return
+      } catch {
+        // Keep UI usable when pending request endpoint is temporarily unavailable.
       }
-      if (pendingServerRequestSnapshotRetryTimer === null && typeof window !== 'undefined') {
-        pendingServerRequestSnapshotRetryTimer = window.setTimeout(() => {
-          pendingServerRequestSnapshotRetryTimer = null
-          void loadPendingServerRequestsFromBridge()
-        }, EVENT_SYNC_DEBOUNCE_MS)
+    })()
+    pendingServerRequestSnapshotPromise = promise
+    void promise.finally(() => {
+      if (pendingServerRequestSnapshotPromise === promise) {
+        pendingServerRequestSnapshotPromise = null
       }
-    } catch {
-      // Keep UI usable when pending request endpoint is temporarily unavailable.
-    }
+    })
+    return promise
   }
 
   async function respondToPendingServerRequest(reply: UiServerRequestReply): Promise<boolean> {
@@ -6163,6 +6186,8 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    pollingEpoch += 1
+    pendingServerRequestSnapshotPromise = null
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null

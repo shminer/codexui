@@ -1923,8 +1923,12 @@ export async function discardSideConversationThread(
   if (!normalizedThreadId) return
 
   const normalizedTurnId = turnId?.trim() || ''
-  if (options.skipInterrupt !== true) {
-    await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+  if (options.skipInterrupt !== true && normalizedTurnId) {
+    try {
+      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes('no active turn to interrupt'))) throw error
+    }
   }
   await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
 }
