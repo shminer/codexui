@@ -1205,6 +1205,61 @@ describe('side conversation lifecycle', () => {
     expect(state.isSideConversationOpen.value).toBe(false)
   })
 
+  it('does not fork after explicit close during parent restore', async () => {
+    installTestWindow()
+    let resolveResume: (value: unknown) => void = () => {}
+    gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => {
+      resolveResume = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-explicit-opening')
+    const loadPromise = state.loadMessages('parent-explicit-opening')
+    const openPromise = state.openSideConversation('parent-explicit-opening')
+    await state.closeSideConversation()
+    resolveResume({
+      model: 'gpt-5.4',
+      modelProvider: 'codex',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    await Promise.all([loadPromise, openPromise])
+
+    expect(gatewayMocks.startSideConversation).not.toHaveBeenCalled()
+    expect(state.isSideConversationOpen.value).toBe(false)
+  })
+
+  it('forces provider restore after a recent transient load failure', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread
+      .mockRejectedValueOnce(new Error('temporary restore failure'))
+      .mockResolvedValueOnce({
+        model: 'big-pickle',
+        modelProvider: 'opencode_zen',
+        messages: [],
+        inProgress: false,
+        activeTurnId: '',
+        hasMoreOlder: false,
+        turnIndexByTurnId: {},
+      })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-transient-provider')
+    await expect(state.loadMessages('parent-transient-provider')).rejects.toThrow('temporary restore failure')
+    await state.openSideConversation('parent-transient-provider', 'big-pickle', 'medium')
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.startSideConversation).toHaveBeenCalledWith(
+      'parent-transient-provider',
+      'big-pickle',
+      'medium',
+      'opencode_zen',
+    )
+  })
+
   it('forks with the parent thread runtime provider id', async () => {
     installTestWindow()
     gatewayMocks.resumeThread.mockResolvedValue({
@@ -1229,6 +1284,31 @@ describe('side conversation lifecycle', () => {
       'medium',
       'opencode_zen',
     )
+  })
+
+  it('does not reload an already restored default-provider parent', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.4',
+      modelProvider: '',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startSideConversation
+      .mockResolvedValueOnce({ threadId: 'side-default-a' })
+      .mockResolvedValueOnce({ threadId: 'side-default-b' })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-default')
+    await state.loadMessages('parent-default')
+    await state.openSideConversation('parent-default')
+    state.discardSideConversationInBackground()
+    await state.openSideConversation('parent-default')
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the panel open when explicit cleanup fails', async () => {
@@ -1325,6 +1405,43 @@ describe('side conversation lifecycle', () => {
     expect(state.selectedThreadServerRequests.value).toEqual([])
   })
 
+  it('does not let an older bridge snapshot overwrite a realtime request', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    let resolveFirstSnapshot: (rows: unknown[]) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSnapshot = resolve
+      }))
+      .mockResolvedValueOnce([{
+        id: 34,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-34', itemId: 'item-34' },
+      }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('current-thread')
+    state.startPolling()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 34,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'current-thread', turnId: 'turn-34', itemId: 'item-34' },
+      },
+    })
+    resolveFirstSnapshot([])
+    await flushMicrotasks()
+
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(2)
+    expect(state.selectedThreadServerRequests.value).toHaveLength(1)
+    expect(state.selectedThreadServerRequests.value[0]?.id).toBe(34)
+  })
+
   it('reuses explicit cleanup when navigation happens before it finishes', async () => {
     installTestWindow()
     gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-closing' })
@@ -1347,6 +1464,43 @@ describe('side conversation lifecycle', () => {
 
     expect(gatewayMocks.discardSideConversationThread).toHaveBeenCalledTimes(1)
     expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a side request that arrives during explicit cleanup', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-late-request' })
+    let resolveCleanup: (value: unknown) => void = () => {}
+    gatewayMocks.discardSideConversationThread.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveCleanup = resolve
+    }))
+
+    const state = useDesktopState()
+    state.startPolling()
+    await state.openSideConversation('parent-thread')
+    const closePromise = state.closeSideConversation()
+    await Promise.resolve()
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 33,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'side-late-request', turnId: 'turn-33', itemId: 'item-33' },
+      },
+    })
+    resolveCleanup(undefined)
+    await closePromise
+    await flushMicrotasks()
+
+    expect(gatewayMocks.replyToServerRequest).toHaveBeenCalledWith(33, {
+      error: { code: -32000, message: 'Side conversation closed' },
+    })
+    expect(state.isSideConversationOpen.value).toBe(false)
   })
 
   it('retries only unsubscribe after an explicit unsubscribe failure', async () => {
@@ -1377,6 +1531,31 @@ describe('side conversation lifecycle', () => {
       { skipInterrupt: true },
     )
     expect(state.isSideConversationOpen.value).toBe(false)
+  })
+
+  it('interrupts a new turn after an earlier unsubscribe failure', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-new-turn-after-failure' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('new-side-turn')
+    gatewayMocks.discardSideConversationThread
+      .mockRejectedValueOnce(new CodexApiError('unsubscribe failed', {
+        code: 'rpc_error',
+        method: 'thread/unsubscribe',
+      }))
+      .mockResolvedValueOnce(undefined)
+
+    const state = useDesktopState()
+    await state.openSideConversation('parent-thread')
+    await state.closeSideConversation()
+    await state.sendSideConversationMessage('new question')
+    await state.closeSideConversation()
+
+    expect(gatewayMocks.discardSideConversationThread).toHaveBeenNthCalledWith(
+      2,
+      'side-new-turn-after-failure',
+      'new-side-turn',
+      { skipInterrupt: false },
+    )
   })
 
   it('ignores late notifications from every discarded side thread', async () => {

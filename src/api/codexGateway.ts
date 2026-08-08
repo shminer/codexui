@@ -1940,7 +1940,7 @@ export async function discardSideConversationThreadInBackground(threadId: string
     interruptError = error
   }
   const actualTurnId = interruptError instanceof Error
-    ? /expected active turn id \S+ but found (\S+)/u.exec(interruptError.message)?.[1] ?? ''
+    ? /expected active turn id `?[^`\s]+`? but found `?([^`\s]+)`?/u.exec(interruptError.message)?.[1] ?? ''
     : ''
   if (actualTurnId) {
     try {

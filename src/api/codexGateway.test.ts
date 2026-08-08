@@ -188,7 +188,7 @@ describe('side conversation lifecycle', () => {
       requests.push(request)
       const isFirstInterrupt = request.method === 'turn/interrupt' && requests.length === 1
       return new Response(JSON.stringify(isFirstInterrupt
-        ? { error: 'expected active turn id stale-turn but found actual-turn' }
+        ? { error: 'expected active turn id `stale-turn` but found `actual-turn`' }
         : { result: {} }), {
         status: isFirstInterrupt ? 500 : 200,
         headers: { 'Content-Type': 'application/json' },

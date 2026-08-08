@@ -1467,6 +1467,7 @@ export function useDesktopState() {
   const threadListedByServerById = ref<Record<string, boolean>>({})
   const persistedUserMessageByThreadId = ref<Record<string, boolean>>({})
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
+  let pendingServerRequestsRevision = 0
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
   const codexRateLimit = ref<UiRateLimitSnapshot | null>(null)
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>(loadThreadTokenUsageMap())
@@ -3244,6 +3245,7 @@ export function useDesktopState() {
       ...pendingServerRequestsByThreadId.value,
       [threadId]: nextRows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso)),
     }
+    pendingServerRequestsRevision += 1
     applyThreadFlags()
   }
 
@@ -3256,6 +3258,7 @@ export function useDesktopState() {
       }
     }
     pendingServerRequestsByThreadId.value = next
+    pendingServerRequestsRevision += 1
     applyThreadFlags()
   }
 
@@ -3273,6 +3276,7 @@ export function useDesktopState() {
     }
 
     pendingServerRequestsByThreadId.value = next
+    pendingServerRequestsRevision += 1
   }
 
   function handleServerRequestNotification(notification: RpcNotification): boolean {
@@ -3943,7 +3947,13 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
-    if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) {
+    if (
+      notificationThreadId
+      && (
+        discardedSideConversationThreadIds.has(notificationThreadId)
+        || notificationThreadId === sideConversationCleanupThreadId
+      )
+    ) {
       if (notification.method === 'server/request') {
         const request = normalizeServerRequest(notification.params)
         if (request) void rejectSideConversationServerRequest(request).catch(() => {})
@@ -5191,10 +5201,21 @@ export function useDesktopState() {
     sideConversationInterruptedThreadId = ''
     isSideConversationOpening.value = true
     try {
-      if (!threadModelProviderByThreadId.value[normalizedParentThreadId]) {
-        await ensureThreadMessagesLoaded(normalizedParentThreadId, { silent: true })
+      if (
+        !threadModelProviderByThreadId.value[normalizedParentThreadId]
+        && loadedMessagesByThreadId.value[normalizedParentThreadId] !== true
+      ) {
+        const existingLoad = loadMessagePromiseByThreadId.get(normalizedParentThreadId)
+        if (existingLoad) {
+          await existingLoad
+        } else {
+          await loadMessages(normalizedParentThreadId, { silent: true, force: true })
+        }
       }
-      if (readSideConversationDiscardMode() === 'background') return
+      if (readSideConversationDiscardMode() !== 'none') {
+        resetSideConversationState()
+        return
+      }
       const started = await startSideConversationThread(
         normalizedParentThreadId,
         modelId,
@@ -5230,6 +5251,7 @@ export function useDesktopState() {
     const threadId = sideConversationThreadId.value
     const nextText = text.trim()
     if (!threadId || !nextText || isSideConversationClosing.value) return
+    if (sideConversationInterruptedThreadId === threadId) sideConversationInterruptedThreadId = ''
 
     appendOptimisticUserMessage(threadId, nextText)
     sideConversationError.value = ''
@@ -6092,19 +6114,25 @@ export function useDesktopState() {
 
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
     try {
-      const rows = await getPendingServerRequests()
-      const normalizedRequests = rows
-        .map((row) => normalizeServerRequest(row))
-        .filter((request): request is UiServerRequest => request !== null)
-      const discardedRequests = normalizedRequests.filter((request) => (
-        discardedSideConversationThreadIds.has(request.threadId)
-      ))
-      if (discardedRequests.length > 0) {
-        void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const revisionAtStart = pendingServerRequestsRevision
+        const rows = await getPendingServerRequests()
+        if (pendingServerRequestsRevision !== revisionAtStart) continue
+
+        const normalizedRequests = rows
+          .map((row) => normalizeServerRequest(row))
+          .filter((request): request is UiServerRequest => request !== null)
+        const discardedRequests = normalizedRequests.filter((request) => (
+          discardedSideConversationThreadIds.has(request.threadId)
+        ))
+        if (discardedRequests.length > 0) {
+          void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
+        }
+        replacePendingServerRequests(normalizedRequests.filter((request) => (
+          !discardedSideConversationThreadIds.has(request.threadId)
+        )))
+        return
       }
-      replacePendingServerRequests(normalizedRequests.filter((request) => (
-        !discardedSideConversationThreadIds.has(request.threadId)
-      )))
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
     }
