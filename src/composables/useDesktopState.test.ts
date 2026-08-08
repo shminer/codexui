@@ -13,6 +13,8 @@ import type { WorkspaceRootsState } from '../api/codexGateway'
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
+  discardSideConversationThread: vi.fn(),
+  discardSideConversationThreadInBackground: vi.fn(),
   forkThread: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getAvailableCollaborationModes: vi.fn(),
@@ -37,6 +39,7 @@ const gatewayMocks = vi.hoisted(() => ({
   setThreadQueueState: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
   startThread: vi.fn(),
+  startSideConversation: vi.fn(),
   startThreadTurn: vi.fn(),
   subscribeCodexNotifications: vi.fn(),
 }))
@@ -117,6 +120,9 @@ async function setupTurnLifecycleNotificationState(selectedThreadId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.discardSideConversationThread.mockResolvedValue(undefined)
+  gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
+  gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-thread-default' })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
@@ -1133,6 +1139,104 @@ describe('live error overlay', () => {
     })
 
     expect(state.selectedLiveOverlay.value).toBe(null)
+  })
+})
+
+describe('side conversation lifecycle', () => {
+  it('forks with the parent thread runtime provider id', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'big-pickle',
+      modelProvider: 'opencode_zen',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-zen' })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-zen')
+    await state.loadMessages('parent-zen')
+    await state.openSideConversation('parent-zen', 'big-pickle', 'medium')
+
+    expect(gatewayMocks.startSideConversation).toHaveBeenCalledWith(
+      'parent-zen',
+      'big-pickle',
+      'medium',
+      'opencode_zen',
+    )
+  })
+
+  it('keeps the panel open when explicit cleanup fails', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-explicit' })
+    gatewayMocks.discardSideConversationThread.mockRejectedValue(new Error('cleanup failed'))
+
+    const state = useDesktopState()
+    await state.openSideConversation('parent-thread')
+    await state.closeSideConversation()
+
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.sideConversationThreadId.value).toBe('side-explicit')
+    expect(state.sideConversationError.value).toBe('cleanup failed')
+  })
+
+  it('clears navigation-discarded state immediately and cleans up in the background', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-background' })
+
+    const state = useDesktopState()
+    await state.openSideConversation('parent-thread')
+    state.discardSideConversationInBackground()
+
+    expect(state.isSideConversationOpen.value).toBe(false)
+    expect(state.sideConversationThreadId.value).toBe('')
+    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledWith(
+      'side-background',
+      '',
+    )
+  })
+
+  it('ignores late notifications from every discarded side thread', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.startSideConversation
+      .mockResolvedValueOnce({ threadId: 'side-a' })
+      .mockResolvedValueOnce({ threadId: 'side-b' })
+      .mockResolvedValueOnce({ threadId: 'side-current' })
+
+    const state = useDesktopState()
+    state.startPolling()
+    await state.openSideConversation('parent-thread')
+    state.discardSideConversationInBackground()
+    await state.openSideConversation('parent-thread')
+    state.discardSideConversationInBackground()
+    await state.openSideConversation('parent-thread')
+
+    notificationHandler({
+      method: 'error',
+      params: { threadId: 'side-a', message: 'late side error' },
+    })
+    notificationHandler({
+      method: 'server/request',
+      params: {
+        id: 41,
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'side-b', turnId: 'turn-b', itemId: 'item-b' },
+      },
+    })
+    state.primeSelectedThread('side-b')
+
+    expect(state.error.value).toBe('')
+    expect(state.sideConversationError.value).toBe('')
+    expect(state.selectedThreadServerRequests.value).toEqual([])
   })
 })
 

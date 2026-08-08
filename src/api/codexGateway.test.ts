@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { discardSideConversationThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startSideConversation, startThreadTurn } from './codexGateway'
+import { discardSideConversationThread, discardSideConversationThreadInBackground, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startSideConversation, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -89,7 +89,7 @@ describe('side conversation lifecycle', () => {
       })
     }))
 
-    await expect(startSideConversation('parent-thread-1', 'gpt-5.4', 'high')).resolves.toEqual({
+    await expect(startSideConversation('parent-thread-1', 'gpt-5.4', 'high', 'opencode_zen')).resolves.toEqual({
       threadId: 'side-thread-1',
     })
     await discardSideConversationThread('side-thread-1', 'turn-1')
@@ -104,7 +104,7 @@ describe('side conversation lifecycle', () => {
     expect(requests[1].params).toMatchObject({
       threadId: 'parent-thread-1',
       model: 'gpt-5.4',
-      modelProvider: 'codex',
+      modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
       ephemeral: true,
       excludeTurns: true,
@@ -119,6 +119,66 @@ describe('side conversation lifecycle', () => {
         content: [{ type: 'input_text' }],
       }],
     })
+  })
+
+  it('sends the startup interrupt before unsubscribing an idle side thread', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
+      return new Response(JSON.stringify({ result: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThread('side-thread-idle')
+
+    expect(requests).toEqual([
+      {
+        method: 'turn/interrupt',
+        params: { threadId: 'side-thread-idle', turnId: '' },
+      },
+      {
+        method: 'thread/unsubscribe',
+        params: { threadId: 'side-thread-idle' },
+      },
+    ])
+  })
+
+  it('keeps explicit cleanup visible when interrupt fails', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      return new Response(JSON.stringify({ error: 'interrupt failed' }), {
+        status: request.method === 'turn/interrupt' ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(discardSideConversationThread('side-thread-failed', 'turn-1')).rejects.toThrow('interrupt failed')
+    expect(requests.map((request) => request.method)).toEqual(['turn/interrupt'])
+  })
+
+  it('still unsubscribes during background cleanup when interrupt fails', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      return new Response(JSON.stringify(request.method === 'turn/interrupt'
+        ? { error: 'interrupt failed' }
+        : { result: {} }), {
+        status: request.method === 'turn/interrupt' ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThreadInBackground('side-thread-background', 'turn-2')
+
+    expect(requests.map((request) => request.method)).toEqual([
+      'turn/interrupt',
+      'thread/unsubscribe',
+    ])
   })
 })
 

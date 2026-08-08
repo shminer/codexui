@@ -1056,6 +1056,7 @@
     :is-opening="isSideConversationOpening"
     :is-closing="isSideConversationClosing"
     :is-turn-in-progress="isSideConversationInProgress"
+    :send-with-enter="sendWithEnter"
     @close="closeSideConversation"
     @send="sendSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
@@ -1370,6 +1371,7 @@ const {
   sendSideConversationMessage,
   interruptSideConversationTurn,
   closeSideConversation,
+  discardSideConversationInBackground,
   selectedThreadQueuedMessages,
   removeQueuedMessage,
   reorderQueuedMessage,
@@ -2091,7 +2093,7 @@ onUnmounted(() => {
     threadSearchTimer = null
   }
   clearTerminalKeyboardFocusFallbackTimer()
-  void closeSideConversation()
+  discardSideConversationInBackground()
   stopPolling()
 })
 
@@ -4613,7 +4615,7 @@ watch(
   () => [selectedThreadId.value, sideConversationParentThreadId.value] as const,
   ([threadId, parentThreadId]) => {
     if (parentThreadId && parentThreadId !== threadId) {
-      void closeSideConversation()
+      discardSideConversationInBackground()
     }
   },
 )

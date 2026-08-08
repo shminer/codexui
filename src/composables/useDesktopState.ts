@@ -3,6 +3,7 @@ import {
 
   archiveThread,
   discardSideConversationThread,
+  discardSideConversationThreadInBackground,
   forkThread,
   getAvailableCollaborationModes,
   getAccountRateLimits,
@@ -1446,6 +1447,7 @@ export function useDesktopState() {
   const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
   const selectedSpeedMode = ref<SpeedMode>('standard')
   const activeProviderId = ref('')
+  const activeRuntimeProviderId = ref('')
   const codexCliMissingError = ref('')
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
   const unreadCutoffIso = ref(loadUnreadCutoffIso())
@@ -1476,8 +1478,12 @@ export function useDesktopState() {
   const isSideConversationOpening = ref(false)
   const isSideConversationClosing = ref(false)
   let sideConversationTurnStartPromise: Promise<string> | null = null
-  let sideConversationCloseRequested = false
-  let discardedSideConversationThreadId = ''
+  let sideConversationDiscardMode: 'none' | 'explicit' | 'background' = 'none'
+  const discardedSideConversationThreadIds = new Set<string>()
+
+  function readSideConversationDiscardMode(): typeof sideConversationDiscardMode {
+    return sideConversationDiscardMode
+  }
 
   const threadTitleById = ref<Record<string, string>>({})
 
@@ -1688,6 +1694,12 @@ export function useDesktopState() {
     return normalizeProviderContextId(threadModelProviderByThreadId.value[normalizedThreadId] ?? activeProviderId.value)
   }
 
+  function readRuntimeProviderIdForThread(threadId: string): string {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return activeRuntimeProviderId.value
+    return threadModelProviderByThreadId.value[normalizedThreadId] ?? activeRuntimeProviderId.value
+  }
+
   function ensureAvailableModelIds(...modelIds: string[]): void {
     const nextModelIds = [...availableModelIds.value]
     for (const modelId of modelIds) {
@@ -1783,11 +1795,11 @@ export function useDesktopState() {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
 
-    const normalizedProviderId = normalizeProviderContextId(providerId)
-    if (normalizedProviderId) {
+    const runtimeProviderId = providerId.trim()
+    if (runtimeProviderId) {
       threadModelProviderByThreadId.value = {
         ...threadModelProviderByThreadId.value,
-        [normalizedThreadId]: normalizedProviderId,
+        [normalizedThreadId]: runtimeProviderId,
       }
     } else if (threadModelProviderByThreadId.value[normalizedThreadId]) {
       threadModelProviderByThreadId.value = omitKey(threadModelProviderByThreadId.value, normalizedThreadId)
@@ -2031,6 +2043,7 @@ export function useDesktopState() {
     try {
       const currentConfig = await getCurrentModelConfig()
       const normalizedConfiguredModelId = currentConfig.model.trim()
+      activeRuntimeProviderId.value = currentConfig.providerId.trim()
       const normalizedProviderId = normalizeProviderContextId(currentConfig.providerId)
       activeProviderId.value = normalizedProviderId
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
@@ -2998,6 +3011,16 @@ export function useDesktopState() {
     const snakeConversationId = readString(params.conversation_id)
     if (snakeConversationId) return snakeConversationId
 
+    const requestParams = asRecord(params.params)
+    const requestThreadId = readString(requestParams?.threadId)
+    if (requestThreadId) return requestThreadId
+    const requestSnakeThreadId = readString(requestParams?.thread_id)
+    if (requestSnakeThreadId) return requestSnakeThreadId
+    const requestConversationId = readString(requestParams?.conversationId)
+    if (requestConversationId) return requestConversationId
+    const requestSnakeConversationId = readString(requestParams?.conversation_id)
+    if (requestSnakeConversationId) return requestSnakeConversationId
+
     const thread = asRecord(params.thread)
     const nestedThreadId = readString(thread?.id)
     if (nestedThreadId) return nestedThreadId
@@ -3917,7 +3940,7 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
-    if (notificationThreadId && notificationThreadId === discardedSideConversationThreadId) return
+    if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) return
     if (handleServerRequestNotification(notification)) {
       return
     }
@@ -4221,7 +4244,7 @@ export function useDesktopState() {
     const notificationThread = asRecord(asRecord(notification.params)?.thread)
     if (
       notificationThread?.ephemeral === true
-      || (threadId && (threadId === sideConversationThreadId.value || threadId === discardedSideConversationThreadId))
+      || (threadId && (threadId === sideConversationThreadId.value || discardedSideConversationThreadIds.has(threadId)))
     ) return
     const parentThreadId = selectedThreadId.value
     const subagentParentThreadId = threadId ? findSubagentParentThreadId(threadId) : ''
@@ -5127,13 +5150,13 @@ export function useDesktopState() {
 
   function resetSideConversationState(): void {
     const threadId = sideConversationThreadId.value
-    if (threadId) discardedSideConversationThreadId = threadId
+    if (threadId) discardedSideConversationThreadIds.add(threadId)
     clearSideConversationThreadState(threadId)
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
     sideConversationError.value = ''
     sideConversationTurnStartPromise = null
-    sideConversationCloseRequested = false
+    sideConversationDiscardMode = 'none'
   }
 
   async function openSideConversation(
@@ -5147,13 +5170,24 @@ export function useDesktopState() {
 
     sideConversationParentThreadId.value = normalizedParentThreadId
     sideConversationError.value = ''
-    sideConversationCloseRequested = false
+    sideConversationDiscardMode = 'none'
     isSideConversationOpening.value = true
     try {
-      const started = await startSideConversationThread(normalizedParentThreadId, modelId, effort)
+      const started = await startSideConversationThread(
+        normalizedParentThreadId,
+        modelId,
+        effort,
+        readRuntimeProviderIdForThread(normalizedParentThreadId),
+      )
+      if (readSideConversationDiscardMode() === 'background') {
+        discardedSideConversationThreadIds.add(started.threadId)
+        clearSideConversationThreadState(started.threadId)
+        void discardSideConversationThreadInBackground(started.threadId)
+        return
+      }
       sideConversationThreadId.value = started.threadId
     } catch (unknownError) {
-      if (sideConversationCloseRequested) {
+      if (readSideConversationDiscardMode() !== 'none') {
         resetSideConversationState()
       } else {
         sideConversationError.value = unknownError instanceof Error
@@ -5162,8 +5196,10 @@ export function useDesktopState() {
       }
     } finally {
       isSideConversationOpening.value = false
-      if (sideConversationCloseRequested && sideConversationThreadId.value) {
+      if (readSideConversationDiscardMode() === 'explicit' && sideConversationThreadId.value) {
         await closeSideConversation()
+      } else if (readSideConversationDiscardMode() === 'background') {
+        resetSideConversationState()
       }
     }
   }
@@ -5195,11 +5231,13 @@ export function useDesktopState() {
         }
       }
     } catch (unknownError) {
-      setThreadInProgress(threadId, false)
-      setTurnActivityForThread(threadId, null)
-      sideConversationError.value = unknownError instanceof Error
-        ? unknownError.message
-        : 'Failed to send side conversation message'
+      if (sideConversationThreadId.value === threadId) {
+        setThreadInProgress(threadId, false)
+        setTurnActivityForThread(threadId, null)
+        sideConversationError.value = unknownError instanceof Error
+          ? unknownError.message
+          : 'Failed to send side conversation message'
+      }
     } finally {
       if (sideConversationTurnStartPromise === turnStartPromise) {
         sideConversationTurnStartPromise = null
@@ -5234,7 +5272,7 @@ export function useDesktopState() {
   async function closeSideConversation(): Promise<void> {
     if (!isSideConversationOpen.value || isSideConversationClosing.value) return
     if (isSideConversationOpening.value) {
-      sideConversationCloseRequested = true
+      sideConversationDiscardMode = 'explicit'
       return
     }
 
@@ -5245,6 +5283,7 @@ export function useDesktopState() {
     }
 
     isSideConversationClosing.value = true
+    sideConversationDiscardMode = 'explicit'
     sideConversationError.value = ''
     try {
       if (sideConversationTurnStartPromise) {
@@ -5260,12 +5299,45 @@ export function useDesktopState() {
       await discardSideConversationThread(threadId, activeTurnId)
       resetSideConversationState()
     } catch (unknownError) {
-      sideConversationError.value = unknownError instanceof Error
-        ? unknownError.message
-        : 'Failed to close side conversation'
+      sideConversationDiscardMode = 'none'
+      if (sideConversationThreadId.value === threadId) {
+        sideConversationError.value = unknownError instanceof Error
+          ? unknownError.message
+          : 'Failed to close side conversation'
+      }
     } finally {
       isSideConversationClosing.value = false
     }
+  }
+
+  function discardSideConversationInBackground(): void {
+    if (!isSideConversationOpen.value && !isSideConversationOpening.value) return
+
+    sideConversationDiscardMode = 'background'
+    const threadId = sideConversationThreadId.value
+    if (!threadId) {
+      sideConversationParentThreadId.value = ''
+      sideConversationError.value = ''
+      return
+    }
+
+    const turnStartPromise = sideConversationTurnStartPromise
+    let turnId = isSideConversationInProgress.value
+      ? activeTurnIdByThreadId.value[threadId]
+      : ''
+    discardedSideConversationThreadIds.add(threadId)
+    resetSideConversationState()
+
+    void (async () => {
+      if (turnStartPromise) {
+        try {
+          turnId = (await turnStartPromise) || turnId
+        } catch {
+          // A failed turn start has no running turn to interrupt.
+        }
+      }
+      await discardSideConversationThreadInBackground(threadId, turnId)
+    })()
   }
 
   async function sendMessageToSelectedThread(
@@ -5398,7 +5470,7 @@ export function useDesktopState() {
         const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined)
         threadId = startedThread.threadId
         setThreadModelId(threadId, startedThread.model)
-        setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
+        setThreadModelProviderId(threadId, startedThread.modelProvider || activeRuntimeProviderId.value)
         setSelectedCollaborationModeForThread(threadId, selectedMode)
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -5406,7 +5478,7 @@ export function useDesktopState() {
           const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID)
           threadId = fallbackThread.threadId
           setThreadModelId(threadId, fallbackThread.model)
-          setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeProviderId.value)
+          setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeRuntimeProviderId.value)
           setSelectedCollaborationModeForThread(threadId, selectedMode)
         } else {
           throw unknownError
@@ -6166,6 +6238,7 @@ export function useDesktopState() {
     sendSideConversationMessage,
     interruptSideConversationTurn,
     closeSideConversation,
+    discardSideConversationInBackground,
     selectedThreadQueuedMessages,
     removeQueuedMessage,
     reorderQueuedMessage,

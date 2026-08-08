@@ -108,6 +108,7 @@ const props = defineProps<{
   isOpening: boolean
   isClosing: boolean
   isTurnInProgress: boolean
+  sendWithEnter?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -137,7 +138,11 @@ function submit(): void {
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  if (event.isComposing) return
+  const shouldSend = props.sendWithEnter !== false
+    ? event.key === 'Enter' && !event.shiftKey
+    : event.key === 'Enter' && (event.metaKey || event.ctrlKey)
+  if (!shouldSend) return
   event.preventDefault()
   submit()
 }

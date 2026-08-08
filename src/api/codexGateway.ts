@@ -1866,6 +1866,7 @@ export async function startSideConversation(
   parentThreadId: string,
   model?: string,
   effort?: ReasoningEffort,
+  modelProvider?: string,
 ): Promise<StartedSideConversation> {
   const normalizedParentThreadId = parentThreadId.trim()
   if (!normalizedParentThreadId) {
@@ -1876,6 +1877,7 @@ export async function startSideConversation(
   try {
     const currentConfig = await getCurrentModelConfig()
     const selectedModel = model?.trim() || currentConfig.model
+    const selectedProvider = modelProvider?.trim() || currentConfig.providerId
     const developerInstructions = [
       currentConfig.developerInstructions.trim(),
       SIDE_CONVERSATION_DEVELOPER_INSTRUCTIONS,
@@ -1883,7 +1885,7 @@ export async function startSideConversation(
     const payload = await callRpc<ThreadForkResponse>('thread/fork', {
       threadId: normalizedParentThreadId,
       ...(selectedModel ? { model: selectedModel } : {}),
-      ...(currentConfig.providerId ? { modelProvider: currentConfig.providerId } : {}),
+      ...(selectedProvider ? { modelProvider: selectedProvider } : {}),
       ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
       developerInstructions,
       ephemeral: true,
@@ -1906,11 +1908,7 @@ export async function startSideConversation(
     return { threadId: childThreadId }
   } catch (error) {
     if (childThreadId) {
-      try {
-        await callRpc('thread/unsubscribe', { threadId: childThreadId })
-      } catch {
-        // Preserve the setup error; ephemeral threads are never materialized on disk.
-      }
+      await discardSideConversationThreadInBackground(childThreadId)
     }
     throw normalizeCodexApiError(error, 'Failed to start side conversation', 'thread/fork')
   }
@@ -1921,14 +1919,24 @@ export async function discardSideConversationThread(threadId: string, turnId?: s
   if (!normalizedThreadId) return
 
   const normalizedTurnId = turnId?.trim() || ''
-  if (normalizedTurnId) {
-    try {
-      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
-    } catch {
-      // The turn may have completed between the local state read and this request.
-    }
-  }
+  await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
   await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
+}
+
+export async function discardSideConversationThreadInBackground(threadId: string, turnId?: string): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
+
+  try {
+    await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: turnId?.trim() || '' })
+  } catch {
+    // Background cleanup must still release the subscription after an interrupt race.
+  }
+  try {
+    await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
+  } catch {
+    // Ephemeral background cleanup has no visible state to restore.
+  }
 }
 
 export type FileAttachmentParam = { label: string; path: string; fsPath: string }
