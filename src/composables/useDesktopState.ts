@@ -1479,6 +1479,9 @@ export function useDesktopState() {
   const isSideConversationClosing = ref(false)
   let sideConversationTurnStartPromise: Promise<string> | null = null
   let sideConversationDiscardMode: 'none' | 'explicit' | 'background' = 'none'
+  let sideConversationCleanupPromise: Promise<void> | null = null
+  let sideConversationCleanupThreadId = ''
+  let sideConversationInterruptedThreadId = ''
   const discardedSideConversationThreadIds = new Set<string>()
 
   function readSideConversationDiscardMode(): typeof sideConversationDiscardMode {
@@ -3940,7 +3943,13 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
-    if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) return
+    if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) {
+      if (notification.method === 'server/request') {
+        const request = normalizeServerRequest(notification.params)
+        if (request) void rejectSideConversationServerRequest(request).catch(() => {})
+      }
+      return
+    }
     if (handleServerRequestNotification(notification)) {
       return
     }
@@ -5148,9 +5157,17 @@ export function useDesktopState() {
     clearDelayedTurnSync(threadId)
   }
 
+  async function rejectSideConversationServerRequest(request: UiServerRequest): Promise<void> {
+    await replyToServerRequest(request.id, {
+      error: { code: -32000, message: 'Side conversation closed' },
+    })
+    removePendingServerRequestById(request.id)
+  }
+
   function resetSideConversationState(): void {
     const threadId = sideConversationThreadId.value
     if (threadId) discardedSideConversationThreadIds.add(threadId)
+    if (sideConversationInterruptedThreadId === threadId) sideConversationInterruptedThreadId = ''
     clearSideConversationThreadState(threadId)
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
@@ -5171,8 +5188,13 @@ export function useDesktopState() {
     sideConversationParentThreadId.value = normalizedParentThreadId
     sideConversationError.value = ''
     sideConversationDiscardMode = 'none'
+    sideConversationInterruptedThreadId = ''
     isSideConversationOpening.value = true
     try {
+      if (!threadModelProviderByThreadId.value[normalizedParentThreadId]) {
+        await ensureThreadMessagesLoaded(normalizedParentThreadId, { silent: true })
+      }
+      if (readSideConversationDiscardMode() === 'background') return
       const started = await startSideConversationThread(
         normalizedParentThreadId,
         modelId,
@@ -5285,7 +5307,9 @@ export function useDesktopState() {
     isSideConversationClosing.value = true
     sideConversationDiscardMode = 'explicit'
     sideConversationError.value = ''
-    try {
+    const pendingRequests = [...(pendingServerRequestsByThreadId.value[threadId] ?? [])]
+    const cleanupPromise = (async () => {
+      await Promise.all(pendingRequests.map(rejectSideConversationServerRequest))
       if (sideConversationTurnStartPromise) {
         try {
           await sideConversationTurnStartPromise
@@ -5296,16 +5320,30 @@ export function useDesktopState() {
       const activeTurnId = isSideConversationInProgress.value
         ? activeTurnIdByThreadId.value[threadId]
         : undefined
-      await discardSideConversationThread(threadId, activeTurnId)
+      await discardSideConversationThread(threadId, activeTurnId, {
+        skipInterrupt: sideConversationInterruptedThreadId === threadId,
+      })
+    })()
+    sideConversationCleanupPromise = cleanupPromise
+    sideConversationCleanupThreadId = threadId
+    try {
+      await cleanupPromise
       resetSideConversationState()
     } catch (unknownError) {
       sideConversationDiscardMode = 'none'
+      if (unknownError instanceof CodexApiError && unknownError.method === 'thread/unsubscribe') {
+        sideConversationInterruptedThreadId = threadId
+      }
       if (sideConversationThreadId.value === threadId) {
         sideConversationError.value = unknownError instanceof Error
           ? unknownError.message
           : 'Failed to close side conversation'
       }
     } finally {
+      if (sideConversationCleanupPromise === cleanupPromise) {
+        sideConversationCleanupPromise = null
+        sideConversationCleanupThreadId = ''
+      }
       isSideConversationClosing.value = false
     }
   }
@@ -5325,10 +5363,23 @@ export function useDesktopState() {
     let turnId = isSideConversationInProgress.value
       ? activeTurnIdByThreadId.value[threadId]
       : ''
+    const pendingRequests = [...(pendingServerRequestsByThreadId.value[threadId] ?? [])]
+    const cleanupPromise = sideConversationCleanupThreadId === threadId
+      ? sideConversationCleanupPromise
+      : null
     discardedSideConversationThreadIds.add(threadId)
     resetSideConversationState()
 
+    if (cleanupPromise) {
+      void cleanupPromise.catch(async () => {
+        await Promise.allSettled(pendingRequests.map(rejectSideConversationServerRequest))
+        await discardSideConversationThreadInBackground(threadId, turnId)
+      })
+      return
+    }
+
     void (async () => {
+      await Promise.allSettled(pendingRequests.map(rejectSideConversationServerRequest))
       if (turnStartPromise) {
         try {
           turnId = (await turnStartPromise) || turnId
@@ -6045,7 +6096,15 @@ export function useDesktopState() {
       const normalizedRequests = rows
         .map((row) => normalizeServerRequest(row))
         .filter((request): request is UiServerRequest => request !== null)
-      replacePendingServerRequests(normalizedRequests)
+      const discardedRequests = normalizedRequests.filter((request) => (
+        discardedSideConversationThreadIds.has(request.threadId)
+      ))
+      if (discardedRequests.length > 0) {
+        void Promise.allSettled(discardedRequests.map(rejectSideConversationServerRequest))
+      }
+      replacePendingServerRequests(normalizedRequests.filter((request) => (
+        !discardedSideConversationThreadIds.has(request.threadId)
+      )))
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
     }

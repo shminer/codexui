@@ -7,9 +7,9 @@ describe('ThreadSideConversation wiring', () => {
     const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('sendWithEnter?: boolean')
-    expect(source).toContain('props.sendWithEnter !== false')
-    expect(source).toContain("event.key === 'Enter' && (event.metaKey || event.ctrlKey)")
+    expect(source).toContain('@keydown="onInputKeydown"')
+    expect(source).toContain('shouldSubmitComposer(event, props.sendWithEnter)')
     expect(appSource).toContain(':send-with-enter="sendWithEnter"')
-    expect(appSource).toContain('discardSideConversationInBackground()')
+    expect(appSource).toMatch(/watch\(\s*\(\) => \[selectedThreadId\.value, sideConversationParentThreadId\.value\][\s\S]*?discardSideConversationInBackground\(\)[\s\S]*?\n\s*\},\s*\n\)/u)
   })
 })

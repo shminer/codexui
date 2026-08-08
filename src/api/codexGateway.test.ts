@@ -180,6 +180,56 @@ describe('side conversation lifecycle', () => {
       'thread/unsubscribe',
     ])
   })
+
+  it('retries a background interrupt with the active turn id from a mismatch', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      const isFirstInterrupt = request.method === 'turn/interrupt' && requests.length === 1
+      return new Response(JSON.stringify(isFirstInterrupt
+        ? { error: 'expected active turn id stale-turn but found actual-turn' }
+        : { result: {} }), {
+        status: isFirstInterrupt ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThreadInBackground('side-thread-race', 'stale-turn')
+
+    expect(requests).toEqual([
+      {
+        method: 'turn/interrupt',
+        params: { threadId: 'side-thread-race', turnId: 'stale-turn' },
+      },
+      {
+        method: 'turn/interrupt',
+        params: { threadId: 'side-thread-race', turnId: 'actual-turn' },
+      },
+      {
+        method: 'thread/unsubscribe',
+        params: { threadId: 'side-thread-race' },
+      },
+    ])
+  })
+
+  it('can retry unsubscribe without interrupting the same turn again', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
+      return new Response(JSON.stringify({ result: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThread('side-thread-retry', 'completed-turn', { skipInterrupt: true })
+
+    expect(requests).toEqual([{
+      method: 'thread/unsubscribe',
+      params: { threadId: 'side-thread-retry' },
+    }])
+  })
 })
 
 describe('listDirectoryComposioConnectors', () => {

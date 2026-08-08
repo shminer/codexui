@@ -20,7 +20,7 @@ The composer voice-input control is replaced by an ephemeral side-conversation b
 | 3 | Inspect RPC requests made while opening. | The app sends `config/read`, an ephemeral `thread/fork` for the current parent thread, and `thread/inject_items`. The fork includes the parent thread's original runtime provider ID and `excludeTurns: true`; the injected item is the hidden side boundary. |
 | 4 | Send a side question and wait for the response. | The user message, live activity, and final response render inside the floating window. The main thread transcript and composer draft remain unchanged. Only one `turn/start` is sent for the side question. |
 | 5 | Start a normal main-thread turn, then open the side conversation while that turn is still running. | The side window opens and can exchange messages while the main turn continues independently. |
-| 6 | Disable `Send with Enter`, type a question, press Enter, then press Command+Enter or Ctrl+Enter. Re-enable the setting and repeat with Enter and Shift+Enter. | The side composer follows the same global shortcut as the main composer: plain Enter inserts a line when disabled, the platform modifier sends, plain Enter sends when enabled, and Shift+Enter inserts a line. |
+| 6 | Disable `Send with Enter`, type a question, press Enter, then press Command+Enter or Ctrl+Enter. Re-enable the setting and repeat with Enter and Shift+Enter, including while an IME candidate is active. | The side composer follows the same global shortcut as the main composer: plain Enter inserts a line when disabled, the platform modifier sends, plain Enter sends when enabled, Shift+Enter inserts a line, and IME confirmation never submits. |
 | 7 | Switch between light and dark themes. | The panel, header, input, buttons, error surface, and message area remain readable with no light surface left on the dark page. |
 
 ## Mobile Bottom Sheet
@@ -39,10 +39,12 @@ The composer voice-input control is replaced by an ephemeral side-conversation b
 | 1 | While a side response is running, click the close button. | The app sends `turn/interrupt` for the active side turn, followed by `thread/unsubscribe`; the panel closes after cleanup. |
 | 2 | Open another side conversation, wait for an idle response, and close it. | The app sends the startup `turn/interrupt` with an empty `turnId`, followed by `thread/unsubscribe`. |
 | 3 | Make `turn/interrupt` or `thread/unsubscribe` fail during an explicit close. | The side panel remains open and shows the cleanup error so the close can be retried. |
-| 4 | Inspect the thread list, then reload the page. | No successfully discarded side-conversation thread appears in the thread list before or after reload, and no side messages return. |
-| 5 | Open a side conversation and navigate to another main thread or Home. | The side panel closes immediately; interrupt and unsubscribe continue as best-effort background cleanup instead of following the new route. |
-| 6 | Close two side conversations, then deliver a late error or approval request for the first one. | The old notification does not appear in the current conversation, global error surface, or pending-request UI. |
-| 7 | Reopen a side conversation on the original parent. | A new empty side window opens; the prior side transcript and draft are absent. |
+| 4 | Fail `thread/unsubscribe` after a successful interrupt, then retry the explicit close. | The retry sends only `thread/unsubscribe`; it does not interrupt the completed turn again. |
+| 5 | Let the side turn stop on an approval or user-input request, then close or navigate away. | The app replies to each side request with a cancellation error before cleanup; no hidden bridge request remains to block account actions. |
+| 6 | Inspect the thread list, then reload the page. | No successfully discarded side-conversation thread appears in the thread list before or after reload, and no side messages return. |
+| 7 | Open a side conversation and navigate to another main thread or Home. | The side panel closes immediately; interrupt and unsubscribe continue as best-effort background cleanup instead of following the new route. An in-flight explicit cleanup is reused instead of duplicated. |
+| 8 | Close two side conversations, then deliver a late error or approval request for the first one. | The old notification does not appear in the current conversation, global error surface, or pending-request UI; a late request receives a cancellation reply. |
+| 9 | Reopen a side conversation on the original parent. | A new empty side window opens; the prior side transcript and draft are absent. |
 
 ## Rollback / Cleanup
 

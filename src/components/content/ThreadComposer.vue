@@ -393,6 +393,7 @@ import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
+import { shouldSubmitComposer } from './composerSubmitShortcut'
 
 type SkillSourceBadge = {
   badge: string
@@ -1441,6 +1442,7 @@ function onInputChange(): void {
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
+  if (event.isComposing) return
   if (isFileMentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -1475,10 +1477,7 @@ function onInputKeydown(event: KeyboardEvent): void {
     }
   }
 
-  const shouldSend = props.sendWithEnter !== false
-    ? event.key === 'Enter' && !event.shiftKey
-    : event.key === 'Enter' && (event.metaKey || event.ctrlKey)
-  if (shouldSend) {
+  if (shouldSubmitComposer(event, props.sendWithEnter)) {
     event.preventDefault()
     onSubmit(props.isTurnInProgress ? activeInProgressMode.value : 'steer')
     return

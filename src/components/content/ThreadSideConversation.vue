@@ -97,6 +97,7 @@ import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import ThreadConversation from './ThreadConversation.vue'
 import ThreadPendingRequestPanel from './ThreadPendingRequestPanel.vue'
+import { shouldSubmitComposer } from './composerSubmitShortcut'
 
 const props = defineProps<{
   threadId: string
@@ -138,11 +139,7 @@ function submit(): void {
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
-  if (event.isComposing) return
-  const shouldSend = props.sendWithEnter !== false
-    ? event.key === 'Enter' && !event.shiftKey
-    : event.key === 'Enter' && (event.metaKey || event.ctrlKey)
-  if (!shouldSend) return
+  if (!shouldSubmitComposer(event, props.sendWithEnter)) return
   event.preventDefault()
   submit()
 }

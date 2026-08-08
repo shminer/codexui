@@ -1914,12 +1914,18 @@ export async function startSideConversation(
   }
 }
 
-export async function discardSideConversationThread(threadId: string, turnId?: string): Promise<void> {
+export async function discardSideConversationThread(
+  threadId: string,
+  turnId?: string,
+  options: { skipInterrupt?: boolean } = {},
+): Promise<void> {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
   const normalizedTurnId = turnId?.trim() || ''
-  await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+  if (options.skipInterrupt !== true) {
+    await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+  }
   await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
 }
 
@@ -1927,10 +1933,21 @@ export async function discardSideConversationThreadInBackground(threadId: string
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
+  let interruptError: unknown = null
   try {
     await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: turnId?.trim() || '' })
-  } catch {
-    // Background cleanup must still release the subscription after an interrupt race.
+  } catch (error) {
+    interruptError = error
+  }
+  const actualTurnId = interruptError instanceof Error
+    ? /expected active turn id \S+ but found (\S+)/u.exec(interruptError.message)?.[1] ?? ''
+    : ''
+  if (actualTurnId) {
+    try {
+      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: actualTurnId })
+    } catch {
+      // Background cleanup continues to unsubscribe after the official mismatch retry.
+    }
   }
   try {
     await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
