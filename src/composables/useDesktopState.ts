@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import {
 
   archiveThread,
+  discardSideConversationThread,
   forkThread,
   getAvailableCollaborationModes,
   getAccountRateLimits,
@@ -30,6 +31,7 @@ import {
   resumeThread,
 
   startThread,
+  startSideConversation as startSideConversationThread,
   subscribeCodexNotifications,
   startThreadTurn,
   type RpcNotification,
@@ -1468,6 +1470,14 @@ export function useDesktopState() {
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>(loadThreadTokenUsageMap())
   const terminalOpenByThreadId = ref<Record<string, boolean>>(loadThreadTerminalOpenMap())
   const threadModelProviderByThreadId = ref<Record<string, string>>({})
+  const sideConversationParentThreadId = ref('')
+  const sideConversationThreadId = ref('')
+  const sideConversationError = ref('')
+  const isSideConversationOpening = ref(false)
+  const isSideConversationClosing = ref(false)
+  let sideConversationTurnStartPromise: Promise<string> | null = null
+  let sideConversationCloseRequested = false
+  let discardedSideConversationThreadId = ''
 
   const threadTitleById = ref<Record<string, string>>({})
 
@@ -1614,8 +1624,7 @@ export function useDesktopState() {
     if (!threadId) return null
     return threadTokenUsageByThreadId.value[threadId] ?? null
   })
-  const messages = computed<UiMessage[]>(() => {
-    const threadId = selectedThreadId.value
+  function getMessagesForThread(threadId: string): UiMessage[] {
     if (!threadId) return []
 
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
@@ -1628,6 +1637,19 @@ export function useDesktopState() {
     const summary = turnSummaryByThreadId.value[threadId]
     if (!summary) return combined
     return insertTurnSummaryMessage(combined, summary)
+  }
+  const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
+  const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
+  const sideConversationMessages = computed<UiMessage[]>(() => getMessagesForThread(sideConversationThreadId.value))
+  const sideConversationLiveOverlay = computed<UiLiveOverlay | null>(() => (
+    getLiveOverlayForThread(sideConversationThreadId.value)
+  ))
+  const isSideConversationInProgress = computed(() => (
+    inProgressById.value[sideConversationThreadId.value] === true
+  ))
+  const sideConversationServerRequests = computed<UiServerRequest[]>(() => {
+    const threadId = sideConversationThreadId.value
+    return threadId ? pendingServerRequestsByThreadId.value[threadId] ?? [] : []
   })
   const hasMoreOlderMessages = computed(() => {
     const threadId = selectedThreadId.value
@@ -3894,6 +3916,8 @@ export function useDesktopState() {
   }
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
+    const notificationThreadId = extractThreadIdFromNotification(notification)
+    if (notificationThreadId && notificationThreadId === discardedSideConversationThreadId) return
     if (handleServerRequestNotification(notification)) {
       return
     }
@@ -3906,7 +3930,7 @@ export function useDesktopState() {
       const params = asRecord(notification.params)
       const threadId = readString(params?.threadId)
       const threadName = readString(params?.threadName)
-      if (threadId && threadName) {
+      if (threadId && threadName && threadId !== sideConversationThreadId.value) {
         threadTitleById.value = { ...threadTitleById.value, [threadId]: threadName }
         applyThreadFlags()
         void persistThreadTitle(threadId, threadName)
@@ -3920,7 +3944,9 @@ export function useDesktopState() {
 
     const tokenUsageUpdate = readThreadTokenUsageUpdate(notification)
     if (tokenUsageUpdate) {
-      setThreadTokenUsage(tokenUsageUpdate.threadId, tokenUsageUpdate.usage)
+      if (tokenUsageUpdate.threadId !== sideConversationThreadId.value) {
+        setThreadTokenUsage(tokenUsageUpdate.threadId, tokenUsageUpdate.usage)
+      }
       return
     }
 
@@ -3929,7 +3955,6 @@ export function useDesktopState() {
       setTurnActivityForThread(turnActivity.threadId, turnActivity.activity)
     }
 
-    const notificationThreadId = extractThreadIdFromNotification(notification)
     if (notificationThreadId) {
       mergeSubagentNotification(notificationThreadId, notification)
     }
@@ -3953,7 +3978,9 @@ export function useDesktopState() {
       setTurnSummaryForThread(startedTurn.threadId, null)
       setTurnErrorForThread(startedTurn.threadId, null)
       setThreadInProgress(startedTurn.threadId, true)
-      scheduleQueueStateRefresh(startedTurn.threadId)
+      if (startedTurn.threadId !== sideConversationThreadId.value) {
+        scheduleQueueStateRefresh(startedTurn.threadId)
+      }
       if (eventUnreadByThreadId.value[startedTurn.threadId]) {
         eventUnreadByThreadId.value = omitKey(eventUnreadByThreadId.value, startedTurn.threadId)
       }
@@ -3997,19 +4024,22 @@ export function useDesktopState() {
         shouldRetryWithFallback,
         completedTurn.threadId === selectedThreadId.value,
       )
-      if (!shouldRetryWithFallback && completedTurn.status !== 'completed') {
+      const isSideConversationTurn = completedTurn.threadId === sideConversationThreadId.value
+      if (!isSideConversationTurn && !shouldRetryWithFallback && completedTurn.status !== 'completed') {
         suppressUnreadForNonSuccessCompletion(completedTurn.threadId)
       }
       if (!disposition.keepRunning) {
         setThreadInProgress(completedTurn.threadId, false)
         setTurnActivityForThread(completedTurn.threadId, null)
       }
-      if (disposition.markUnread) {
+      if (!isSideConversationTurn && disposition.markUnread) {
         markThreadUnreadByEvent(completedTurn.threadId)
       }
       if (!shouldRetryWithFallback) {
         clearPendingTurnRequest(completedTurn.threadId)
-        scheduleQueueStateRefresh(completedTurn.threadId)
+        if (!isSideConversationTurn) {
+          scheduleQueueStateRefresh(completedTurn.threadId)
+        }
       }
     }
 
@@ -4018,8 +4048,12 @@ export function useDesktopState() {
       if (failedThreadId) {
         setTurnErrorForThread(failedThreadId, turnErrorMessage)
       }
-      error.value = turnErrorMessage
-      if (failedThreadId && shouldRetryWithFallback) {
+      if (failedThreadId === sideConversationThreadId.value) {
+        sideConversationError.value = turnErrorMessage
+      } else {
+        error.value = turnErrorMessage
+      }
+      if (failedThreadId && shouldRetryWithFallback && failedThreadId !== sideConversationThreadId.value) {
         void retryPendingTurnWithFallback(failedThreadId)
       }
     } else if (completedTurn) {
@@ -4034,8 +4068,16 @@ export function useDesktopState() {
           transient: notificationErrorState.transient,
         })
       }
-      error.value = notificationErrorState.message
-      if (errorThreadModelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorState.message))) {
+      if (errorThreadId === sideConversationThreadId.value) {
+        sideConversationError.value = notificationErrorState.message
+      } else {
+        error.value = notificationErrorState.message
+      }
+      if (
+        errorThreadId !== sideConversationThreadId.value
+        && errorThreadModelId !== MODEL_FALLBACK_ID
+        && isUnsupportedChatGptModelError(new Error(notificationErrorState.message))
+      ) {
         if (errorThreadId) {
           void retryPendingTurnWithFallback(errorThreadId)
         } else {
@@ -4067,7 +4109,8 @@ export function useDesktopState() {
       ? (subagentsByParentThreadId.value[selectedThreadIdForNotification] ?? [])
         .some((subagent) => subagent.threadId === notificationThreadId)
       : false
-    if (!notificationThreadId || (notificationThreadId !== selectedThreadIdForNotification && !isSelectedSubagent)) return
+    const isSideConversationThread = notificationThreadId === sideConversationThreadId.value
+    if (!notificationThreadId || (notificationThreadId !== selectedThreadIdForNotification && !isSelectedSubagent && !isSideConversationThread)) return
 
     const startedAgentMessageId = readAgentMessageStartedId(notification)
     if (startedAgentMessageId) {
@@ -4175,6 +4218,11 @@ export function useDesktopState() {
       method === 'turn/completed' ||
       method === 'error'
     const threadId = extractThreadIdFromNotification(notification)
+    const notificationThread = asRecord(asRecord(notification.params)?.thread)
+    if (
+      notificationThread?.ephemeral === true
+      || (threadId && (threadId === sideConversationThreadId.value || threadId === discardedSideConversationThreadId))
+    ) return
     const parentThreadId = selectedThreadId.value
     const subagentParentThreadId = threadId ? findSubagentParentThreadId(threadId) : ''
     const isKnownSubagent = subagentParentThreadId.length > 0
@@ -5034,6 +5082,192 @@ export function useDesktopState() {
     })
   }
 
+  function clearSideConversationThreadState(threadId: string): void {
+    if (!threadId) return
+    persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
+    livePlanMessagesByThreadId.value = omitKey(livePlanMessagesByThreadId.value, threadId)
+    liveAgentMessagesByThreadId.value = omitKey(liveAgentMessagesByThreadId.value, threadId)
+    liveReasoningTextByThreadId.value = omitKey(liveReasoningTextByThreadId.value, threadId)
+    liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
+    liveFileChangeMessagesByThreadId.value = omitKey(liveFileChangeMessagesByThreadId.value, threadId)
+    inProgressById.value = omitKey(inProgressById.value, threadId)
+    turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
+    turnSummaryByThreadId.value = omitKey(turnSummaryByThreadId.value, threadId)
+    turnActivityByThreadId.value = omitKey(turnActivityByThreadId.value, threadId)
+    turnErrorByThreadId.value = omitKey(turnErrorByThreadId.value, threadId)
+    activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+    pendingServerRequestsByThreadId.value = omitKey(pendingServerRequestsByThreadId.value, threadId)
+    pendingTurnRequestByThreadId.value = omitKey(pendingTurnRequestByThreadId.value, threadId)
+    queuedMessagesByThreadId.value = omitKey(queuedMessagesByThreadId.value, threadId)
+    queueProcessingByThreadId.value = omitKey(queueProcessingByThreadId.value, threadId)
+    subagentsByParentThreadId.value = omitKey(subagentsByParentThreadId.value, threadId)
+    eventUnreadByThreadId.value = omitKey(eventUnreadByThreadId.value, threadId)
+    loadedVersionByThreadId.value = omitKey(loadedVersionByThreadId.value, threadId)
+    loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
+    hasMoreOlderMessagesByThreadId.value = omitKey(hasMoreOlderMessagesByThreadId.value, threadId)
+    loadingOlderMessagesByThreadId.value = omitKey(loadingOlderMessagesByThreadId.value, threadId)
+    resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
+    interruptBlockedUntilPersistedByThreadId.value = omitKey(interruptBlockedUntilPersistedByThreadId.value, threadId)
+    threadListedByServerById.value = omitKey(threadListedByServerById.value, threadId)
+    persistedUserMessageByThreadId.value = omitKey(persistedUserMessageByThreadId.value, threadId)
+    threadModelProviderByThreadId.value = omitKey(threadModelProviderByThreadId.value, threadId)
+    threadTitleById.value = omitKey(threadTitleById.value, threadId)
+    setThreadTokenUsage(threadId, null)
+    activeReasoningItemIdByThreadId.delete(threadId)
+    pendingThreadMessageRefresh.delete(threadId)
+    pendingSubagentParentRefresh.delete(threadId)
+    for (const [turnId, turn] of pendingTurnStartsById) {
+      if (turn.threadId === threadId) pendingTurnStartsById.delete(turnId)
+    }
+    nonSuccessCompletionReadBaselineByThreadId.delete(threadId)
+    lastMessageLoadAtByThreadId.delete(threadId)
+    lastMessageLoadFailureAtByThreadId.delete(threadId)
+    clearDelayedTurnSync(threadId)
+  }
+
+  function resetSideConversationState(): void {
+    const threadId = sideConversationThreadId.value
+    if (threadId) discardedSideConversationThreadId = threadId
+    clearSideConversationThreadState(threadId)
+    sideConversationParentThreadId.value = ''
+    sideConversationThreadId.value = ''
+    sideConversationError.value = ''
+    sideConversationTurnStartPromise = null
+    sideConversationCloseRequested = false
+  }
+
+  async function openSideConversation(
+    parentThreadId: string,
+    modelId?: string,
+    effort?: ReasoningEffort,
+  ): Promise<void> {
+    const normalizedParentThreadId = parentThreadId.trim()
+    if (!normalizedParentThreadId || isSideConversationOpening.value || isSideConversationClosing.value) return
+    if (isSideConversationOpen.value) return
+
+    sideConversationParentThreadId.value = normalizedParentThreadId
+    sideConversationError.value = ''
+    sideConversationCloseRequested = false
+    isSideConversationOpening.value = true
+    try {
+      const started = await startSideConversationThread(normalizedParentThreadId, modelId, effort)
+      sideConversationThreadId.value = started.threadId
+    } catch (unknownError) {
+      if (sideConversationCloseRequested) {
+        resetSideConversationState()
+      } else {
+        sideConversationError.value = unknownError instanceof Error
+          ? unknownError.message
+          : 'Failed to start side conversation'
+      }
+    } finally {
+      isSideConversationOpening.value = false
+      if (sideConversationCloseRequested && sideConversationThreadId.value) {
+        await closeSideConversation()
+      }
+    }
+  }
+
+  async function sendSideConversationMessage(text: string): Promise<void> {
+    const threadId = sideConversationThreadId.value
+    const nextText = text.trim()
+    if (!threadId || !nextText || isSideConversationClosing.value) return
+
+    appendOptimisticUserMessage(threadId, nextText)
+    sideConversationError.value = ''
+    setTurnSummaryForThread(threadId, null)
+    setTurnActivityForThread(threadId, { label: 'Thinking', details: [] })
+    setTurnErrorForThread(threadId, null)
+    setThreadInProgress(threadId, true)
+
+    const turnStartPromise = startThreadTurn(
+      threadId,
+      nextText,
+      [],
+    )
+    sideConversationTurnStartPromise = turnStartPromise
+    try {
+      const turnId = await turnStartPromise
+      if (turnId && sideConversationThreadId.value === threadId) {
+        activeTurnIdByThreadId.value = {
+          ...activeTurnIdByThreadId.value,
+          [threadId]: turnId,
+        }
+      }
+    } catch (unknownError) {
+      setThreadInProgress(threadId, false)
+      setTurnActivityForThread(threadId, null)
+      sideConversationError.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Failed to send side conversation message'
+    } finally {
+      if (sideConversationTurnStartPromise === turnStartPromise) {
+        sideConversationTurnStartPromise = null
+      }
+    }
+  }
+
+  async function interruptSideConversationTurn(): Promise<void> {
+    const threadId = sideConversationThreadId.value
+    if (!threadId || !isSideConversationInProgress.value) return
+    if (sideConversationTurnStartPromise) {
+      try {
+        await sideConversationTurnStartPromise
+      } catch {
+        return
+      }
+    }
+    const turnId = activeTurnIdByThreadId.value[threadId]
+    if (!turnId) return
+
+    try {
+      await interruptThreadTurn(threadId, turnId)
+      setThreadInProgress(threadId, false)
+      setTurnActivityForThread(threadId, null)
+    } catch (unknownError) {
+      sideConversationError.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Failed to stop side conversation turn'
+    }
+  }
+
+  async function closeSideConversation(): Promise<void> {
+    if (!isSideConversationOpen.value || isSideConversationClosing.value) return
+    if (isSideConversationOpening.value) {
+      sideConversationCloseRequested = true
+      return
+    }
+
+    const threadId = sideConversationThreadId.value
+    if (!threadId) {
+      resetSideConversationState()
+      return
+    }
+
+    isSideConversationClosing.value = true
+    sideConversationError.value = ''
+    try {
+      if (sideConversationTurnStartPromise) {
+        try {
+          await sideConversationTurnStartPromise
+        } catch {
+          // The failed turn start has no running turn to interrupt.
+        }
+      }
+      const activeTurnId = isSideConversationInProgress.value
+        ? activeTurnIdByThreadId.value[threadId]
+        : undefined
+      await discardSideConversationThread(threadId, activeTurnId)
+      resetSideConversationState()
+    } catch (unknownError) {
+      sideConversationError.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Failed to close side conversation'
+    } finally {
+      isSideConversationClosing.value = false
+    }
+  }
+
   async function sendMessageToSelectedThread(
     text: string,
     imageUrls: string[] = [],
@@ -5877,6 +6111,16 @@ export function useDesktopState() {
     selectedThreadSubagents,
     selectedLiveOverlay,
     getLiveOverlayForThread,
+    sideConversationParentThreadId,
+    sideConversationThreadId,
+    sideConversationMessages,
+    sideConversationLiveOverlay,
+    sideConversationServerRequests,
+    sideConversationError,
+    isSideConversationOpen,
+    isSideConversationOpening,
+    isSideConversationClosing,
+    isSideConversationInProgress,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,
@@ -5918,6 +6162,10 @@ export function useDesktopState() {
     sendMessageToSelectedThread,
     sendMessageToNewThread,
     interruptSelectedThreadTurn,
+    openSideConversation,
+    sendSideConversationMessage,
+    interruptSideConversationTurn,
+    closeSideConversation,
     selectedThreadQueuedMessages,
     removeQueuedMessage,
     reorderQueuedMessage,

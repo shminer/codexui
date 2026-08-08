@@ -5,6 +5,8 @@ describe('safe feature gate', () => {
   it('allows the thread RPC methods needed by the mobile client', () => {
     expect(isAllowedRpcMethod('thread/read')).toBe(true)
     expect(isAllowedRpcMethod('thread/resume')).toBe(true)
+    expect(isAllowedRpcMethod('thread/inject_items')).toBe(true)
+    expect(isAllowedRpcMethod('thread/unsubscribe')).toBe(true)
     expect(isAllowedRpcMethod('turn/start')).toBe(true)
   })
 

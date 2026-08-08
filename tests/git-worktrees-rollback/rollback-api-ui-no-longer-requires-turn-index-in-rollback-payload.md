@@ -11,7 +11,7 @@
 3. Click rollback on a user or assistant message that is not the newest one.
 4. Confirm rollback succeeds and the thread is truncated to the selected turn.
 5. Inspect the UI event flow by repeating rollback from a different turn and confirm the selected message can rollback without relying on a numeric turn index.
-6. Use dictation resend flow (or "rollback latest user turn" flow) and confirm the latest user turn is rolled back correctly.
+6. Use the "rollback latest user turn" flow and confirm the latest user turn is rolled back correctly.
 
 #### Expected Results
 - Rollback works when triggered from message actions using `turnId` as the identifier.

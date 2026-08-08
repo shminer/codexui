@@ -251,14 +251,6 @@
                 <span class="sidebar-settings-label">{{ t('Chat width') }}</span>
                 <span class="sidebar-settings-value">{{ chatWidthLabel }}</span>
               </button>
-              <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.dictationClickToToggle" @click="toggleDictationClickToToggle">
-                <span class="sidebar-settings-label">{{ t('Click to toggle dictation') }}</span>
-                <span class="sidebar-settings-toggle" :class="{ 'is-on': dictationClickToToggle }" />
-              </button>
-              <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.dictationAutoSend" @click="toggleDictationAutoSend">
-                <span class="sidebar-settings-label">{{ t('Auto send dictation') }}</span>
-                <span class="sidebar-settings-toggle" :class="{ 'is-on': dictationAutoSend }" />
-              </button>
               <a
                 v-if="hasVisibleFeedbackError"
                 class="sidebar-settings-row sidebar-settings-feedback-row"
@@ -420,19 +412,6 @@
                     </button>
                   </div>
                 </div>
-              </div>
-              <div class="sidebar-settings-row sidebar-settings-row--select" :title="SETTINGS_HELP.dictationLanguage">
-                <span class="sidebar-settings-label">{{ t('Dictation language') }}</span>
-                <ComposerDropdown
-                  class="sidebar-settings-language-dropdown"
-                  :model-value="dictationLanguage"
-                  :options="dictationLanguageOptions"
-                  :placeholder="t('Auto-detect')"
-                  open-direction="up"
-                  :enable-search="true"
-                  :search-placeholder="t('Search language...')"
-                  @update:model-value="onDictationLanguageChange"
-                />
               </div>
               <button class="sidebar-settings-row" type="button" aria-live="polite" @click="isTelegramConfigOpen = !isTelegramConfigOpen">
                 <span class="sidebar-settings-label">{{ t('Telegram') }}</span>
@@ -959,8 +938,6 @@
                   :is-turn-in-progress="false"
                   :is-stop-pending="false"
                   :is-interrupting-turn="false" :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
-                  :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
-                  :dictation-language="dictationLanguage"
                   @submit="onSubmitThreadMessage"
                   @update:selected-collaboration-mode="onSelectCollaborationMode"
                   @update:selected-model="onSelectModel"
@@ -1052,12 +1029,13 @@
                     :is-interrupting-turn="isInterruptingTurn"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
-                    :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
-                    :dictation-language="dictationLanguage"
+                    :side-conversation-available="Boolean(selectedThreadId)"
+                    :side-conversation-open="isSideConversationOpen"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
+                    @open-side-conversation="onOpenSideConversation"
                     @interrupt="onInterruptTurn" />
                 </div>
               </template>
@@ -1067,6 +1045,22 @@
       </section>
     </template>
   </DesktopLayout>
+  <ThreadSideConversation
+    v-if="isSideConversationOpen"
+    :thread-id="sideConversationThreadId"
+    :cwd="composerCwd"
+    :messages="sideConversationMessages"
+    :pending-requests="sideConversationServerRequests"
+    :live-overlay="sideConversationLiveOverlay"
+    :error="sideConversationError"
+    :is-opening="isSideConversationOpening"
+    :is-closing="isSideConversationClosing"
+    :is-turn-in-progress="isSideConversationInProgress"
+    @close="closeSideConversation"
+    @send="sendSideConversationMessage"
+    @interrupt="interruptSideConversationTurn"
+    @respond-server-request="onRespondSideConversationServerRequest"
+  />
   <div v-if="projectZipExportStatus.phase !== 'idle'" class="project-zip-modal-backdrop" role="presentation">
     <div class="project-zip-modal" role="dialog" aria-modal="true" :aria-label="t('Export Project')" @click.stop>
       <div class="project-zip-modal-header">
@@ -1246,6 +1240,7 @@ import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathFor
 import { copyTextToClipboard } from './utils/clipboard'
 
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
+const ThreadSideConversation = defineAsyncComponent(() => import('./components/content/ThreadSideConversation.vue'))
 const ThreadSubagentPanel = defineAsyncComponent(() => import('./components/content/ThreadSubagentPanel.vue'))
 const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/content/ThreadTerminalPanel.vue'))
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
@@ -1264,9 +1259,6 @@ const SETTINGS_HELP = {
   inProgressSendMode: t('If a turn is still running, choose whether a new prompt should steer the current turn or be queued.'),
   appearance: t('Switch between system theme, light mode, and dark mode.'),
   chatWidth: t('Choose how wide the conversation column and composer can grow on desktop screens.'),
-  dictationClickToToggle: t('Use click-to-start and click-to-stop dictation instead of hold-to-talk.'),
-  dictationAutoSend: t('Automatically send transcribed dictation when recording stops.'),
-  dictationLanguage: t('Choose transcription language or keep auto-detect.'),
 } as const
 
 type ChatWidthMode = 'standard' | 'wide' | 'extra-wide'
@@ -1317,109 +1309,6 @@ const CHAT_WIDTH_PRESETS: Record<ChatWidthMode, ChatWidthPreset> = {
   },
 }
 
-const WHISPER_LANGUAGES: Record<string, string> = {
-  en: 'english',
-  zh: 'chinese',
-  de: 'german',
-  es: 'spanish',
-  ru: 'russian',
-  ko: 'korean',
-  fr: 'french',
-  ja: 'japanese',
-  pt: 'portuguese',
-  tr: 'turkish',
-  pl: 'polish',
-  ca: 'catalan',
-  nl: 'dutch',
-  ar: 'arabic',
-  sv: 'swedish',
-  it: 'italian',
-  id: 'indonesian',
-  hi: 'hindi',
-  fi: 'finnish',
-  vi: 'vietnamese',
-  he: 'hebrew',
-  uk: 'ukrainian',
-  el: 'greek',
-  ms: 'malay',
-  cs: 'czech',
-  ro: 'romanian',
-  da: 'danish',
-  hu: 'hungarian',
-  ta: 'tamil',
-  no: 'norwegian',
-  th: 'thai',
-  ur: 'urdu',
-  hr: 'croatian',
-  bg: 'bulgarian',
-  lt: 'lithuanian',
-  la: 'latin',
-  mi: 'maori',
-  ml: 'malayalam',
-  cy: 'welsh',
-  sk: 'slovak',
-  te: 'telugu',
-  fa: 'persian',
-  lv: 'latvian',
-  bn: 'bengali',
-  sr: 'serbian',
-  az: 'azerbaijani',
-  sl: 'slovenian',
-  kn: 'kannada',
-  et: 'estonian',
-  mk: 'macedonian',
-  br: 'breton',
-  eu: 'basque',
-  is: 'icelandic',
-  hy: 'armenian',
-  ne: 'nepali',
-  mn: 'mongolian',
-  bs: 'bosnian',
-  kk: 'kazakh',
-  sq: 'albanian',
-  sw: 'swahili',
-  gl: 'galician',
-  mr: 'marathi',
-  pa: 'punjabi',
-  si: 'sinhala',
-  km: 'khmer',
-  sn: 'shona',
-  yo: 'yoruba',
-  so: 'somali',
-  af: 'afrikaans',
-  oc: 'occitan',
-  ka: 'georgian',
-  be: 'belarusian',
-  tg: 'tajik',
-  sd: 'sindhi',
-  gu: 'gujarati',
-  am: 'amharic',
-  yi: 'yiddish',
-  lo: 'lao',
-  uz: 'uzbek',
-  fo: 'faroese',
-  ht: 'haitian creole',
-  ps: 'pashto',
-  tk: 'turkmen',
-  nn: 'nynorsk',
-  mt: 'maltese',
-  sa: 'sanskrit',
-  lb: 'luxembourgish',
-  my: 'myanmar',
-  bo: 'tibetan',
-  tl: 'tagalog',
-  mg: 'malagasy',
-  as: 'assamese',
-  tt: 'tatar',
-  haw: 'hawaiian',
-  ln: 'lingala',
-  ha: 'hausa',
-  ba: 'bashkir',
-  jw: 'javanese',
-  su: 'sundanese',
-  yue: 'cantonese',
-}
-
 const {
   projectGroups,
   projectDisplayNameById,
@@ -1429,6 +1318,16 @@ const {
   selectedThreadServerRequests,
   selectedThreadSubagents,
   selectedLiveOverlay,
+  sideConversationParentThreadId,
+  sideConversationThreadId,
+  sideConversationMessages,
+  sideConversationLiveOverlay,
+  sideConversationServerRequests,
+  sideConversationError,
+  isSideConversationOpen,
+  isSideConversationOpening,
+  isSideConversationClosing,
+  isSideConversationInProgress,
   getLiveOverlayForThread,
   codexQuota,
   selectedThreadId,
@@ -1467,6 +1366,10 @@ const {
   sendMessageToSelectedThread,
   sendMessageToNewThread,
   interruptSelectedThreadTurn,
+  openSideConversation,
+  sendSideConversationMessage,
+  interruptSideConversationTurn,
+  closeSideConversation,
   selectedThreadQueuedMessages,
   removeQueuedMessage,
   reorderQueuedMessage,
@@ -1627,9 +1530,6 @@ const accountActionError = ref('')
 const SEND_WITH_ENTER_KEY = 'codex-web-local.send-with-enter.v1'
 const IN_PROGRESS_SEND_MODE_KEY = 'codex-web-local.in-progress-send-mode.v1'
 const DARK_MODE_KEY = 'codex-web-local.dark-mode.v1'
-const DICTATION_CLICK_TO_TOGGLE_KEY = 'codex-web-local.dictation-click-to-toggle.v1'
-const DICTATION_AUTO_SEND_KEY = 'codex-web-local.dictation-auto-send.v1'
-const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
 
 const CHAT_WIDTH_KEY = 'codex-web-local.chat-width.v1'
 const MOBILE_RESUME_RELOAD_MIN_HIDDEN_MS = 400
@@ -1637,10 +1537,6 @@ const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
 const inProgressSendMode = ref<'steer' | 'queue'>(loadInProgressSendModePref())
 const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
 const chatWidth = ref<ChatWidthMode>(loadChatWidthPref())
-const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, false))
-const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, true))
-const dictationLanguage = ref(loadDictationLanguagePref())
-const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
 const projectZipProgressText = computed(() => {
   const { loaded, total } = projectZipExportStatus.value
   const loadedLabel = formatByteCount(loaded)
@@ -2195,6 +2091,7 @@ onUnmounted(() => {
     threadSearchTimer = null
   }
   clearTerminalKeyboardFocusFallbackTimer()
+  void closeSideConversation()
   stopPolling()
 })
 
@@ -3079,6 +2976,15 @@ function onRespondServerRequest(payload: UiServerRequestReply): void {
   void handleServerRequestResponse(payload)
 }
 
+function onRespondSideConversationServerRequest(payload: UiServerRequestReply): void {
+  void respondToPendingServerRequest(payload).then((responded) => {
+    const followUpMessageText = payload.followUpMessageText?.trim() ?? ''
+    if (responded && followUpMessageText) {
+      void sendSideConversationMessage(followUpMessageText)
+    }
+  })
+}
+
 async function handleServerRequestResponse(payload: UiServerRequestReply): Promise<void> {
   const responded = await respondToPendingServerRequest(payload)
   const followUpMessageText = payload.followUpMessageText?.trim() ?? ''
@@ -3454,6 +3360,16 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
     return
   }
   void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex)
+}
+
+function onOpenSideConversation(): void {
+  const parentThreadId = selectedThreadId.value.trim()
+  if (!parentThreadId) return
+  void openSideConversation(
+    parentThreadId,
+    composerSelectedModelId.value,
+    selectedReasoningEffort.value || undefined,
+  )
 }
 
 function onEditQueuedMessage(messageId: string): void {
@@ -4349,17 +4265,6 @@ function cycleChatWidth(): void {
   window.localStorage.setItem(CHAT_WIDTH_KEY, chatWidth.value)
 }
 
-function toggleDictationClickToToggle(): void {
-  dictationClickToToggle.value = !dictationClickToToggle.value
-  window.localStorage.setItem(DICTATION_CLICK_TO_TOGGLE_KEY, dictationClickToToggle.value ? '1' : '0')
-}
-
-function toggleDictationAutoSend(): void {
-  dictationAutoSend.value = !dictationAutoSend.value
-  window.localStorage.setItem(DICTATION_AUTO_SEND_KEY, dictationAutoSend.value ? '1' : '0')
-}
-
-
 async function onProviderChange(provider: string): Promise<void> {
   if (freeModeLoading.value) return
   freeModeLoading.value = true
@@ -4539,68 +4444,6 @@ async function loadFreeModeStatus(): Promise<void> {
   }
 }
 
-function onDictationLanguageChange(nextValue: string): void {
-  const normalized = normalizeToWhisperLanguage(nextValue.trim())
-  const value = normalized || 'auto'
-  dictationLanguage.value = value
-  window.localStorage.setItem(DICTATION_LANGUAGE_KEY, value)
-}
-
-function loadDictationLanguagePref(): string {
-  if (typeof window === 'undefined') return 'auto'
-  const value = window.localStorage.getItem(DICTATION_LANGUAGE_KEY)?.trim() || 'auto'
-  const normalized = normalizeToWhisperLanguage(value)
-  return normalized || 'auto'
-}
-
-function buildDictationLanguageOptions(): Array<{ value: string; label: string }> {
-  const options: Array<{ value: string; label: string }> = [{ value: 'auto', label: t('Auto-detect') }]
-  const seen = new Set<string>(['auto'])
-  function formatLanguageLabel(value: string): string {
-    const languageName = WHISPER_LANGUAGES[value] || value
-    const title = languageName.charAt(0).toUpperCase() + languageName.slice(1)
-    return `${title} (${value})`
-  }
-
-  for (const raw of typeof navigator !== 'undefined' ? (navigator.languages ?? []) : []) {
-    const value = normalizeToWhisperLanguage(raw)
-    if (!value || seen.has(value)) continue
-    seen.add(value)
-    options.push({
-      value,
-      label: `Preferred: ${formatLanguageLabel(value)}`,
-    })
-  }
-
-  for (const value of Object.keys(WHISPER_LANGUAGES)) {
-    if (seen.has(value)) continue
-    seen.add(value)
-    options.push({
-      value,
-      label: formatLanguageLabel(value),
-    })
-  }
-
-  const current = dictationLanguage.value.trim()
-  if (current && !seen.has(current)) {
-    options.push({
-      value: current,
-      label: formatLanguageLabel(current),
-    })
-  }
-
-  return options
-}
-
-function normalizeToWhisperLanguage(raw: string): string {
-  const value = raw.trim().toLowerCase()
-  if (!value || value === 'auto') return ''
-  if (value in WHISPER_LANGUAGES) return value
-  const base = value.split('-')[0] ?? value
-  if (base in WHISPER_LANGUAGES) return base
-  return ''
-}
-
 function applyDarkMode(): void {
   const root = document.documentElement
   if (darkMode.value === 'dark') {
@@ -4763,6 +4606,15 @@ watch(
 
     if (route.name === 'thread' && routeThreadId.value === threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
+  },
+)
+
+watch(
+  () => [selectedThreadId.value, sideConversationParentThreadId.value] as const,
+  ([threadId, parentThreadId]) => {
+    if (parentThreadId && parentThreadId !== threadId) {
+      void closeSideConversation()
+    }
   },
 )
 

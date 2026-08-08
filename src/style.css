@@ -291,8 +291,54 @@
   @apply bg-zinc-700 text-zinc-500;
 }
 
-:root.dark .thread-composer-mic {
+:root.dark .thread-composer-side {
   @apply bg-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-zinc-200;
+}
+
+:root.dark .thread-composer-side--active {
+  @apply bg-zinc-600 text-zinc-100;
+}
+
+:root.dark .side-conversation-panel {
+  @apply border-zinc-700 bg-zinc-900;
+}
+
+:root.dark .side-conversation-header,
+:root.dark .side-conversation-composer,
+:root.dark .side-conversation-request {
+  @apply border-zinc-700;
+}
+
+:root.dark .side-conversation-title {
+  @apply text-zinc-100;
+}
+
+:root.dark .side-conversation-icon-button {
+  @apply text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100;
+}
+
+:root.dark .side-conversation-status {
+  @apply text-zinc-400;
+}
+
+:root.dark .side-conversation-input {
+  @apply border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-500 disabled:bg-zinc-800;
+}
+
+:root.dark .side-conversation-action--send {
+  @apply bg-zinc-100 text-zinc-900 hover:bg-white disabled:bg-zinc-700 disabled:text-zinc-500;
+}
+
+:root.dark .side-conversation-action--stop {
+  @apply bg-zinc-700 text-zinc-200 hover:bg-zinc-600;
+}
+
+:root.dark .side-conversation-error {
+  @apply border-amber-900/70 bg-amber-950/50 text-amber-200;
+}
+
+:root.dark .side-conversation-handle {
+  @apply bg-zinc-600;
 }
 
 :root.dark .thread-composer-stop {

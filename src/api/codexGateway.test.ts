@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
+import { discardSideConversationThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startSideConversation, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -57,6 +57,67 @@ describe('startThreadTurn collaboration mode payloads', () => {
         reasoning_effort: 'medium',
         developer_instructions: null,
       },
+    })
+  })
+})
+
+describe('side conversation lifecycle', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('forks an ephemeral thread, injects the boundary, and discards it', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      const result = request.method === 'config/read'
+        ? {
+            config: {
+              model: 'gpt-5.4',
+              model_provider: 'codex',
+              model_reasoning_effort: 'high',
+              developer_instructions: 'Parent instructions.',
+            },
+          }
+        : request.method === 'thread/fork'
+          ? { thread: { id: 'side-thread-1' } }
+          : {}
+      return new Response(JSON.stringify({ result }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(startSideConversation('parent-thread-1', 'gpt-5.4', 'high')).resolves.toEqual({
+      threadId: 'side-thread-1',
+    })
+    await discardSideConversationThread('side-thread-1', 'turn-1')
+
+    expect(requests.map((request) => request.method)).toEqual([
+      'config/read',
+      'thread/fork',
+      'thread/inject_items',
+      'turn/interrupt',
+      'thread/unsubscribe',
+    ])
+    expect(requests[1].params).toMatchObject({
+      threadId: 'parent-thread-1',
+      model: 'gpt-5.4',
+      modelProvider: 'codex',
+      config: { model_reasoning_effort: 'high' },
+      ephemeral: true,
+      excludeTurns: true,
+    })
+    expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
+    expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
+    expect(requests[2].params).toMatchObject({
+      threadId: 'side-thread-1',
+      items: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text' }],
+      }],
     })
   })
 })

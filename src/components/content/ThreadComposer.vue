@@ -1,9 +1,5 @@
 <template>
   <form class="thread-composer" @submit.prevent="onSubmit(isTurnInProgress ? activeInProgressMode : 'steer')">
-    <p v-if="dictationErrorText" class="thread-composer-dictation-error">
-      {{ dictationErrorText }}
-    </p>
-
     <div
       class="thread-composer-shell"
       :class="{
@@ -147,10 +143,7 @@
         </button>
       </div>
 
-      <div
-        class="thread-composer-controls"
-        :class="{ 'thread-composer-controls--recording': isDictationRecording }"
-      >
+      <div class="thread-composer-controls">
         <div ref="attachMenuRootRef" class="thread-composer-attach">
           <button
             class="thread-composer-attach-trigger"
@@ -256,8 +249,7 @@
           </div>
         </div>
 
-        <template v-if="!isDictationRecording">
-          <ComposerDropdown
+        <ComposerDropdown
             class="thread-composer-control"
             :model-value="selectedModel"
             :options="modelOptions"
@@ -268,9 +260,9 @@
             enable-search
             :search-placeholder="t('Search models...')"
             @update:model-value="onModelSelect"
-          />
+        />
 
-          <ComposerSearchDropdown
+        <ComposerSearchDropdown
             class="thread-composer-control"
             :options="skillDropdownOptions"
             :selected-values="selectedSkillPaths"
@@ -284,9 +276,9 @@
             @toggle="onSkillDropdownToggle"
             @create="onCreatePrompt"
             @remove="onRemovePrompt"
-          />
+        />
 
-          <ComposerDropdown
+        <ComposerDropdown
             class="thread-composer-control"
             :model-value="selectedReasoningEffort"
             :options="reasoningOptions"
@@ -294,41 +286,19 @@
             open-direction="up"
             :disabled="isComposerConfigDisabled"
             @update:model-value="onReasoningEffortSelect"
-          />
-        </template>
+        />
 
-        <div
-          class="thread-composer-actions"
-          :class="{ 'thread-composer-actions--recording': isDictationRecording }"
-        >
-          <div v-if="dictationState === 'recording'" class="thread-composer-dictation-waveform-wrap" aria-hidden="true">
-            <canvas ref="dictationWaveformCanvasRef" class="thread-composer-dictation-waveform" />
-          </div>
-
-          <span v-if="dictationState === 'recording'" class="thread-composer-dictation-timer">
-            {{ dictationDurationLabel }}
-          </span>
-
+        <div class="thread-composer-actions">
           <button
-            v-if="isDictationSupported"
-            class="thread-composer-mic"
-            :class="{
-              'thread-composer-mic--active': dictationState === 'recording',
-            }"
+            class="thread-composer-side"
+            :class="{ 'thread-composer-side--active': sideConversationOpen }"
             type="button"
-            :aria-label="dictationButtonLabel"
-            :title="dictationButtonLabel"
-            :disabled="isInteractionDisabled"
-            @click="onDictationToggle"
-            @pointerdown="onDictationPressStart"
-            @pointerup="onDictationPressEnd"
-            @pointercancel="onDictationPressEnd"
+            :aria-label="sideConversationButtonLabel"
+            :title="sideConversationButtonLabel"
+            :disabled="isInteractionDisabled || !sideConversationAvailable || sideConversationOpen"
+            @click="emit('open-side-conversation')"
           >
-            <IconTablerPlayerStopFilled
-              v-if="dictationState === 'recording'"
-              class="thread-composer-mic-icon thread-composer-mic-icon--stop"
-            />
-            <IconTablerMicrophone v-else class="thread-composer-mic-icon" />
+            <IconTablerLayoutSidebar class="thread-composer-side-icon" />
           </button>
 
           <button
@@ -402,7 +372,6 @@ import type {
   UiTokenUsageBreakdown,
 } from '../../types/codex'
 import { DEFAULT_REASONING_EFFORTS } from '../../types/codex'
-import { useDictation } from '../../composables/useDictation'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import {
@@ -418,8 +387,8 @@ import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
+import IconTablerLayoutSidebar from '../icons/IconTablerLayoutSidebar.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
-import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
 import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
@@ -454,9 +423,8 @@ const props = defineProps<{
   hasQueueAbove?: boolean
   sendWithEnter?: boolean
   inProgressSubmitMode?: 'steer' | 'queue'
-  dictationClickToToggle?: boolean
-  dictationAutoSend?: boolean
-  dictationLanguage?: string
+  sideConversationAvailable?: boolean
+  sideConversationOpen?: boolean
 }>()
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
@@ -485,6 +453,7 @@ export type ThreadComposerExposed = {
 const emit = defineEmits<{
   submit: [payload: SubmitPayload]
   interrupt: []
+  'open-side-conversation': []
   'update:selected-collaboration-mode': [mode: CollaborationModeKind]
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
@@ -524,44 +493,9 @@ const savedPrompts = ref<ComposerPromptInfo[]>([])
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
 
-const dictationFeedback = ref('')
 const pendingAttachmentCount = ref(0)
 const attachmentBatchStats = ref<AttachmentBatchStats | null>(null)
 const isDragActive = ref(false)
-const {
-  state: dictationState,
-  isSupported: isDictationSupported,
-  recordingDurationMs,
-  waveformCanvasRef: dictationWaveformCanvasRef,
-  startRecording,
-  stopRecording,
-  toggleRecording,
-  cancel: cancelDictation,
-} = useDictation({
-  getLanguage: () => props.dictationLanguage ?? 'auto',
-  onTranscript: (text) => {
-    draft.value = draft.value ? `${draft.value}\n${text}` : text
-    dictationFeedback.value = ''
-    if (props.dictationAutoSend !== false) {
-      const mode = props.isTurnInProgress ? activeInProgressMode.value : 'steer'
-      onSubmit(mode)
-      return
-    }
-    nextTick(() => inputRef.value?.focus())
-  },
-  onEmpty: () => {
-    dictationFeedback.value = props.dictationClickToToggle
-      ? 'No speech detected. Click again after speaking.'
-      : 'No speech detected. Hold the mic and speak.'
-  },
-  onError: (error) => {
-    if (error instanceof DOMException && error.name === 'NotAllowedError') {
-      dictationFeedback.value = 'Microphone access was denied.'
-      return
-    }
-    dictationFeedback.value = error instanceof Error ? error.message : 'Dictation failed.'
-  },
-})
 const attachMenuRootRef = ref<HTMLElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
@@ -580,7 +514,6 @@ let composerOverflowMeasurementQueued = false
 const draftGeneration = ref(0)
 let fileMentionSearchToken = 0
 let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
-let isHoldPressActive = false
 let dragDepth = 0
 let attachmentSessionToken = 0
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
@@ -686,14 +619,11 @@ const inProgressMode = computed<'steer' | 'queue'>(() =>
   props.inProgressSubmitMode === 'steer' ? 'steer' : 'queue',
 )
 const activeInProgressMode = ref<'steer' | 'queue'>(inProgressMode.value)
-const isDictationRecording = computed(() => dictationState.value === 'recording')
-const dictationButtonLabel = computed(() => {
-  if (dictationState.value === 'recording') return t('Stop dictation')
-  return props.dictationClickToToggle ? t('Click to dictate') : t('Hold to dictate')
+const sideConversationButtonLabel = computed(() => {
+  if (props.sideConversationOpen) return t('Side conversation is open')
+  if (!props.sideConversationAvailable) return t('Send a message before opening side conversation')
+  return t('Open side conversation')
 })
-const dictationErrorText = computed(() =>
-  dictationState.value === 'idle' ? dictationFeedback.value.trim() : '',
-)
 const attachmentFeedbackText = computed(() => {
   const stats = attachmentBatchStats.value
   if (stats) {
@@ -717,13 +647,6 @@ const attachmentFeedbackText = computed(() => {
     ? t('Attaching file...')
     : `${t('Attaching')} ${pendingAttachmentCount.value} ${t('files...')}`
 })
-const dictationDurationLabel = computed(() => {
-  const totalSeconds = Math.max(0, Math.floor(recordingDurationMs.value / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
-})
-
 const placeholderText = computed(() =>
   !props.activeThreadId
     ? t('Select a thread to send a message')
@@ -1003,7 +926,6 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
   ))
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
   folderUploadGroups.value = []
-  dictationFeedback.value = ''
   attachmentBatchStats.value = null
   pendingAttachmentCount.value = 0
   isAttachMenuOpen.value = false
@@ -1148,46 +1070,6 @@ function onReasoningEffortSelect(value: string): void {
 function onToggleSpeedMode(): void {
   if (isSpeedToggleDisabled.value) return
   emit('update:selected-speed-mode', props.selectedSpeedMode === 'fast' ? 'standard' : 'fast')
-}
-
-function onDictationToggle(): void {
-  if (!props.dictationClickToToggle) return
-  if (dictationFeedback.value) {
-    dictationFeedback.value = ''
-  }
-  toggleRecording()
-}
-
-function onDictationPressStart(event: PointerEvent): void {
-  if (props.dictationClickToToggle) return
-  event.preventDefault()
-  if (isHoldPressActive) return
-  isHoldPressActive = true
-  const target = event.currentTarget as HTMLElement | null
-  if (target) {
-    try {
-      target.setPointerCapture(event.pointerId)
-    } catch {
-      // Ignore if pointer cannot be captured in the current environment.
-    }
-  }
-  if (dictationFeedback.value) {
-    dictationFeedback.value = ''
-  }
-  window.addEventListener('pointerup', onDictationPressEnd)
-  window.addEventListener('pointercancel', onDictationPressEnd)
-  window.addEventListener('blur', onDictationPressEnd)
-  void startRecording()
-}
-
-function onDictationPressEnd(): void {
-  if (props.dictationClickToToggle) return
-  if (!isHoldPressActive) return
-  isHoldPressActive = false
-  window.removeEventListener('pointerup', onDictationPressEnd)
-  window.removeEventListener('pointercancel', onDictationPressEnd)
-  window.removeEventListener('blur', onDictationPressEnd)
-  stopRecording()
 }
 
 function toggleAttachMenu(): void {
@@ -1554,9 +1436,6 @@ function onInputPaste(event: ClipboardEvent): void {
 }
 
 function onInputChange(): void {
-  if (dictationFeedback.value) {
-    dictationFeedback.value = ''
-  }
   queueComposerOverflowMeasurement()
   updateFileMentionState()
 }
@@ -1674,7 +1553,6 @@ function applyFileMention(suggestion: ComposerFileSuggestion): void {
 }
 
 function hydrateDraft(payload: ComposerDraftPayload): void {
-  cancelDictation()
   replaceDraftState(payload)
   void nextTick(() => {
     inputRef.value?.focus()
@@ -1685,7 +1563,6 @@ function hydrateDraft(payload: ComposerDraftPayload): void {
 function appendTextToDraft(text: string): void {
   const nextText = text.trim()
   if (!nextText) return
-  cancelDictation()
   if (draft.value.trim().length > 0) {
     draft.value = `${draft.value.trimEnd()}\n${nextText}`
   } else {
@@ -1835,9 +1712,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('drop', onWindowDragCleanup)
   window.removeEventListener('dragend', onWindowDragCleanup)
   window.removeEventListener('blur', onWindowDragCleanup)
-  window.removeEventListener('pointerup', onDictationPressEnd)
-  window.removeEventListener('pointercancel', onDictationPressEnd)
-  window.removeEventListener('blur', onDictationPressEnd)
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
@@ -1846,7 +1720,6 @@ onBeforeUnmount(() => {
 watch(
   () => props.activeThreadId,
   (nextThreadId) => {
-    cancelDictation()
     if (lastActiveThreadId) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }
@@ -2131,10 +2004,6 @@ watch(
   @apply relative mt-2 sm:mt-3 flex items-center gap-2 sm:gap-4 overflow-visible pb-px;
 }
 
-.thread-composer-controls--recording {
-  @apply gap-1 sm:gap-2;
-}
-
 .thread-composer-attach {
   @apply relative shrink-0;
 }
@@ -2229,37 +2098,16 @@ watch(
   @apply ml-auto flex min-w-0 items-center gap-2;
 }
 
-.thread-composer-actions--recording {
-  @apply ml-0 flex-1;
-}
-
-.thread-composer-mic {
+.thread-composer-side {
   @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 bg-zinc-100 text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
-  touch-action: none;
 }
 
-.thread-composer-mic--active {
-  @apply bg-red-100 text-red-600 hover:bg-red-200 hover:text-red-700;
+.thread-composer-side--active {
+  @apply bg-zinc-200 text-zinc-900;
 }
 
-.thread-composer-mic-icon {
+.thread-composer-side-icon {
   @apply h-5 w-5;
-}
-
-.thread-composer-dictation-waveform-wrap {
-  @apply min-w-0 flex-1;
-}
-
-.thread-composer-dictation-waveform {
-  @apply block h-9 w-full text-zinc-500;
-}
-
-.thread-composer-dictation-timer {
-  @apply shrink-0 text-sm text-zinc-500 tabular-nums;
-}
-
-.thread-composer-dictation-error {
-  @apply mb-2 px-1 text-xs text-amber-700;
 }
 
 .thread-composer-submit {
