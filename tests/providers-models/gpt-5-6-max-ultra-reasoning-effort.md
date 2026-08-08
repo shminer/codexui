@@ -18,6 +18,7 @@
 - The started turn sends the selected value as `reasoning_effort`.
 - Switching models and refreshing do not lower the active Thinking value automatically.
 - Reopening the same main thread restores its last model and Thinking value.
+- When an existing thread has no saved Thinking value, the displayed value and its next `turn/start` request both use the current runtime value.
 - New chats restore the last model and Thinking value for the active account, even when both accounts use the Codex provider.
 
 #### Rollback/Cleanup

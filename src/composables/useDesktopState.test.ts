@@ -1366,6 +1366,28 @@ describe('side conversation lifecycle', () => {
     expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
   })
 
+  it('keeps the parent cwd when the main thread changes', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{
+        projectName: 'Projects',
+        threads: [
+          thread('parent-thread', '/tmp/project-a'),
+          thread('other-main-thread', '/tmp/project-b'),
+        ],
+      }],
+      nextCursor: null,
+    })
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-parent-cwd' })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    await state.openSideConversation('parent-thread')
+    state.primeSelectedThread('other-main-thread')
+
+    expect(state.sideConversationCwd.value).toBe('/tmp/project-a')
+  })
+
   it('rejects pending side requests before background cleanup', async () => {
     installTestWindow()
     let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
@@ -1883,6 +1905,16 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: '',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startThreadTurn.mockResolvedValue('existing-thread-turn')
 
     const state = useDesktopState()
     state.setActiveAccountStorageId('account-a')
@@ -1890,6 +1922,33 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
 
     expect(state.selectedReasoningEffort.value).toBe('high')
+    await state.sendMessageToSelectedThread('question')
+    expect(gatewayMocks.startThreadTurn).toHaveBeenLastCalledWith(
+      'existing-thread',
+      'question',
+      [],
+      'gpt-5.5',
+      'high',
+      undefined,
+      [],
+      'default',
+    )
+  })
+
+  it('updates the new-chat Thinking display when the active account changes', () => {
+    installTestWindow({
+      'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::account-a::codex': 'low',
+        '__new-thread-provider__::account-b::codex': 'ultra',
+      }),
+    })
+
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    expect(state.selectedReasoningEffort.value).toBe('low')
+    state.setActiveAccountStorageId('account-b')
+
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
   })
 
   it('ignores a late model preference response from the previous account', async () => {

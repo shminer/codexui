@@ -16,7 +16,6 @@
             type="button"
             :aria-label="t('Close side conversation')"
             :title="t('Close side conversation')"
-            :disabled="isOpening"
             @click="requestClose"
           >
             <IconTablerX />
@@ -136,7 +135,7 @@ function submit(): void {
 }
 
 function requestClose(): void {
-  if (!props.isOpening) emit('close')
+  emit('close')
 }
 
 function onInputKeydown(event: KeyboardEvent): void {

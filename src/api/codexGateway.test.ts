@@ -66,7 +66,7 @@ describe('side conversation lifecycle', () => {
     vi.unstubAllGlobals()
   })
 
-  it('forks an ephemeral thread, injects the boundary, and discards it', async () => {
+  it('forks a protocol-compatible side thread, injects the boundary, and discards it', async () => {
     const requests: Array<{ method: string, params: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
@@ -106,11 +106,11 @@ describe('side conversation lifecycle', () => {
       model: 'gpt-5.4',
       modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
-      ephemeral: true,
-      sideConversation: true,
-      excludeTurns: true,
       persistExtendedHistory: false,
     })
+    expect(requests[1].params).not.toHaveProperty('ephemeral')
+    expect(requests[1].params).not.toHaveProperty('sideConversation')
+    expect(requests[1].params).not.toHaveProperty('excludeTurns')
     expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
     expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
     expect(requests[2].params).toMatchObject({
