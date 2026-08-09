@@ -2,7 +2,7 @@
 
 ## Feature / Change
 
-The composer voice-input control is replaced by an ephemeral side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains only while the page is not refreshed and the current main thread is unchanged, and is not restored after refresh.
+The composer voice-input control is replaced by an ephemeral side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains scoped to the current main thread, and restores from the same browser tab after refresh.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ The composer voice-input control is replaced by an ephemeral side-conversation b
 | Step | Action | Expected result |
 | --- | --- | --- |
 | 1 | Open an existing thread on a desktop viewport. | The composer action row shows the side-conversation icon, and Settings contains no controls for the removed input feature. |
-| 2 | Click the side-conversation icon. | One floating window opens at the lower-right without blocking the main conversation. Its header shows `Side conversation` and a close button. |
+| 2 | Click the side-conversation icon. | One floating window opens at the lower-right without blocking the main conversation. Its header shows `Side conversation`, `End chat`, and a close button. |
 | 3 | Open the side window before a newly selected parent finishes restoring, then inspect RPC requests. | The app waits for the parent restore, then sends `config/read`, `thread/fork`, and `thread/inject_items`. The fork uses the restored parent model, runtime provider ID, Thinking value, `ephemeral: true`, `excludeTurns: true`, and `persistExtendedHistory: false`; it does not send the unsupported `sideConversation` field. |
 | 4 | Send a side question and wait for the response. | The user message, live activity, and final response render inside the floating window. The main thread transcript and composer draft remain unchanged. The side window exposes no model or Thinking selector; subsequent turns use the values captured in step 2. |
 | 5 | Disable `Send with Enter`, type a question, press Enter, then press Command+Enter or Ctrl+Enter. Re-enable the setting and repeat with Enter and Shift+Enter, including while an IME candidate is active. | The side composer follows the same global shortcut as the main composer: plain Enter inserts a line when disabled, the platform modifier sends, plain Enter sends when enabled, Shift+Enter inserts a line, and IME confirmation never submits. |
@@ -37,12 +37,13 @@ The composer voice-input control is replaced by an ephemeral side-conversation b
 
 | Step | Action | Expected result |
 | --- | --- | --- |
-| 1 | While a side response is running, click the desktop close button or mobile backdrop. | The UI closes immediately. The app rejects pending side requests, interrupts the active side turn after a pending `turn/start` returns its ID, then unsubscribes the child in the background. |
-| 2 | Open an idle side conversation and close it. | The UI closes immediately and sends only `thread/unsubscribe`; it does not send an empty `turn/interrupt`. |
-| 3 | Let a side turn complete immediately before cleanup reaches the app server, then close it. | Background cleanup still attempts `thread/unsubscribe`; cleanup failures do not reopen the side panel. |
-| 4 | Close a side conversation, deliver a late error or approval request for its child, then inspect the main conversation. | The late event does not appear in the main conversation, global error surface, or pending-request UI. A late request receives the side-chat-closed reply. |
-| 5 | Refresh the page after closing or while a side conversation is open. | No side window, child transcript, or side draft is restored. |
-| 6 | Create another side conversation after closing the previous one. | A new empty ephemeral child opens; the earlier side transcript and draft are absent. |
+| 1 | While a side response is running, click the desktop close button or mobile backdrop. | The side window hides only. The child ID, transcript, draft, pending request, and active side turn remain unchanged; no interrupt or unsubscribe request is sent. |
+| 2 | Click the side-conversation icon again after hiding. | The original side window reopens with the same transcript and draft; no second `thread/fork` is sent. |
+| 3 | While a side response is running, click `End chat`. | The UI clears immediately. The app rejects pending side requests, interrupts the active side turn after a pending `turn/start` returns its ID, then unsubscribes the child in the background. |
+| 4 | Open an idle side conversation and click `End chat`. | The UI clears immediately and sends only `thread/unsubscribe`; it does not send an empty `turn/interrupt`. |
+| 5 | Refresh while the side window is visible, then refresh again while it is hidden. | The same-tab page restore resumes the same child transcript and active turn. Visible state and unsent draft are preserved in both cases. |
+| 6 | Switch to another main thread or account after opening or hiding a side conversation. | The side conversation ends, its session record clears, and reopening creates a new empty ephemeral child. |
+| 7 | Refresh with a stale child thread ID. | The stale session record clears and no empty side conversation is created automatically. |
 ## Rollback / Cleanup
 
 - Close any side window created during the check.

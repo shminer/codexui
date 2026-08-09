@@ -67,18 +67,26 @@ function thread(id: string, cwd: string, options: { hasWorktree?: boolean } = {}
   }
 }
 
-function installTestWindow(initialStorage: Record<string, string> = {}) {
+function createStorage(initialStorage: Record<string, string>) {
   const store = new Map(Object.entries(initialStorage))
+  return {
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      store.set(key, value)
+    }),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key)
+    }),
+  }
+}
+
+function installTestWindow(
+  initialLocalStorage: Record<string, string> = {},
+  initialSessionStorage: Record<string, string> = {},
+) {
   vi.stubGlobal('window', {
-    localStorage: {
-      getItem: vi.fn((key: string) => store.get(key) ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        store.set(key, value)
-      }),
-      removeItem: vi.fn((key: string) => {
-        store.delete(key)
-      }),
-    },
+    localStorage: createStorage(initialLocalStorage),
+    sessionStorage: createStorage(initialSessionStorage),
     setTimeout: vi.fn(),
     clearTimeout: vi.fn(),
   })
@@ -1215,7 +1223,7 @@ describe('side conversation lifecycle', () => {
     state.primeSelectedThread('parent-explicit-opening')
     const loadPromise = state.loadMessages('parent-explicit-opening')
     const openPromise = state.openSideConversation('parent-explicit-opening')
-    await state.closeSideConversation()
+    state.endSideConversation()
     resolveResume({
       model: 'gpt-5.4',
       modelProvider: 'codex',
@@ -1340,7 +1348,7 @@ describe('side conversation lifecycle', () => {
 
     const state = useDesktopState()
     await state.openSideConversation('parent-thread')
-    state.closeSideConversation()
+    state.endSideConversation()
 
     expect(state.isSideConversationOpen.value).toBe(false)
     expect(state.sideConversationThreadId.value).toBe('')
@@ -1349,6 +1357,69 @@ describe('side conversation lifecycle', () => {
       '',
     )
     expect(gatewayMocks.discardSideConversationThread).not.toHaveBeenCalled()
+  })
+
+  it('hides and reopens the same side conversation without discarding it', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-hidden' })
+
+    const state = useDesktopState()
+    await state.openSideConversation('parent-thread', 'gpt-5.6', 'high')
+    state.setSideConversationDraft('unsent draft')
+    state.hideSideConversation()
+
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.isSideConversationVisible.value).toBe(false)
+    expect(state.sideConversationThreadId.value).toBe('side-hidden')
+    expect(state.sideConversationDraft.value).toBe('unsent draft')
+    expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
+    expect(JSON.parse(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')!)).toMatchObject({
+      parentThreadId: 'parent-thread',
+      childThreadId: 'side-hidden',
+      visible: false,
+      draft: 'unsent draft',
+    })
+
+    await state.openSideConversation('parent-thread')
+
+    expect(state.isSideConversationVisible.value).toBe(true)
+    expect(gatewayMocks.startSideConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores the visible side conversation from the current tab session', async () => {
+    installTestWindow({}, {
+      'codex-web-local.side-conversation-session.v1': JSON.stringify({
+        parentThreadId: 'parent-thread',
+        childThreadId: 'side-restored',
+        accountStorageId: '__default__',
+        modelId: 'gpt-5.6',
+        reasoningEffort: 'high',
+        collaborationMode: 'default',
+        visible: true,
+        draft: 'keep this draft',
+      }),
+    })
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.6',
+      modelProvider: 'codex',
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'side-turn',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      subagents: [],
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.restoreSideConversation()
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledWith('side-restored')
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.isSideConversationVisible.value).toBe(true)
+    expect(state.sideConversationThreadId.value).toBe('side-restored')
+    expect(state.sideConversationDraft.value).toBe('keep this draft')
+    expect(state.isSideConversationInProgress.value).toBe(true)
   })
 
   it('ends the side conversation when the main thread changes', async () => {
@@ -1679,7 +1750,7 @@ describe('side conversation lifecycle', () => {
     await state.openSideConversation('parent-thread')
     const sendPromise = state.sendSideConversationMessage('question')
     await Promise.resolve()
-    state.closeSideConversation()
+    state.endSideConversation()
 
     expect(state.isSideConversationOpen.value).toBe(false)
     expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
@@ -1699,10 +1770,12 @@ describe('side conversation lifecycle', () => {
 
     const state = useDesktopState()
     await state.openSideConversation('parent-thread')
-    state.closeSideConversation()
+    state.endSideConversation()
     await flushMicrotasks()
 
     const reloadedState = useDesktopState()
+    reloadedState.primeSelectedThread('parent-thread')
+    await reloadedState.restoreSideConversation()
 
     expect(reloadedState.isSideConversationOpen.value).toBe(false)
     expect(reloadedState.sideConversationThreadId.value).toBe('')

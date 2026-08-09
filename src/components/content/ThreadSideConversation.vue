@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div class="side-conversation-host" @click.self="requestClose">
+    <div v-show="visible" class="side-conversation-host" @click.self="requestClose">
       <section
         class="side-conversation-panel"
         role="dialog"
@@ -11,6 +11,13 @@
         <div class="side-conversation-handle" aria-hidden="true" />
         <header class="side-conversation-header">
           <h2 :id="titleId" class="side-conversation-title">{{ t('Side conversation') }}</h2>
+          <button
+            class="side-conversation-end-button"
+            type="button"
+            @click="emit('end')"
+          >
+            {{ t('End chat') }}
+          </button>
           <button
             class="side-conversation-icon-button"
             type="button"
@@ -50,12 +57,13 @@
         <footer v-else class="side-conversation-composer">
           <textarea
             ref="inputRef"
-            v-model="draft"
+            :value="draft"
             class="side-conversation-input"
             rows="2"
             :placeholder="t('Ask a side question...')"
             :aria-label="t('Side conversation message')"
             :disabled="isOpening || !threadId"
+            @input="updateDraft"
             @keydown="onInputKeydown"
           />
           <button
@@ -107,11 +115,15 @@ const props = defineProps<{
   isOpening: boolean
   isTurnInProgress: boolean
   sendWithEnter?: boolean
+  visible: boolean
+  draft: string
 }>()
 
 const emit = defineEmits<{
   close: []
+  end: []
   send: [text: string]
+  'update:draft': [value: string]
   interrupt: []
   'respond-server-request': [reply: UiServerRequestReply]
 }>()
@@ -120,22 +132,25 @@ const { isMobile } = useMobile()
 const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
 const inputRef = ref<HTMLTextAreaElement | null>(null)
-const draft = ref('')
 const canSend = computed(() => (
   props.threadId.length > 0
-  && draft.value.trim().length > 0
+  && props.draft.trim().length > 0
   && !props.isOpening
   && !props.isTurnInProgress
 ))
 
 function submit(): void {
   if (!canSend.value) return
-  emit('send', draft.value.trim())
-  draft.value = ''
+  emit('send', props.draft.trim())
+  emit('update:draft', '')
 }
 
 function requestClose(): void {
   emit('close')
+}
+
+function updateDraft(event: Event): void {
+  emit('update:draft', (event.target as HTMLTextAreaElement).value)
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
@@ -145,9 +160,9 @@ function onInputKeydown(event: KeyboardEvent): void {
 }
 
 watch(
-  () => props.threadId,
-  (threadId) => {
-    if (!threadId) return
+  () => [props.threadId, props.visible] as const,
+  ([threadId, visible]) => {
+    if (!threadId || !visible) return
     void nextTick(() => inputRef.value?.focus())
   },
   { immediate: true },
@@ -181,6 +196,10 @@ watch(
 .side-conversation-icon-button,
 .side-conversation-action {
   @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.side-conversation-end-button {
+  @apply shrink-0 rounded-md px-2 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900;
 }
 
 .side-conversation-icon-button {

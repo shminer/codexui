@@ -127,6 +127,7 @@ const zhCN: Record<string, string> = {
   'Side conversation': '侧窗聊天',
   'Open side conversation': '打开侧窗聊天',
   'Close side conversation': '关闭侧窗聊天',
+  'End chat': '结束聊天',
   'Side conversation is open': '侧窗聊天已打开',
   'Send a message before opening side conversation': '先发送一条消息，再打开侧窗聊天',
   'Opening side conversation...': '正在打开侧窗聊天...',

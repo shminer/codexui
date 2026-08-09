@@ -1030,7 +1030,7 @@
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :side-conversation-available="Boolean(selectedThreadId)"
-                    :side-conversation-open="isSideConversationOpen"
+                    :side-conversation-open="isSideConversationVisible"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
@@ -1047,6 +1047,7 @@
   </DesktopLayout>
   <ThreadSideConversation
     v-if="isSideConversationOpen"
+    :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
     :cwd="composerCwd"
     :messages="sideConversationMessages"
@@ -1056,7 +1057,10 @@
     :is-opening="isSideConversationOpening"
     :is-turn-in-progress="isSideConversationInProgress"
     :send-with-enter="sendWithEnter"
-    @close="closeSideConversation"
+    :draft="sideConversationDraft"
+    @close="hideSideConversation"
+    @end="endSideConversation"
+    @update:draft="setSideConversationDraft"
     @send="sendSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
     @respond-server-request="onRespondSideConversationServerRequest"
@@ -1324,8 +1328,10 @@ const {
   sideConversationServerRequests,
   sideConversationError,
   isSideConversationOpen,
+  isSideConversationVisible,
   isSideConversationOpening,
   isSideConversationInProgress,
+  sideConversationDraft,
   getLiveOverlayForThread,
   codexQuota,
   selectedThreadId,
@@ -1365,9 +1371,12 @@ const {
   sendMessageToNewThread,
   interruptSelectedThreadTurn,
   openSideConversation,
+  restoreSideConversation,
+  hideSideConversation,
+  endSideConversation,
+  setSideConversationDraft,
   sendSideConversationMessage,
   interruptSideConversationTurn,
-  closeSideConversation,
   discardSideConversationInBackground,
   setActiveAccountStorageId,
   selectedThreadQueuedMessages,
@@ -2092,7 +2101,6 @@ onUnmounted(() => {
     threadSearchTimer = null
   }
   clearTerminalKeyboardFocusFallbackTimer()
-  discardSideConversationInBackground()
   stopPolling()
 })
 
@@ -4544,6 +4552,7 @@ async function initialize(): Promise<void> {
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
   startPolling()
+  void restoreSideConversation()
 }
 
 async function syncThreadSelectionWithRoute(): Promise<void> {

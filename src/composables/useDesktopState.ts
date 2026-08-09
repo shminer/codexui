@@ -88,6 +88,7 @@ const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.collaboration-mode-by-context.v1'
 const LEGACY_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.collaboration-mode.v1'
+const SIDE_CONVERSATION_SESSION_STORAGE_KEY = 'codex-web-local.side-conversation-session.v1'
 const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX = '__new-thread-provider__::'
 const EVENT_SYNC_DEBOUNCE_MS = 220
@@ -105,6 +106,17 @@ const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or
 const DEFAULT_ACCOUNT_STORAGE_ID = '__default__'
 const MAX_DISCARDED_SIDE_CONVERSATION_THREAD_IDS = 256
 type SelectThreadResult = 'ok' | 'not-found' | 'error'
+
+type SideConversationSession = {
+  parentThreadId: string
+  childThreadId: string
+  accountStorageId: string
+  modelId: string
+  reasoningEffort: ReasoningEffort | ''
+  collaborationMode: CollaborationModeKind
+  visible: boolean
+  draft: string
+}
 
 function isCodexCliMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '')
@@ -182,6 +194,35 @@ function normalizeStoredReasoningEffort(value: unknown): ReasoningEffort | '' {
   return typeof value === 'string' && REASONING_EFFORT_OPTIONS.includes(value as ReasoningEffort)
     ? value as ReasoningEffort
     : ''
+}
+
+function loadSideConversationSession(): SideConversationSession | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.sessionStorage.getItem(SIDE_CONVERSATION_SESSION_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+
+    const parentThreadId = normalizeStoredModelId(parsed.parentThreadId)
+    const childThreadId = normalizeStoredModelId(parsed.childThreadId)
+    const accountStorageId = normalizeStoredModelId(parsed.accountStorageId)
+    if (!parentThreadId || !childThreadId || !accountStorageId) return null
+
+    return {
+      parentThreadId,
+      childThreadId,
+      accountStorageId,
+      modelId: normalizeStoredModelId(parsed.modelId),
+      reasoningEffort: normalizeStoredReasoningEffort(parsed.reasoningEffort),
+      collaborationMode: normalizeCollaborationMode(parsed.collaborationMode),
+      visible: parsed.visible !== false,
+      draft: typeof parsed.draft === 'string' ? parsed.draft : '',
+    }
+  } catch {
+    return null
+  }
 }
 
 function createStringKeyedRecord<T>(): Record<string, T> {
@@ -1552,6 +1593,8 @@ export function useDesktopState() {
   const activeAccountStorageId = ref(DEFAULT_ACCOUNT_STORAGE_ID)
   const sideConversationParentThreadId = ref('')
   const sideConversationThreadId = ref('')
+  const isSideConversationVisible = ref(false)
+  const sideConversationDraft = ref('')
   const sideConversationError = ref('')
   const isSideConversationOpening = ref(false)
   const sideConversationModelId = ref('')
@@ -5343,6 +5386,52 @@ export function useDesktopState() {
     removePendingServerRequestById(request.id)
   }
 
+  function clearSideConversationSession(): void {
+    if (typeof window === 'undefined') return
+    try {
+      window.sessionStorage.removeItem(SIDE_CONVERSATION_SESSION_STORAGE_KEY)
+    } catch {
+      // Keep the in-memory lifecycle working when sessionStorage is unavailable.
+    }
+  }
+
+  function persistSideConversationSession(): void {
+    const parentThreadId = sideConversationParentThreadId.value
+    const childThreadId = sideConversationThreadId.value
+    if (!parentThreadId || !childThreadId) {
+      clearSideConversationSession()
+      return
+    }
+    if (typeof window === 'undefined') return
+
+    const session: SideConversationSession = {
+      parentThreadId,
+      childThreadId,
+      accountStorageId: activeAccountStorageId.value,
+      modelId: sideConversationModelId.value,
+      reasoningEffort: sideConversationReasoningEffort.value,
+      collaborationMode: sideConversationCollaborationMode.value,
+      visible: isSideConversationVisible.value,
+      draft: sideConversationDraft.value,
+    }
+    try {
+      window.sessionStorage.setItem(SIDE_CONVERSATION_SESSION_STORAGE_KEY, JSON.stringify(session))
+    } catch {
+      // Keep the in-memory lifecycle working when sessionStorage is unavailable.
+    }
+  }
+
+  function setSideConversationDraft(value: string): void {
+    sideConversationDraft.value = value
+    persistSideConversationSession()
+  }
+
+  function hideSideConversation(): void {
+    if (!isSideConversationOpen.value) return
+    isSideConversationVisible.value = false
+    persistSideConversationSession()
+  }
+
   function resetSideConversationState(): void {
     const threadId = sideConversationThreadId.value
     if (threadId) {
@@ -5351,12 +5440,60 @@ export function useDesktopState() {
     }
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
+    isSideConversationVisible.value = false
+    sideConversationDraft.value = ''
     sideConversationError.value = ''
     sideConversationModelId.value = ''
     sideConversationReasoningEffort.value = ''
     sideConversationCollaborationMode.value = 'default'
     sideConversationTurnStartPromise = null
     isSideConversationOpening.value = false
+    clearSideConversationSession()
+  }
+
+  async function restoreSideConversation(): Promise<void> {
+    if (isSideConversationOpen.value || isSideConversationOpening.value) return
+
+    const session = loadSideConversationSession()
+    if (!session) {
+      clearSideConversationSession()
+      return
+    }
+    if (
+      session.parentThreadId !== selectedThreadId.value
+      || session.accountStorageId !== activeAccountStorageId.value
+    ) {
+      clearSideConversationSession()
+      return
+    }
+
+    const restoreEpoch = ++sideConversationEpoch
+    sideConversationParentThreadId.value = session.parentThreadId
+    sideConversationThreadId.value = session.childThreadId
+    isSideConversationVisible.value = session.visible
+    sideConversationDraft.value = session.draft
+    sideConversationModelId.value = session.modelId
+    sideConversationReasoningEffort.value = session.reasoningEffort
+    sideConversationCollaborationMode.value = session.collaborationMode
+    sideConversationError.value = ''
+    isSideConversationOpening.value = true
+
+    try {
+      await loadMessages(session.childThreadId, { silent: true, force: true })
+    } catch (unknownError) {
+      if (restoreEpoch !== sideConversationEpoch) return
+      if (isThreadNotFoundError(unknownError)) {
+        resetSideConversationState()
+        return
+      }
+      sideConversationError.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Failed to restore side conversation'
+    } finally {
+      if (restoreEpoch === sideConversationEpoch) {
+        isSideConversationOpening.value = false
+      }
+    }
   }
 
   async function openSideConversation(
@@ -5365,7 +5502,14 @@ export function useDesktopState() {
     effort?: ReasoningEffort,
   ): Promise<void> {
     const normalizedParentThreadId = parentThreadId.trim()
-    if (!normalizedParentThreadId || isSideConversationOpen.value || isSideConversationOpening.value) return
+    if (!normalizedParentThreadId || isSideConversationOpening.value) return
+    if (isSideConversationOpen.value) {
+      if (sideConversationParentThreadId.value === normalizedParentThreadId) {
+        isSideConversationVisible.value = true
+        persistSideConversationSession()
+      }
+      return
+    }
 
     const openEpoch = ++sideConversationEpoch
     let initialModelId = readModelIdForThread(normalizedParentThreadId) || modelId || ''
@@ -5376,6 +5520,7 @@ export function useDesktopState() {
       normalizedParentThreadId,
     )
     sideConversationParentThreadId.value = normalizedParentThreadId
+    isSideConversationVisible.value = true
     sideConversationError.value = ''
     isSideConversationOpening.value = true
     try {
@@ -5416,6 +5561,7 @@ export function useDesktopState() {
       sideConversationModelId.value = initialModelId
       sideConversationReasoningEffort.value = initialEffort
       sideConversationCollaborationMode.value = initialCollaborationMode
+      persistSideConversationSession()
     } catch (unknownError) {
       if (openEpoch === sideConversationEpoch) {
         error.value = unknownError instanceof Error
@@ -5525,7 +5671,7 @@ export function useDesktopState() {
     })()
   }
 
-  function closeSideConversation(): void {
+  function endSideConversation(): void {
     discardSideConversationInBackground()
   }
 
@@ -6436,8 +6582,10 @@ export function useDesktopState() {
     sideConversationServerRequests,
     sideConversationError,
     isSideConversationOpen,
+    isSideConversationVisible,
     isSideConversationOpening,
     isSideConversationInProgress,
+    sideConversationDraft,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,
@@ -6480,9 +6628,12 @@ export function useDesktopState() {
     sendMessageToNewThread,
     interruptSelectedThreadTurn,
     openSideConversation,
+    restoreSideConversation,
+    hideSideConversation,
+    endSideConversation,
+    setSideConversationDraft,
     sendSideConversationMessage,
     interruptSideConversationTurn,
-    closeSideConversation,
     discardSideConversationInBackground,
     setActiveAccountStorageId,
     selectedThreadQueuedMessages,
