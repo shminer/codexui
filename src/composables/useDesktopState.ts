@@ -1552,7 +1552,6 @@ export function useDesktopState() {
   const activeAccountStorageId = ref(DEFAULT_ACCOUNT_STORAGE_ID)
   const sideConversationParentThreadId = ref('')
   const sideConversationThreadId = ref('')
-  const sideConversationCwd = ref('')
   const sideConversationError = ref('')
   const isSideConversationOpening = ref(false)
   const sideConversationModelId = ref('')
@@ -1828,6 +1827,12 @@ export function useDesktopState() {
 
   function setSelectedThreadId(nextThreadId: string, options: { persist?: boolean } = {}): void {
     if (selectedThreadId.value === nextThreadId) return
+    if (
+      sideConversationParentThreadId.value
+      && sideConversationParentThreadId.value !== nextThreadId
+    ) {
+      discardSideConversationInBackground()
+    }
     selectedThreadId.value = nextThreadId
     if (options.persist !== false) {
       saveSelectedThreadId(nextThreadId)
@@ -4236,7 +4241,9 @@ export function useDesktopState() {
         })
       }
       if (errorThreadId && isKnownSideConversationThread(errorThreadId)) {
-        sideConversationError.value = notificationErrorState.message
+        if (!notificationErrorState.transient) {
+          sideConversationError.value = notificationErrorState.message
+        }
       } else {
         error.value = notificationErrorState.message
       }
@@ -5344,7 +5351,6 @@ export function useDesktopState() {
     }
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
-    sideConversationCwd.value = ''
     sideConversationError.value = ''
     sideConversationModelId.value = ''
     sideConversationReasoningEffort.value = ''
@@ -5370,7 +5376,6 @@ export function useDesktopState() {
       normalizedParentThreadId,
     )
     sideConversationParentThreadId.value = normalizedParentThreadId
-    sideConversationCwd.value = allThreads.value.find((thread) => thread.id === normalizedParentThreadId)?.cwd.trim() ?? ''
     sideConversationError.value = ''
     isSideConversationOpening.value = true
     try {
@@ -6426,7 +6431,6 @@ export function useDesktopState() {
     getLiveOverlayForThread,
     sideConversationParentThreadId,
     sideConversationThreadId,
-    sideConversationCwd,
     sideConversationMessages,
     sideConversationLiveOverlay,
     sideConversationServerRequests,

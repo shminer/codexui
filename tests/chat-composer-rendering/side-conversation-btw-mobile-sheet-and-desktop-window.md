@@ -2,7 +2,7 @@
 
 ## Feature / Change
 
-The composer voice-input control is replaced by an ephemeral side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created. It is not restored after refresh.
+The composer voice-input control is replaced by an ephemeral side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains only while the page is not refreshed and the current main thread is unchanged, and is not restored after refresh.
 
 ## Prerequisites
 
@@ -19,9 +19,10 @@ The composer voice-input control is replaced by an ephemeral side-conversation b
 | 2 | Click the side-conversation icon. | One floating window opens at the lower-right without blocking the main conversation. Its header shows `Side conversation` and a close button. |
 | 3 | Open the side window before a newly selected parent finishes restoring, then inspect RPC requests. | The app waits for the parent restore, then sends `config/read`, `thread/fork`, and `thread/inject_items`. The fork uses the restored parent model, runtime provider ID, Thinking value, `ephemeral: true`, `excludeTurns: true`, and `persistExtendedHistory: false`; it does not send the unsupported `sideConversation` field. |
 | 4 | Send a side question and wait for the response. | The user message, live activity, and final response render inside the floating window. The main thread transcript and composer draft remain unchanged. The side window exposes no model or Thinking selector; subsequent turns use the values captured in step 2. |
-| 5 | Switch from the parent project to a different project's thread, then open a relative file link inside the side conversation. | The side window, its child transcript, and its active turn remain open. Main-chat navigation does not close or replace the side chat, and relative file links still resolve from the parent thread's project. |
+| 5 | Switch to another main thread or return to the home page. | The side window closes immediately and the ephemeral child is interrupted or unsubscribed in the background. The new main thread stays selected. |
 | 6 | Disable `Send with Enter`, type a question, press Enter, then press Command+Enter or Ctrl+Enter. Re-enable the setting and repeat with Enter and Shift+Enter, including while an IME candidate is active. | The side composer follows the same global shortcut as the main composer: plain Enter inserts a line when disabled, the platform modifier sends, plain Enter sends when enabled, Shift+Enter inserts a line, and IME confirmation never submits. |
-| 7 | Switch between light and dark themes. | The panel, header, input, buttons, error surface, and message area remain readable with no light surface left on the dark page. |
+| 7 | Briefly disconnect the upstream API while a side response is running, then allow its normal retry to recover. | The side window shows the reconnect state, clears it on the next side event, and continues the same ephemeral conversation. |
+| 8 | Switch between light and dark themes. | The panel, header, input, buttons, error surface, and message area remain readable with no light surface left on the dark page. |
 
 ## Mobile Bottom Sheet
 

@@ -1048,7 +1048,7 @@
   <ThreadSideConversation
     v-if="isSideConversationOpen"
     :thread-id="sideConversationThreadId"
-    :cwd="sideConversationCwd"
+    :cwd="composerCwd"
     :messages="sideConversationMessages"
     :pending-requests="sideConversationServerRequests"
     :live-overlay="sideConversationLiveOverlay"
@@ -1319,7 +1319,6 @@ const {
   selectedThreadSubagents,
   selectedLiveOverlay,
   sideConversationThreadId,
-  sideConversationCwd,
   sideConversationMessages,
   sideConversationLiveOverlay,
   sideConversationServerRequests,

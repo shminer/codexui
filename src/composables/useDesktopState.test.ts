@@ -1177,7 +1177,7 @@ describe('side conversation lifecycle', () => {
     )
   })
 
-  it('does not fork after background disposal during parent restore', async () => {
+  it('does not fork after the parent thread changes during restore', async () => {
     installTestWindow()
     let resolveResume: (value: unknown) => void = () => {}
     gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => {
@@ -1188,7 +1188,7 @@ describe('side conversation lifecycle', () => {
     state.primeSelectedThread('parent-opening')
     const loadPromise = state.loadMessages('parent-opening')
     const openPromise = state.openSideConversation('parent-opening')
-    state.discardSideConversationInBackground()
+    state.primeSelectedThread('other-thread')
     resolveResume({
       model: 'gpt-5.4',
       modelProvider: 'codex',
@@ -1351,7 +1351,7 @@ describe('side conversation lifecycle', () => {
     expect(gatewayMocks.discardSideConversationThread).not.toHaveBeenCalled()
   })
 
-  it('keeps the side conversation open when the main thread changes', async () => {
+  it('ends the side conversation when the main thread changes', async () => {
     installTestWindow()
     gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-stays-open' })
 
@@ -1360,32 +1360,59 @@ describe('side conversation lifecycle', () => {
     await state.openSideConversation('parent-thread')
     state.primeSelectedThread('other-main-thread')
 
+    expect(state.isSideConversationOpen.value).toBe(false)
+    expect(state.sideConversationParentThreadId.value).toBe('')
+    expect(state.sideConversationThreadId.value).toBe('')
+    await flushMicrotasks()
+    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledWith(
+      'side-stays-open',
+      '',
+    )
+  })
+
+  it('keeps the side conversation open when the parent thread is selected again', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-same-parent' })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.openSideConversation('parent-thread')
+    state.primeSelectedThread('parent-thread')
+
     expect(state.isSideConversationOpen.value).toBe(true)
-    expect(state.sideConversationParentThreadId.value).toBe('parent-thread')
-    expect(state.sideConversationThreadId.value).toBe('side-stays-open')
+    expect(state.sideConversationThreadId.value).toBe('side-same-parent')
     expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
   })
 
-  it('keeps the parent cwd when the main thread changes', async () => {
+  it('clears a retrying side error after the next side event', async () => {
     installTestWindow()
-    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
-      groups: [{
-        projectName: 'Projects',
-        threads: [
-          thread('parent-thread', '/tmp/project-a'),
-          thread('other-main-thread', '/tmp/project-b'),
-        ],
-      }],
-      nextCursor: null,
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
     })
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-parent-cwd' })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-reconnect' })
 
     const state = useDesktopState()
-    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startPolling()
     await state.openSideConversation('parent-thread')
-    state.primeSelectedThread('other-main-thread')
+    notificationHandler({
+      method: 'error',
+      params: { threadId: 'side-reconnect', message: 'Reconnecting', willRetry: true },
+    })
 
-    expect(state.sideConversationCwd.value).toBe('/tmp/project-a')
+    expect(state.sideConversationLiveOverlay.value?.errorText).toBe('Reconnecting')
+    expect(state.sideConversationError.value).toBe('')
+
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'side-reconnect', turn: { id: 'side-reconnect-turn' } },
+    })
+
+    expect(state.sideConversationLiveOverlay.value?.errorText).toBe('')
+    expect(state.isSideConversationOpen.value).toBe(true)
+    state.stopPolling()
   })
 
   it('rejects pending side requests before background cleanup', async () => {
