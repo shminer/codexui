@@ -1398,6 +1398,10 @@ describe('side conversation lifecycle', () => {
     state.startPolling()
     await state.openSideConversation('parent-thread')
     notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'side-reconnect', turn: { id: 'side-reconnect-turn' } },
+    })
+    notificationHandler({
       method: 'error',
       params: { threadId: 'side-reconnect', message: 'Reconnecting', willRetry: true },
     })
