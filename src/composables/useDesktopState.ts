@@ -6363,6 +6363,9 @@ export function useDesktopState() {
     ) {
       pendingThreadMessageRefresh.add(selectedThreadId.value)
     }
+    if (sideConversationThreadId.value) {
+      pendingThreadMessageRefresh.add(sideConversationThreadId.value)
+    }
     await syncFromNotifications()
   }
 

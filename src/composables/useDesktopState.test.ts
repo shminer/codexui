@@ -1499,6 +1499,43 @@ describe('side conversation lifecycle', () => {
     state.stopPolling()
   })
 
+  it('refreshes an active side conversation after the notification bridge reconnects', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread
+      .mockResolvedValueOnce({
+        model: 'gpt-5.6', modelProvider: 'codex', messages: [], inProgress: false,
+        activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [],
+      })
+      .mockResolvedValueOnce({
+        model: 'gpt-5.6', modelProvider: 'codex', messages: [], inProgress: false,
+        activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [],
+      })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.loadMessages('parent-thread')
+    await state.openSideConversation('parent-thread')
+    state.startPolling()
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'side-thread-default', turn: { id: 'side-turn' } },
+    })
+
+    expect(state.isSideConversationInProgress.value).toBe(true)
+    notificationHandler({ method: 'ready' })
+    await flushMicrotasks()
+
+    expect(gatewayMocks.resumeThread).toHaveBeenLastCalledWith('side-thread-default')
+    expect(state.isSideConversationInProgress.value).toBe(false)
+    state.stopPolling()
+  })
+
   it('rejects pending side requests before background cleanup', async () => {
     installTestWindow()
     let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}

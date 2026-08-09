@@ -317,6 +317,10 @@
   @apply text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100;
 }
 
+:root.dark .side-conversation-end-button {
+  @apply text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100;
+}
+
 :root.dark .side-conversation-status {
   @apply text-zinc-400;
 }
