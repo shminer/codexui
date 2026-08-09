@@ -6353,7 +6353,10 @@ export function useDesktopState() {
     }
   }
 
-  async function recoverBridgeState(epoch: number): Promise<void> {
+  async function recoverBridgeState(
+    epoch: number,
+    sideThreadId = sideConversationThreadId.value,
+  ): Promise<void> {
     await loadPendingServerRequestsFromBridge(epoch)
     if (epoch !== pollingEpoch) return
     pendingThreadsRefresh = !hasLoadedThreads.value
@@ -6363,8 +6366,8 @@ export function useDesktopState() {
     ) {
       pendingThreadMessageRefresh.add(selectedThreadId.value)
     }
-    if (sideConversationThreadId.value) {
-      pendingThreadMessageRefresh.add(sideConversationThreadId.value)
+    if (sideThreadId && sideThreadId === sideConversationThreadId.value) {
+      pendingThreadMessageRefresh.add(sideThreadId)
     }
     await syncFromNotifications()
   }

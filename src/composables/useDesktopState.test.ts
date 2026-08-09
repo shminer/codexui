@@ -1507,6 +1507,10 @@ describe('side conversation lifecycle', () => {
       return vi.fn()
     })
     gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('parent-thread', '/tmp/project')] }],
+      nextCursor: null,
+    })
     gatewayMocks.resumeThread
       .mockResolvedValueOnce({
         model: 'gpt-5.6', modelProvider: 'codex', messages: [], inProgress: false,
@@ -1518,6 +1522,7 @@ describe('side conversation lifecycle', () => {
       })
 
     const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
     state.primeSelectedThread('parent-thread')
     await state.loadMessages('parent-thread')
     await state.openSideConversation('parent-thread')
@@ -1533,6 +1538,48 @@ describe('side conversation lifecycle', () => {
 
     expect(gatewayMocks.resumeThread).toHaveBeenLastCalledWith('side-thread-default')
     expect(state.isSideConversationInProgress.value).toBe(false)
+    state.stopPolling()
+  })
+
+  it('does not refresh a replacement side conversation from an older ready event', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    let resolvePendingRequests: (rows: unknown[]) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('parent-thread', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.6', modelProvider: 'codex', messages: [], inProgress: false,
+      activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [],
+    })
+    gatewayMocks.startSideConversation
+      .mockResolvedValueOnce({ threadId: 'side-a' })
+      .mockResolvedValueOnce({ threadId: 'side-b' })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('parent-thread')
+    await state.loadMessages('parent-thread')
+    await state.openSideConversation('parent-thread')
+    state.startPolling()
+    await flushMicrotasks()
+    gatewayMocks.getPendingServerRequests.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePendingRequests = resolve
+    }))
+    notificationHandler({ method: 'ready' })
+    state.endSideConversation()
+    await state.openSideConversation('parent-thread')
+    resolvePendingRequests([])
+    await flushMicrotasks()
+
+    expect(state.sideConversationThreadId.value).toBe('side-b')
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
     state.stopPolling()
   })
 
