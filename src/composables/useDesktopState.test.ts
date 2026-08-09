@@ -1406,11 +1406,20 @@ describe('side conversation lifecycle', () => {
     expect(state.sideConversationError.value).toBe('')
 
     notificationHandler({
-      method: 'turn/started',
-      params: { threadId: 'side-reconnect', turn: { id: 'side-reconnect-turn' } },
+      method: 'server/request',
+      params: {
+        id: 30,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'side-reconnect',
+          turnId: 'side-reconnect-turn',
+          itemId: 'side-reconnect-item',
+        },
+      },
     })
 
     expect(state.sideConversationLiveOverlay.value?.errorText).toBe('')
+    expect(state.sideConversationServerRequests.value).toHaveLength(1)
     expect(state.isSideConversationOpen.value).toBe(true)
     state.stopPolling()
   })

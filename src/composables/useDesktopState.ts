@@ -4089,6 +4089,10 @@ export function useDesktopState() {
       }
       return
     }
+    const notificationErrorState = readNotificationErrorState(notification)
+    if (!notificationErrorState && notificationThreadId) {
+      clearTransientTurnErrorForThread(notificationThreadId)
+    }
     if (handleServerRequestNotification(notification)) {
       return
     }
@@ -4128,10 +4132,6 @@ export function useDesktopState() {
 
     if (notificationThreadId) {
       mergeSubagentNotification(notificationThreadId, notification)
-    }
-    const notificationErrorState = readNotificationErrorState(notification)
-    if (!notificationErrorState && notificationThreadId) {
-      clearTransientTurnErrorForThread(notificationThreadId)
     }
 
     const startedTurn = readTurnStartedInfo(notification)
