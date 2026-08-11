@@ -89,16 +89,21 @@ describe('side conversation lifecycle', () => {
       })
     }))
 
-    await expect(startSideConversation('parent-thread-1', 'gpt-5.4', 'high', 'opencode_zen')).resolves.toEqual({
+    const createdThreadIds: string[] = []
+    await expect(startSideConversation('parent-thread-1', 'gpt-5.4', 'high', 'opencode_zen', (threadId) => {
+      createdThreadIds.push(threadId)
+    })).resolves.toEqual({
       threadId: 'side-thread-1',
     })
     await discardSideConversationThread('side-thread-1', 'turn-1')
 
+    expect(createdThreadIds).toEqual(['side-thread-1'])
     expect(requests.map((request) => request.method)).toEqual([
       'config/read',
       'thread/fork',
       'thread/inject_items',
       'turn/interrupt',
+      'thread/archive',
       'thread/unsubscribe',
     ])
     expect(requests[1].params).toMatchObject({
@@ -106,10 +111,10 @@ describe('side conversation lifecycle', () => {
       model: 'gpt-5.4',
       modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
-      ephemeral: true,
       excludeTurns: true,
-      persistExtendedHistory: false,
+      persistExtendedHistory: true,
     })
+    expect(requests[1].params).not.toHaveProperty('ephemeral')
     expect(requests[1].params).not.toHaveProperty('sideConversation')
     expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
     expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
@@ -135,10 +140,10 @@ describe('side conversation lifecycle', () => {
 
     await discardSideConversationThread('side-thread-idle')
 
-    expect(requests).toEqual([{
-      method: 'thread/unsubscribe',
-      params: { threadId: 'side-thread-idle' },
-    }])
+    expect(requests).toEqual([
+      { method: 'thread/archive', params: { threadId: 'side-thread-idle' } },
+      { method: 'thread/unsubscribe', params: { threadId: 'side-thread-idle' } },
+    ])
   })
 
   it('still unsubscribes when the active turn completes before interrupt arrives', async () => {
@@ -159,6 +164,7 @@ describe('side conversation lifecycle', () => {
 
     expect(requests.map((request) => request.method)).toEqual([
       'turn/interrupt',
+      'thread/archive',
       'thread/unsubscribe',
     ])
   })
@@ -195,6 +201,7 @@ describe('side conversation lifecycle', () => {
 
     expect(requests.map((request) => request.method)).toEqual([
       'turn/interrupt',
+      'thread/archive',
       'thread/unsubscribe',
     ])
   })
@@ -211,10 +218,10 @@ describe('side conversation lifecycle', () => {
 
     await discardSideConversationThreadInBackground('side-thread-idle')
 
-    expect(requests).toEqual([{
-      method: 'thread/unsubscribe',
-      params: { threadId: 'side-thread-idle' },
-    }])
+    expect(requests).toEqual([
+      { method: 'thread/archive', params: { threadId: 'side-thread-idle' } },
+      { method: 'thread/unsubscribe', params: { threadId: 'side-thread-idle' } },
+    ])
   })
 
   it('retries a background interrupt with the active turn id from a mismatch', async () => {
@@ -243,6 +250,10 @@ describe('side conversation lifecycle', () => {
         params: { threadId: 'side-thread-race', turnId: 'actual-turn' },
       },
       {
+        method: 'thread/archive',
+        params: { threadId: 'side-thread-race' },
+      },
+      {
         method: 'thread/unsubscribe',
         params: { threadId: 'side-thread-race' },
       },
@@ -261,10 +272,30 @@ describe('side conversation lifecycle', () => {
 
     await discardSideConversationThread('side-thread-retry', 'completed-turn', { skipInterrupt: true })
 
-    expect(requests).toEqual([{
-      method: 'thread/unsubscribe',
-      params: { threadId: 'side-thread-retry' },
-    }])
+    expect(requests).toEqual([
+      { method: 'thread/archive', params: { threadId: 'side-thread-retry' } },
+      { method: 'thread/unsubscribe', params: { threadId: 'side-thread-retry' } },
+    ])
+  })
+
+  it('still unsubscribes when archive fails during background cleanup', async () => {
+    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
+      requests.push(request)
+      const isArchive = request.method === 'thread/archive'
+      return new Response(JSON.stringify(isArchive ? { error: 'archive failed' } : { result: {} }), {
+        status: isArchive ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await discardSideConversationThreadInBackground('side-thread-archive-failed')
+
+    expect(requests.map((request) => request.method)).toEqual([
+      'thread/archive',
+      'thread/unsubscribe',
+    ])
   })
 })
 

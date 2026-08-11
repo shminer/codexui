@@ -4599,15 +4599,25 @@ export function useDesktopState() {
     return orderGroupsByWorkspaceProjectOrder(filteredGroups, rootsState, duplicateLeafNames)
   }
 
+  function filterSideConversationThread(groups: UiProjectGroup[]): UiProjectGroup[] {
+    const threadId = sideConversationThreadId.value || loadSideConversationSession()?.childThreadId || ''
+    let filteredGroups = threadId ? removeThreadFromGroups(groups, threadId) : groups
+    for (const discardedThreadId of discardedSideConversationThreadIds) {
+      filteredGroups = removeThreadFromGroups(filteredGroups, discardedThreadId)
+    }
+    return filteredGroups
+  }
+
   function applyThreadGroups(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): void {
-    const visibleGroups = filterGroupsByWorkspaceRoots(groups, rootsState)
+    const sideConversationFilteredGroups = filterSideConversationThread(groups)
+    const visibleGroups = filterGroupsByWorkspaceRoots(sideConversationFilteredGroups, rootsState)
     const hasWorkspaceRootsState = Boolean(
       rootsState && (rootsState.order.length > 0 || rootsState.projectOrder.length > 0 || (rootsState.remoteProjects ?? []).length > 0),
     )
 
     const nextProjectOrder = rootsState?.projectOrder.length
       ? mergeProjectOrder(
-        getWorkspaceProjectOrderNames(rootsState, collectDuplicateProjectLeafNames(groups, rootsState)),
+        getWorkspaceProjectOrderNames(rootsState, collectDuplicateProjectLeafNames(sideConversationFilteredGroups, rootsState)),
         visibleGroups,
       )
       : mergeProjectOrder(projectOrder.value, visibleGroups)
@@ -4620,12 +4630,16 @@ export function useDesktopState() {
 
     const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
     markServerListedThreads(new Set(flattenThreads(orderedGroups).map((thread) => thread.id)))
+    const filteredSourceGroups = filterSideConversationThread(sourceGroups.value)
     const mergedWithInProgress = mergeIncomingWithLocalInProgressThreads(
-      sourceGroups.value,
+      filteredSourceGroups,
       orderedGroups,
       inProgressById.value,
     )
-    sourceGroups.value = mergeThreadGroups(sourceGroups.value, mergedWithInProgress)
+    sourceGroups.value = mergeThreadGroups(
+      filteredSourceGroups,
+      mergedWithInProgress,
+    )
     const activeThreadIds = new Set(flattenThreads(sourceGroups.value).map((thread) => thread.id))
     syncNonSuccessCompletionReadWatermarks(orderedGroups, activeThreadIds)
     inProgressById.value = pruneThreadStateMap(
@@ -5402,6 +5416,7 @@ export function useDesktopState() {
       clearSideConversationSession()
       return
     }
+
     if (typeof window === 'undefined') return
 
     const session: SideConversationSession = {
@@ -5437,6 +5452,7 @@ export function useDesktopState() {
     if (threadId) {
       rememberDiscardedSideConversationThread(threadId)
       clearSideConversationThreadState(threadId)
+      removeArchivedThreadFromLoadedLists(threadId)
     }
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
@@ -5463,7 +5479,10 @@ export function useDesktopState() {
       session.parentThreadId !== selectedThreadId.value
       || session.accountStorageId !== activeAccountStorageId.value
     ) {
+      rememberDiscardedSideConversationThread(session.childThreadId)
+      removeArchivedThreadFromLoadedLists(session.childThreadId)
       clearSideConversationSession()
+      void discardSideConversationThreadInBackground(session.childThreadId)
       return
     }
 
@@ -5545,23 +5564,30 @@ export function useDesktopState() {
       )
       if (openEpoch !== sideConversationEpoch) return
 
+      const adoptSideConversationThread = (threadId: string): void => {
+        if (openEpoch !== sideConversationEpoch) {
+          rememberDiscardedSideConversationThread(threadId)
+          clearSideConversationThreadState(threadId)
+          removeArchivedThreadFromLoadedLists(threadId)
+          void discardSideConversationThreadInBackground(threadId)
+          return
+        }
+        sideConversationThreadId.value = threadId
+        sideConversationModelId.value = initialModelId
+        sideConversationReasoningEffort.value = initialEffort
+        sideConversationCollaborationMode.value = initialCollaborationMode
+        persistSideConversationSession()
+      }
       const started = await startSideConversationThread(
         normalizedParentThreadId,
         initialModelId,
         initialEffort || undefined,
         initialRuntimeProviderId,
+        adoptSideConversationThread,
       )
-      if (openEpoch !== sideConversationEpoch) {
-        rememberDiscardedSideConversationThread(started.threadId)
-        clearSideConversationThreadState(started.threadId)
-        void discardSideConversationThreadInBackground(started.threadId)
-        return
+      if (openEpoch === sideConversationEpoch && sideConversationThreadId.value !== started.threadId) {
+        adoptSideConversationThread(started.threadId)
       }
-      sideConversationThreadId.value = started.threadId
-      sideConversationModelId.value = initialModelId
-      sideConversationReasoningEffort.value = initialEffort
-      sideConversationCollaborationMode.value = initialCollaborationMode
-      persistSideConversationSession()
     } catch (unknownError) {
       if (openEpoch === sideConversationEpoch) {
         error.value = unknownError instanceof Error

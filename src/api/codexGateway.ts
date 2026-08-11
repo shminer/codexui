@@ -1867,6 +1867,7 @@ export async function startSideConversation(
   model?: string,
   effort?: ReasoningEffort,
   modelProvider?: string,
+  onThreadCreated?: (threadId: string) => void,
 ): Promise<StartedSideConversation> {
   const normalizedParentThreadId = parentThreadId.trim()
   if (!normalizedParentThreadId) {
@@ -1888,14 +1889,14 @@ export async function startSideConversation(
       ...(selectedProvider ? { modelProvider: selectedProvider } : {}),
       ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
       developerInstructions,
-      ephemeral: true,
       excludeTurns: true,
-      persistExtendedHistory: false,
+      persistExtendedHistory: true,
     })
     childThreadId = normalizeThreadIdFromPayload(payload)
     if (!childThreadId) {
       throw new Error('thread/fork did not return a thread id')
     }
+    onThreadCreated?.(childThreadId)
 
     await callRpc('thread/inject_items', {
       threadId: childThreadId,
@@ -1931,7 +1932,11 @@ export async function discardSideConversationThread(
       if (!(error instanceof Error && error.message.includes('no active turn to interrupt'))) throw error
     }
   }
-  await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
+  try {
+    await archiveThread(normalizedThreadId)
+  } finally {
+    await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
+  }
 }
 
 export async function discardSideConversationThreadInBackground(threadId: string, turnId?: string): Promise<void> {
@@ -1958,9 +1963,14 @@ export async function discardSideConversationThreadInBackground(threadId: string
     }
   }
   try {
+    await archiveThread(normalizedThreadId)
+  } catch {
+    // The side thread may already have been removed.
+  }
+  try {
     await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
   } catch {
-    // Ephemeral background cleanup has no visible state to restore.
+    // Background cleanup has no visible state to restore.
   }
 }
 
