@@ -962,6 +962,7 @@
                 <div class="content-thread-layout">
                   <div class="content-thread">
                     <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
+                      :is-turn-in-progress="isSelectedThreadInProgress"
                       :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                       :live-overlay="liveOverlay"
                       :pending-requests="selectedThreadServerRequests"

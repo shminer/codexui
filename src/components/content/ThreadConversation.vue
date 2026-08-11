@@ -1343,6 +1343,7 @@ const props = defineProps<{
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
   isLoading: boolean
+  isTurnInProgress?: boolean
   activeThreadId: string
   cwd: string
   readonly?: boolean
@@ -2413,11 +2414,11 @@ const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
 })
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return !props.readonly && typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
 }
 
 function editMessage(messageId: string): void {
-  if (props.readonly) return
+  if (props.readonly || props.isTurnInProgress) return
   const turnId = editableTurnIdByMessageId.value[messageId]
   if (!turnId) return
   emit('rollback', { turnId })
