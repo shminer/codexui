@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearThreadGoal, discardSideConversationThread, discardSideConversationThreadInBackground, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -278,7 +278,7 @@ describe('side conversation lifecycle', () => {
     })).resolves.toEqual({
       threadId: 'side-thread-1',
     })
-    await discardSideConversationThread('side-thread-1', 'turn-1')
+    await discardSideConversationThreadInBackground('side-thread-1', 'turn-1')
 
     expect(createdThreadIds).toEqual(['side-thread-1'])
     expect(requests.map((request) => request.method)).toEqual([
@@ -286,7 +286,6 @@ describe('side conversation lifecycle', () => {
       'thread/fork',
       'thread/inject_items',
       'turn/interrupt',
-      'thread/archive',
       'thread/unsubscribe',
     ])
     expect(requests[1].params).toMatchObject({
@@ -294,10 +293,10 @@ describe('side conversation lifecycle', () => {
       model: 'gpt-5.4',
       modelProvider: 'opencode_zen',
       config: { model_reasoning_effort: 'high' },
+      ephemeral: true,
       excludeTurns: true,
-      persistExtendedHistory: true,
     })
-    expect(requests[1].params).not.toHaveProperty('ephemeral')
+    expect(requests[1].params).not.toHaveProperty('persistExtendedHistory')
     expect(requests[1].params).not.toHaveProperty('sideConversation')
     expect(requests[1].params.developerInstructions).toContain('Parent instructions.')
     expect(requests[1].params.developerInstructions).toContain('You are in a side conversation')
@@ -309,62 +308,6 @@ describe('side conversation lifecycle', () => {
         content: [{ type: 'input_text' }],
       }],
     })
-  })
-
-  it('unsubscribes an idle side thread without interrupting a missing turn', async () => {
-    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
-      return new Response(JSON.stringify({ result: {} }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }))
-
-    await discardSideConversationThread('side-thread-idle')
-
-    expect(requests).toEqual([
-      { method: 'thread/archive', params: { threadId: 'side-thread-idle' } },
-      { method: 'thread/unsubscribe', params: { threadId: 'side-thread-idle' } },
-    ])
-  })
-
-  it('still unsubscribes when the active turn completes before interrupt arrives', async () => {
-    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
-      requests.push(request)
-      const isInterrupt = request.method === 'turn/interrupt'
-      return new Response(JSON.stringify(isInterrupt
-        ? { error: 'no active turn to interrupt' }
-        : { result: {} }), {
-        status: isInterrupt ? 500 : 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }))
-
-    await discardSideConversationThread('side-thread-completed', 'completed-turn')
-
-    expect(requests.map((request) => request.method)).toEqual([
-      'turn/interrupt',
-      'thread/archive',
-      'thread/unsubscribe',
-    ])
-  })
-
-  it('keeps explicit cleanup visible when interrupt fails', async () => {
-    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
-      requests.push(request)
-      return new Response(JSON.stringify({ error: 'interrupt failed' }), {
-        status: request.method === 'turn/interrupt' ? 500 : 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }))
-
-    await expect(discardSideConversationThread('side-thread-failed', 'turn-1')).rejects.toThrow('interrupt failed')
-    expect(requests.map((request) => request.method)).toEqual(['turn/interrupt'])
   })
 
   it('still unsubscribes during background cleanup when interrupt fails', async () => {
@@ -384,7 +327,6 @@ describe('side conversation lifecycle', () => {
 
     expect(requests.map((request) => request.method)).toEqual([
       'turn/interrupt',
-      'thread/archive',
       'thread/unsubscribe',
     ])
   })
@@ -402,7 +344,6 @@ describe('side conversation lifecycle', () => {
     await discardSideConversationThreadInBackground('side-thread-idle')
 
     expect(requests).toEqual([
-      { method: 'thread/archive', params: { threadId: 'side-thread-idle' } },
       { method: 'thread/unsubscribe', params: { threadId: 'side-thread-idle' } },
     ])
   })
@@ -433,51 +374,31 @@ describe('side conversation lifecycle', () => {
         params: { threadId: 'side-thread-race', turnId: 'actual-turn' },
       },
       {
-        method: 'thread/archive',
-        params: { threadId: 'side-thread-race' },
-      },
-      {
         method: 'thread/unsubscribe',
         params: { threadId: 'side-thread-race' },
       },
     ])
   })
 
-  it('can retry unsubscribe without interrupting the same turn again', async () => {
+  it('uses keepalive cleanup when the page is hidden', () => {
     const requests: Array<{ method: string, params: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
-      return new Response(JSON.stringify({ result: {} }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      expect(init?.keepalive).toBe(true)
+      return Response.json({ result: {} })
     }))
 
-    await discardSideConversationThread('side-thread-retry', 'completed-turn', { skipInterrupt: true })
+    discardSideConversationThreadOnPageHide('side-thread-pagehide', 'side-turn-pagehide')
 
     expect(requests).toEqual([
-      { method: 'thread/archive', params: { threadId: 'side-thread-retry' } },
-      { method: 'thread/unsubscribe', params: { threadId: 'side-thread-retry' } },
-    ])
-  })
-
-  it('still unsubscribes when archive fails during background cleanup', async () => {
-    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> }
-      requests.push(request)
-      const isArchive = request.method === 'thread/archive'
-      return new Response(JSON.stringify(isArchive ? { error: 'archive failed' } : { result: {} }), {
-        status: isArchive ? 500 : 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }))
-
-    await discardSideConversationThreadInBackground('side-thread-archive-failed')
-
-    expect(requests.map((request) => request.method)).toEqual([
-      'thread/archive',
-      'thread/unsubscribe',
+      {
+        method: 'turn/interrupt',
+        params: { threadId: 'side-thread-pagehide', turnId: 'side-turn-pagehide' },
+      },
+      {
+        method: 'thread/unsubscribe',
+        params: { threadId: 'side-thread-pagehide' },
+      },
     ])
   })
 })

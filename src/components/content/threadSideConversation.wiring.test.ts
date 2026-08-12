@@ -2,22 +2,22 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
-  it('shares the global send shortcut, hides with close, and ends explicitly', async () => {
+  it('shares the global send shortcut and ends from every close control', async () => {
     const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('sendWithEnter?: boolean')
-    expect(source).toContain('visible: boolean')
+    expect(source).not.toContain('visible: boolean')
     expect(source).toContain('draft: string')
     expect(source).toContain('@keydown="onInputKeydown"')
     expect(source).toContain('@input="updateDraft"')
     expect(source).toContain('shouldSubmitComposer(event, props.sendWithEnter)')
     expect(source).toContain('function requestClose(): void')
     expect(source).toContain("function requestClose(): void {\n  emit('close')\n}")
-    expect(source).toContain("end: []")
+    expect(source).not.toContain("end: []")
     expect(source).toContain("'update:draft': [value: string]")
     expect(source).toContain("t('End chat')")
-    expect(source).toContain('v-show="visible"')
+    expect(source).not.toContain('v-show="visible"')
     expect(source).not.toContain(':disabled="isOpening"')
     expect(source).toContain('@click.self="requestClose"')
     expect(source).toContain('@click="requestClose"')
@@ -25,10 +25,10 @@ describe('ThreadSideConversation wiring', () => {
     expect(source).toContain('side-conversation-action--stop')
     expect(source).not.toContain('side-conversation-draft.v2.')
     expect(appSource).toContain(':send-with-enter="sendWithEnter"')
-    expect(appSource).toContain(':visible="isSideConversationVisible"')
+    expect(appSource).toContain(':side-conversation-open="isSideConversationOpen"')
     expect(appSource).toContain(':draft="sideConversationDraft"')
-    expect(appSource).toContain('@close="hideSideConversation"')
-    expect(appSource).toContain('@end="endSideConversation"')
+    expect(appSource).toContain('@close="endSideConversation"')
+    expect(appSource).not.toContain('@end="endSideConversation"')
     expect(appSource).toContain('@update:draft="setSideConversationDraft"')
     expect(appSource).toContain('@interrupt="interruptSideConversationTurn"')
     expect(appSource).toContain(':cwd="composerCwd"')

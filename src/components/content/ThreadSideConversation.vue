@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-show="visible" class="side-conversation-host" @click.self="requestClose">
+    <div class="side-conversation-host" @click.self="requestClose">
       <section
         class="side-conversation-panel"
         role="dialog"
@@ -14,7 +14,7 @@
           <button
             class="side-conversation-end-button"
             type="button"
-            @click="emit('end')"
+            @click="requestClose"
           >
             {{ t('End chat') }}
           </button>
@@ -115,13 +115,11 @@ const props = defineProps<{
   isOpening: boolean
   isTurnInProgress: boolean
   sendWithEnter?: boolean
-  visible: boolean
   draft: string
 }>()
 
 const emit = defineEmits<{
   close: []
-  end: []
   send: [text: string]
   'update:draft': [value: string]
   interrupt: []
@@ -160,9 +158,9 @@ function onInputKeydown(event: KeyboardEvent): void {
 }
 
 watch(
-  () => [props.threadId, props.visible] as const,
-  ([threadId, visible]) => {
-    if (!threadId || !visible) return
+  () => props.threadId,
+  (threadId) => {
+    if (!threadId) return
     void nextTick(() => inputRef.value?.focus())
   },
   { immediate: true },

@@ -2004,8 +2004,8 @@ export async function startSideConversation(
       ...(selectedProvider ? { modelProvider: selectedProvider } : {}),
       ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
       developerInstructions,
+      ephemeral: true,
       excludeTurns: true,
-      persistExtendedHistory: true,
     })
     childThreadId = normalizeThreadIdFromPayload(payload)
     if (!childThreadId) {
@@ -2028,29 +2028,6 @@ export async function startSideConversation(
       await discardSideConversationThreadInBackground(childThreadId)
     }
     throw normalizeCodexApiError(error, 'Failed to start side conversation', 'thread/fork')
-  }
-}
-
-export async function discardSideConversationThread(
-  threadId: string,
-  turnId?: string,
-  options: { skipInterrupt?: boolean } = {},
-): Promise<void> {
-  const normalizedThreadId = threadId.trim()
-  if (!normalizedThreadId) return
-
-  const normalizedTurnId = turnId?.trim() || ''
-  if (options.skipInterrupt !== true && normalizedTurnId) {
-    try {
-      await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
-    } catch (error) {
-      if (!(error instanceof Error && error.message.includes('no active turn to interrupt'))) throw error
-    }
-  }
-  try {
-    await archiveThread(normalizedThreadId)
-  } finally {
-    await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
   }
 }
 
@@ -2078,15 +2055,29 @@ export async function discardSideConversationThreadInBackground(threadId: string
     }
   }
   try {
-    await archiveThread(normalizedThreadId)
-  } catch {
-    // The side thread may already have been removed.
-  }
-  try {
     await callRpc('thread/unsubscribe', { threadId: normalizedThreadId })
   } catch {
-    // Background cleanup has no visible state to restore.
+    // Ephemeral background cleanup has no visible state to restore.
   }
+}
+
+export function discardSideConversationThreadOnPageHide(threadId: string, turnId?: string): void {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
+
+  const send = (method: string, params: Record<string, string>): void => {
+    void fetch('/codex-api/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, params }),
+      keepalive: true,
+    }).catch(() => {})
+  }
+  const normalizedTurnId = turnId?.trim() || ''
+  if (normalizedTurnId) {
+    send('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
+  }
+  send('thread/unsubscribe', { threadId: normalizedThreadId })
 }
 
 export type FileAttachmentParam = { label: string; path: string; fsPath: string }

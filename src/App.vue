@@ -1037,7 +1037,7 @@
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :side-conversation-available="Boolean(selectedThreadId)"
-                    :side-conversation-open="isSideConversationVisible"
+                    :side-conversation-open="isSideConversationOpen"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
@@ -1059,7 +1059,6 @@
   </DesktopLayout>
   <ThreadSideConversation
     v-if="isSideConversationOpen"
-    :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
     :cwd="composerCwd"
     :messages="sideConversationMessages"
@@ -1070,8 +1069,7 @@
     :is-turn-in-progress="isSideConversationInProgress"
     :send-with-enter="sendWithEnter"
     :draft="sideConversationDraft"
-    @close="hideSideConversation"
-    @end="endSideConversation"
+    @close="endSideConversation"
     @update:draft="setSideConversationDraft"
     @send="sendSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
@@ -1346,7 +1344,6 @@ const {
   sideConversationServerRequests,
   sideConversationError,
   isSideConversationOpen,
-  isSideConversationVisible,
   isSideConversationOpening,
   isSideConversationInProgress,
   sideConversationDraft,
@@ -1388,13 +1385,12 @@ const {
   sendMessageToNewThread,
   interruptSelectedThreadTurn,
   openSideConversation,
-  restoreSideConversation,
-  hideSideConversation,
   endSideConversation,
   setSideConversationDraft,
   sendSideConversationMessage,
   interruptSideConversationTurn,
   discardSideConversationInBackground,
+  discardSideConversationOnPageHide,
   setActiveAccountStorageId,
   selectedThreadQueuedMessages,
   removeQueuedMessage,
@@ -2074,6 +2070,7 @@ onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
   window.addEventListener('pageshow', onWindowPageShow)
+  window.addEventListener('pagehide', discardSideConversationOnPageHide)
   window.addEventListener('focus', onWindowFocus)
   window.addEventListener('resize', updateVisualViewportState)
   window.visualViewport?.addEventListener('resize', updateVisualViewportState)
@@ -2108,6 +2105,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onWindowKeyDown)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   window.removeEventListener('pageshow', onWindowPageShow)
+  window.removeEventListener('pagehide', discardSideConversationOnPageHide)
   window.removeEventListener('focus', onWindowFocus)
   window.removeEventListener('resize', updateVisualViewportState)
   window.visualViewport?.removeEventListener('resize', updateVisualViewportState)
@@ -4593,7 +4591,6 @@ async function initialize(): Promise<void> {
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
   startPolling()
-  void restoreSideConversation()
 }
 
 async function syncThreadSelectionWithRoute(): Promise<void> {

@@ -14,8 +14,8 @@ import type { WorkspaceRootsState } from '../api/codexGateway'
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   clearThreadGoal: vi.fn(),
-  discardSideConversationThread: vi.fn(),
   discardSideConversationThreadInBackground: vi.fn(),
+  discardSideConversationThreadOnPageHide: vi.fn(),
   forkThread: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getAvailableCollaborationModes: vi.fn(),
@@ -132,7 +132,6 @@ async function setupTurnLifecycleNotificationState(selectedThreadId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  gatewayMocks.discardSideConversationThread.mockResolvedValue(undefined)
   gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
   gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-thread-default' })
   gatewayMocks.replyToServerRequest.mockResolvedValue(undefined)
@@ -1550,80 +1549,9 @@ describe('side conversation lifecycle', () => {
       'side-background',
       '',
     )
-    expect(gatewayMocks.discardSideConversationThread).not.toHaveBeenCalled()
   })
 
-  it('hides and reopens the same side conversation without discarding it', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-hidden' })
-
-    const state = useDesktopState()
-    await state.openSideConversation('parent-thread', 'gpt-5.6', 'high')
-    state.setSideConversationDraft('unsent draft')
-    state.hideSideConversation()
-
-    expect(state.isSideConversationOpen.value).toBe(true)
-    expect(state.isSideConversationVisible.value).toBe(false)
-    expect(state.sideConversationThreadId.value).toBe('side-hidden')
-    expect(state.sideConversationDraft.value).toBe('unsent draft')
-    expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
-    expect(JSON.parse(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')!)).toMatchObject({
-      parentThreadId: 'parent-thread',
-      childThreadId: 'side-hidden',
-      visible: false,
-      draft: 'unsent draft',
-    })
-
-    await state.openSideConversation('parent-thread')
-
-    expect(state.isSideConversationVisible.value).toBe(true)
-    expect(gatewayMocks.startSideConversation).toHaveBeenCalledTimes(1)
-  })
-
-  it('restores the visible side conversation from the current tab session', async () => {
-    installTestWindow({}, {
-      'codex-web-local.side-conversation-session.v1': JSON.stringify({
-        parentThreadId: 'parent-thread',
-        childThreadId: 'side-restored',
-        accountStorageId: '__default__',
-        modelId: 'gpt-5.6',
-        reasoningEffort: 'high',
-        collaborationMode: 'default',
-        visible: true,
-        draft: 'keep this draft',
-      }),
-    })
-    gatewayMocks.resumeThread.mockResolvedValue({
-      model: 'gpt-5.6',
-      modelProvider: 'codex',
-      messages: [{
-        id: 'side-restored-message',
-        role: 'assistant',
-        text: 'restored side reply',
-      }],
-      inProgress: true,
-      activeTurnId: 'side-turn',
-      hasMoreOlder: false,
-      turnIndexByTurnId: {},
-      subagents: [],
-    })
-
-    const state = useDesktopState()
-    state.primeSelectedThread('parent-thread')
-    await state.restoreSideConversation()
-
-    expect(gatewayMocks.resumeThread).toHaveBeenCalledWith('side-restored')
-    expect(state.isSideConversationOpen.value).toBe(true)
-    expect(state.isSideConversationVisible.value).toBe(true)
-    expect(state.sideConversationThreadId.value).toBe('side-restored')
-    expect(state.sideConversationDraft.value).toBe('keep this draft')
-    expect(state.isSideConversationInProgress.value).toBe(true)
-    expect(state.sideConversationMessages.value).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'side-restored-message', text: 'restored side reply' }),
-    ]))
-  })
-
-  it('persists the side child before thread setup completes', async () => {
+  it('adopts the side child before thread setup completes', async () => {
     installTestWindow()
     let finishStart: () => void = () => {}
     gatewayMocks.resumeThread.mockResolvedValue({
@@ -1656,123 +1584,48 @@ describe('side conversation lifecycle', () => {
     await flushMicrotasks()
 
     expect(state.sideConversationThreadId.value).toBe('side-opening')
-    expect(JSON.parse(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')!)).toMatchObject({
-      childThreadId: 'side-opening',
-      modelId: 'gpt-5.6',
-      reasoningEffort: 'high',
-    })
+    expect(window.sessionStorage.setItem).not.toHaveBeenCalled()
 
     finishStart()
     await openPromise
   })
 
-  it('keeps the stored side child out of the main thread list before restore', async () => {
-    installTestWindow({}, {
-      'codex-web-local.side-conversation-session.v1': JSON.stringify({
-        parentThreadId: 'parent-thread',
-        childThreadId: 'side-restored',
-        accountStorageId: '__default__',
-        modelId: 'gpt-5.6',
-        reasoningEffort: 'high',
-        collaborationMode: 'default',
-        visible: true,
-        draft: '',
-      }),
-    })
-    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
-      groups: [{
-        projectName: 'Project',
-        threads: [
-          thread('parent-thread', '/tmp/project'),
-          thread('side-restored', '/tmp/project'),
+  it('keeps inherited parent turns out of the side transcript', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-filtered' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
+    gatewayMocks.resumeThread
+      .mockResolvedValueOnce({
+        model: 'gpt-5.6', modelProvider: 'codex', messages: [], inProgress: false,
+        activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [],
+      })
+      .mockResolvedValueOnce({
+        model: 'gpt-5.6',
+        modelProvider: 'codex',
+        messages: [
+          { id: 'parent-history', role: 'assistant', text: 'old reply', turnId: 'parent-turn', createdAtIso: '2026-08-01T00:00:00.000Z' },
+          { id: 'side-user', role: 'user', text: 'question', turnId: 'side-turn', createdAtIso: '2026-08-13T00:00:00.000Z' },
+          { id: 'side-reply', role: 'assistant', text: 'answer', turnId: 'side-turn', createdAtIso: '2026-08-13T00:00:01.000Z' },
         ],
-      }],
-      nextCursor: null,
-    })
+        inProgress: false,
+        activeTurnId: '',
+        hasMoreOlder: true,
+        turnIndexByTurnId: { 'parent-turn': 0, 'side-turn': 1 },
+        subagents: [],
+      })
 
     const state = useDesktopState()
     state.primeSelectedThread('parent-thread')
-    await state.refreshAll({ includeSelectedThreadMessages: false })
+    await state.loadMessages('parent-thread')
+    await state.openSideConversation('parent-thread', 'gpt-5.6', 'high')
+    await state.sendSideConversationMessage('question')
+    await state.loadMessages('side-filtered', { force: true })
 
-    expect(state.projectGroups.value.flatMap((group) => group.threads).map((row) => row.id)).toEqual([
-      'parent-thread',
-    ])
-  })
-
-  it('clears a stored side session when its parent no longer matches', async () => {
-    installTestWindow({}, {
-      'codex-web-local.side-conversation-session.v1': JSON.stringify({
-        parentThreadId: 'old-parent-thread',
-        childThreadId: 'side-stale-parent',
-        accountStorageId: '__default__',
-        modelId: 'gpt-5.6',
-        reasoningEffort: 'high',
-        collaborationMode: 'default',
-        visible: true,
-        draft: '',
-      }),
-    })
-
-    const state = useDesktopState()
-    state.primeSelectedThread('new-parent-thread')
-    await state.restoreSideConversation()
-
-    expect(state.isSideConversationOpen.value).toBe(false)
-    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledWith(
-      'side-stale-parent',
-      '',
-    )
-    expect(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')).toBeNull()
-  })
-
-  it('cleans up a stored side session when its account no longer matches', async () => {
-    installTestWindow({}, {
-      'codex-web-local.side-conversation-session.v1': JSON.stringify({
-        parentThreadId: 'parent-thread',
-        childThreadId: 'side-stale-account',
-        accountStorageId: 'account-a',
-        modelId: 'gpt-5.6',
-        reasoningEffort: 'high',
-        collaborationMode: 'default',
-        visible: true,
-        draft: '',
-      }),
-    })
-
-    const state = useDesktopState()
-    state.primeSelectedThread('parent-thread')
-    await state.restoreSideConversation()
-
-    expect(state.isSideConversationOpen.value).toBe(false)
-    expect(gatewayMocks.discardSideConversationThreadInBackground).toHaveBeenCalledWith(
-      'side-stale-account',
-      '',
-    )
-    expect(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')).toBeNull()
-  })
-
-  it('clears a stale stored side session after resume fails', async () => {
-    installTestWindow({}, {
-      'codex-web-local.side-conversation-session.v1': JSON.stringify({
-        parentThreadId: 'parent-thread',
-        childThreadId: 'side-stale-thread',
-        accountStorageId: '__default__',
-        modelId: 'gpt-5.6',
-        reasoningEffort: 'high',
-        collaborationMode: 'default',
-        visible: true,
-        draft: '',
-      }),
-    })
-    gatewayMocks.resumeThread.mockRejectedValue(new Error('no rollout found for thread id'))
-
-    const state = useDesktopState()
-    state.primeSelectedThread('parent-thread')
-    await state.restoreSideConversation()
-
-    expect(state.isSideConversationOpen.value).toBe(false)
-    expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
-    expect(window.sessionStorage.getItem('codex-web-local.side-conversation-session.v1')).toBeNull()
+    expect(state.sideConversationMessages.value.map((message) => message.id)).not.toContain('parent-history')
+    expect(state.sideConversationMessages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'side-user', turnId: 'side-turn' }),
+      expect.objectContaining({ id: 'side-reply', turnId: 'side-turn' }),
+    ]))
   })
 
   it('ends the side conversation when the main thread changes', async () => {
@@ -2212,10 +2065,28 @@ describe('side conversation lifecycle', () => {
 
     const reloadedState = useDesktopState()
     reloadedState.primeSelectedThread('parent-thread')
-    await reloadedState.restoreSideConversation()
 
     expect(reloadedState.isSideConversationOpen.value).toBe(false)
     expect(reloadedState.sideConversationThreadId.value).toBe('')
+    expect(window.sessionStorage.setItem).not.toHaveBeenCalled()
+  })
+
+  it('clears the side conversation and sends pagehide cleanup with the active turn', async () => {
+    installTestWindow()
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-pagehide' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('side-pagehide-turn')
+
+    const state = useDesktopState()
+    await state.openSideConversation('parent-thread')
+    await state.sendSideConversationMessage('question')
+    state.discardSideConversationOnPageHide()
+
+    expect(state.isSideConversationOpen.value).toBe(false)
+    expect(state.sideConversationThreadId.value).toBe('')
+    expect(gatewayMocks.discardSideConversationThreadOnPageHide).toHaveBeenCalledWith(
+      'side-pagehide',
+      'side-pagehide-turn',
+    )
   })
 
   it('ignores late notifications from every discarded side thread', async () => {
