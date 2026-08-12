@@ -19,7 +19,7 @@ Pinned threads are no longer removed from the Pinned section while the sidebar i
 
 #### Expected Results
 - Saved pinned thread IDs are preserved while only the initial thread-list page is loaded.
-- Missing pinned IDs are pruned only after the full thread list has loaded.
+- Missing pinned IDs are not pruned from the workspace-filtered thread list; only authoritative pin changes or explicit archive actions remove them.
 - Pinned rows remain readable and selectable in both light and dark themes.
 
 #### Rollback/Cleanup
