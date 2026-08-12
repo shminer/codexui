@@ -26,6 +26,17 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
 }
 
 describe('normalizeThreadMessagesV2', () => {
+  it('preserves the message timestamp supplied by thread history', () => {
+    const response = threadReadResponseWithContent([{
+      type: 'agentMessage',
+      id: 'agent-time',
+      text: 'Timed response',
+      createdAtIso: '2026-08-12T01:02:04.000Z',
+    } as ThreadReadResponse['thread']['turns'][number]['items'][number]])
+
+    expect(normalizeThreadMessagesV2(response)[0]?.createdAtIso).toBe('2026-08-12T01:02:04.000Z')
+  })
+
   it('preserves selected skill inputs on the rendered user message', () => {
     const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
       type: 'userMessage',

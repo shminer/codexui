@@ -758,6 +758,7 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     first.id === second.id &&
     first.role === second.role &&
     first.text === second.text &&
+    first.createdAtIso === second.createdAtIso &&
     areStringArraysEqual(first.images, second.images) &&
     areUiFileChangesEqual(first.fileChanges, second.fileChanges) &&
     first.fileChangeStatus === second.fileChangeStatus &&
@@ -908,23 +909,31 @@ function removePersistedLiveMessages(previous: UiMessage[], incoming: UiMessage[
 
 function upsertMessage(previous: UiMessage[], nextMessage: UiMessage): UiMessage[] {
   const existingIndex = previous.findIndex((message) => message.id === nextMessage.id)
+  const createdAtIso = existingIndex >= 0
+    ? previous[existingIndex].createdAtIso
+    : nextMessage.createdAtIso
+  const stampedMessage = {
+    ...nextMessage,
+    createdAtIso: createdAtIso || new Date().toISOString(),
+  }
   if (existingIndex < 0) {
-    return [...previous, nextMessage]
+    return [...previous, stampedMessage]
   }
 
   const existing = previous[existingIndex]
-  if (areMessageFieldsEqual(existing, nextMessage)) {
+  if (areMessageFieldsEqual(existing, stampedMessage)) {
     return previous
   }
 
   const next = [...previous]
-  next.splice(existingIndex, 1, nextMessage)
+  next.splice(existingIndex, 1, stampedMessage)
   return next
 }
 
 type TurnSummaryState = {
   turnId: string
   durationMs: number
+  completedAtIso: string
 }
 
 type TurnActivityState = {
@@ -986,7 +995,7 @@ function formatTurnDuration(durationMs: number): string {
 function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummaryState): boolean {
   if (!first && !second) return true
   if (!first || !second) return false
-  return first.turnId === second.turnId && first.durationMs === second.durationMs
+  return first.turnId === second.turnId && first.durationMs === second.durationMs && first.completedAtIso === second.completedAtIso
 }
 
 function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivityState): boolean {
@@ -1005,6 +1014,7 @@ function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
     text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
+    createdAtIso: summary.completedAtIso,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
   }
@@ -2851,6 +2861,7 @@ export function useDesktopState() {
       images: imageUrls.length > 0 ? [...imageUrls] : undefined,
       skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
       fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
+      createdAtIso: new Date().toISOString(),
       messageType: 'userMessage.optimistic',
     }
     setPersistedMessagesForThread(threadId, [...existing, nextMessage])
@@ -4234,6 +4245,7 @@ export function useDesktopState() {
       setTurnSummaryForThread(completedTurn.threadId, {
         turnId: completedTurn.turnId,
         durationMs,
+        completedAtIso: new Date(completedTurn.completedAtMs).toISOString(),
       })
       if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)

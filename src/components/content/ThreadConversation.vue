@@ -111,6 +111,11 @@
                 </div>
               </div>
             </template>
+            <time
+              v-if="formatMessageDateTime(message.createdAtIso)"
+              class="message-timestamp"
+              :datetime="message.createdAtIso"
+            >{{ formatMessageDateTime(message.createdAtIso) }}</time>
           </div>
         </div>
 
@@ -211,6 +216,11 @@
                 </div>
               </section>
             </article>
+            <time
+              v-if="formatMessageDateTime(message.createdAtIso)"
+              class="message-timestamp"
+              :datetime="message.createdAtIso"
+            >{{ formatMessageDateTime(message.createdAtIso) }}</time>
           </div>
         </div>
 
@@ -753,6 +763,11 @@
                 </button>
               </div>
             </article>
+            <time
+              v-if="formatMessageDateTime(message.createdAtIso)"
+              class="message-timestamp"
+              :datetime="message.createdAtIso"
+            >{{ formatMessageDateTime(message.createdAtIso) }}</time>
           </div>
         </div>
       </li>
@@ -3798,10 +3813,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function formatIsoTime(value: string): string {
+const messageDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
+function formatMessageDateTime(value?: string): string {
+  if (!value) return ''
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleTimeString()
+  if (Number.isNaN(date.getTime())) return ''
+  return messageDateTimeFormatter.format(date)
 }
 
 function readRequestReason(request: UiServerRequest): string {
@@ -5146,6 +5171,10 @@ onBeforeUnmount(() => {
 .message-stack[data-role='assistant'],
 .message-stack[data-role='system'] {
   @apply items-start;
+}
+
+.message-timestamp {
+  @apply mt-1 text-[10px] leading-4 text-zinc-400;
 }
 
 .message-card[data-role='user'] {

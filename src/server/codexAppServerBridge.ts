@@ -265,14 +265,19 @@ type SessionRecoveredSkillInput = {
   path: string
 }
 
-type SessionSkillInputCacheEntry = {
-  size: number
-  mtimeMs: number
+type SessionThreadMetadata = {
+  createdAtIsoByItemId: Map<string, string>
+  createdAtIsoByTurnId: Map<string, string>
   skillsByTurnId: Map<string, SessionRecoveredSkillInput[]>
 }
 
-const SESSION_SKILL_INPUT_CACHE_LIMIT = 64
-const sessionSkillInputCache = new Map<string, SessionSkillInputCacheEntry>()
+type SessionThreadMetadataCacheEntry = SessionThreadMetadata & {
+  size: number
+  mtimeMs: number
+}
+
+const SESSION_THREAD_METADATA_CACHE_LIMIT = 64
+const sessionThreadMetadataCache = new Map<string, SessionThreadMetadataCacheEntry>()
 
 function parseSessionSkillText(value: string): SessionRecoveredSkillInput | null {
   const trimmed = value.trim()
@@ -283,8 +288,10 @@ function parseSessionSkillText(value: string): SessionRecoveredSkillInput | null
   return { name, path }
 }
 
-function buildSessionSkillInputsByTurn(sessionLogRaw: string): Map<string, SessionRecoveredSkillInput[]> {
+function buildSessionThreadMetadata(sessionLogRaw: string): SessionThreadMetadata {
   let currentTurnId = ''
+  const createdAtIsoByItemId = new Map<string, string>()
+  const createdAtIsoByTurnId = new Map<string, string>()
   const skillsByTurnId = new Map<string, SessionRecoveredSkillInput[]>()
 
   for (const line of sessionLogRaw.split('\n')) {
@@ -296,21 +303,32 @@ function buildSessionSkillInputsByTurn(sessionLogRaw: string): Map<string, Sessi
       continue
     }
 
+    const createdAtIso = readNonEmptyString(row.timestamp)
     if (row.type === 'turn_context') {
       const payloadRecord = asRecord(row.payload)
       currentTurnId = readNonEmptyString(payloadRecord?.turn_id) || currentTurnId
+      if (currentTurnId && createdAtIso && !createdAtIsoByTurnId.has(currentTurnId)) {
+        createdAtIsoByTurnId.set(currentTurnId, createdAtIso)
+      }
       continue
     }
     if (row.type === 'event_msg') {
       const payloadRecord = asRecord(row.payload)
       if (payloadRecord?.type === 'task_started') {
         currentTurnId = readNonEmptyString(payloadRecord.turn_id) || currentTurnId
+        if (currentTurnId && createdAtIso && !createdAtIsoByTurnId.has(currentTurnId)) {
+          createdAtIsoByTurnId.set(currentTurnId, createdAtIso)
+        }
       }
       continue
     }
 
     if (row.type !== 'response_item' || !currentTurnId) continue
     const payloadRecord = asRecord(row.payload)
+    const itemId = readNonEmptyString(payloadRecord?.id)
+    if (itemId && createdAtIso && !createdAtIsoByItemId.has(itemId)) {
+      createdAtIsoByItemId.set(itemId, createdAtIso)
+    }
     if (payloadRecord?.type !== 'message' || payloadRecord.role !== 'user') continue
     const content = Array.isArray(payloadRecord.content) ? payloadRecord.content : []
 
@@ -327,28 +345,28 @@ function buildSessionSkillInputsByTurn(sessionLogRaw: string): Map<string, Sessi
     }
   }
 
-  return skillsByTurnId
+  return { createdAtIsoByItemId, createdAtIsoByTurnId, skillsByTurnId }
 }
 
-async function readCachedSessionSkillInputsByTurn(sessionPath: string): Promise<Map<string, SessionRecoveredSkillInput[]>> {
+async function readCachedSessionThreadMetadata(sessionPath: string): Promise<SessionThreadMetadata> {
   const sessionStat = await stat(sessionPath)
-  const cached = sessionSkillInputCache.get(sessionPath)
+  const cached = sessionThreadMetadataCache.get(sessionPath)
   if (cached && cached.size === sessionStat.size && cached.mtimeMs === sessionStat.mtimeMs) {
-    return cached.skillsByTurnId
+    return cached
   }
 
   const sessionLogRaw = await readFile(sessionPath, 'utf8')
-  const skillsByTurnId = buildSessionSkillInputsByTurn(sessionLogRaw)
-  sessionSkillInputCache.set(sessionPath, {
+  const metadata = buildSessionThreadMetadata(sessionLogRaw)
+  sessionThreadMetadataCache.set(sessionPath, {
     size: sessionStat.size,
     mtimeMs: sessionStat.mtimeMs,
-    skillsByTurnId,
+    ...metadata,
   })
-  if (sessionSkillInputCache.size > SESSION_SKILL_INPUT_CACHE_LIMIT) {
-    const oldestKey = sessionSkillInputCache.keys().next().value
-    if (oldestKey) sessionSkillInputCache.delete(oldestKey)
+  if (sessionThreadMetadataCache.size > SESSION_THREAD_METADATA_CACHE_LIMIT) {
+    const oldestKey = sessionThreadMetadataCache.keys().next().value
+    if (oldestKey) sessionThreadMetadataCache.delete(oldestKey)
   }
-  return skillsByTurnId
+  return metadata
 }
 
 function mergeSessionSkillInputsIntoTurnsFromMap(
@@ -416,11 +434,49 @@ function mergeSessionSkillInputsIntoTurnsFromMap(
   return changed ? nextTurns : turns
 }
 
-export function mergeSessionSkillInputsIntoTurns(turns: unknown[], sessionLogRaw: string): unknown[] {
-  return mergeSessionSkillInputsIntoTurnsFromMap(turns, buildSessionSkillInputsByTurn(sessionLogRaw))
+function mergeSessionMessageTimestampsIntoTurns(
+  turns: unknown[],
+  metadata: SessionThreadMetadata,
+): unknown[] {
+  let changed = false
+  const nextTurns = turns.map((turn) => {
+    const turnRecord = asRecord(turn)
+    const turnId = readNonEmptyString(turnRecord?.id)
+    const turnCreatedAtIso = readNonEmptyString(turnRecord?.createdAtIso) || metadata.createdAtIsoByTurnId.get(turnId) || ''
+    const items = Array.isArray(turnRecord?.items) ? turnRecord.items : null
+    if (!turnRecord || !items) return turn
+
+    let itemsChanged = false
+    const nextItems = items.map((item) => {
+      const itemRecord = asRecord(item)
+      if (!itemRecord || readNonEmptyString(itemRecord.createdAtIso)) return item
+      const itemId = readNonEmptyString(itemRecord.id)
+      const createdAtIso = metadata.createdAtIsoByItemId.get(itemId) || turnCreatedAtIso
+      if (!createdAtIso) return item
+      itemsChanged = true
+      changed = true
+      return { ...itemRecord, createdAtIso }
+    })
+
+    if (!turnCreatedAtIso && !itemsChanged) return turn
+    const turnChanged = !readNonEmptyString(turnRecord.createdAtIso) && Boolean(turnCreatedAtIso)
+    if (turnChanged) changed = true
+    return {
+      ...turnRecord,
+      ...(turnChanged ? { createdAtIso: turnCreatedAtIso } : {}),
+      ...(itemsChanged ? { items: nextItems } : {}),
+    }
+  })
+  return changed ? nextTurns : turns
 }
 
-async function mergeSessionSkillInputsIntoThreadResult(result: unknown): Promise<unknown> {
+export function mergeSessionMetadataIntoTurns(turns: unknown[], sessionLogRaw: string): unknown[] {
+  const metadata = buildSessionThreadMetadata(sessionLogRaw)
+  const turnsWithSkills = mergeSessionSkillInputsIntoTurnsFromMap(turns, metadata.skillsByTurnId)
+  return mergeSessionMessageTimestampsIntoTurns(turnsWithSkills, metadata)
+}
+
+async function mergeSessionMetadataIntoThreadResult(result: unknown): Promise<unknown> {
   const record = asRecord(result)
   const thread = asRecord(record?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : null
@@ -430,8 +486,9 @@ async function mergeSessionSkillInputsIntoThreadResult(result: unknown): Promise
   }
 
   try {
-    const skillsByTurnId = await readCachedSessionSkillInputsByTurn(sessionPath)
-    const mergedTurns = mergeSessionSkillInputsIntoTurnsFromMap(turns, skillsByTurnId)
+    const metadata = await readCachedSessionThreadMetadata(sessionPath)
+    const turnsWithSkills = mergeSessionSkillInputsIntoTurnsFromMap(turns, metadata.skillsByTurnId)
+    const mergedTurns = mergeSessionMessageTimestampsIntoTurns(turnsWithSkills, metadata)
     if (mergedTurns === turns) return result
     return {
       ...record,
@@ -7862,7 +7919,7 @@ export function createCodexBridgeMiddleware(options: {
           : errorMergedResult
         const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, listMergedResult)
         const result = THREAD_METHODS_WITH_TURNS.has(body.method)
-          ? await mergeSessionSkillInputsIntoThreadResult(sanitizedResult)
+          ? await mergeSessionMetadataIntoThreadResult(sanitizedResult)
           : sanitizedResult
 
 	        if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method)) {
@@ -7927,7 +7984,7 @@ export function createCodexBridgeMiddleware(options: {
             },
           }
           const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', pagedResult)
-          const result = await mergeSessionSkillInputsIntoThreadResult(sanitized)
+          const result = await mergeSessionMetadataIntoThreadResult(sanitized)
 
           setJson(res, 200, {
             result,
@@ -8021,6 +8078,7 @@ export function createCodexBridgeMiddleware(options: {
             try {
               const sessionLogRaw = await readFile(sessionPath, 'utf8')
               turns = mergeSessionCommandsIntoTurns(turns, sessionLogRaw)
+              turns = mergeSessionMetadataIntoTurns(turns, sessionLogRaw)
             } catch {
               // Session log not available — continue without command recovery
             }

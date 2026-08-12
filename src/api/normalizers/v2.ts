@@ -643,12 +643,16 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
   for (let turnOffset = 0; turnOffset < turns.length; turnOffset++) {
     const turnIndex = baseTurnIndex + turnOffset
     const turn = turns[turnOffset]
+    const turnRecord = turn as unknown as Record<string, unknown>
     const rawTurnId = typeof turn?.id === 'string' ? turn.id.trim() : ''
     const turnId = rawTurnId.length > 0 ? rawTurnId : undefined
+    const turnCreatedAtIso = typeof turnRecord.createdAtIso === 'string' ? turnRecord.createdAtIso : ''
     const items = Array.isArray(turn.items) ? turn.items : []
     for (const item of items) {
+      const itemRecord = item as unknown as Record<string, unknown>
+      const createdAtIso = typeof itemRecord.createdAtIso === 'string' ? itemRecord.createdAtIso : turnCreatedAtIso
       for (const msg of toUiMessages(item)) {
-        messages.push({ ...msg, turnId, turnIndex })
+        messages.push({ ...msg, createdAtIso: createdAtIso || undefined, turnId, turnIndex })
       }
     }
     const errorText = readTurnErrorText(turn)
@@ -659,6 +663,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
         role: 'system',
         text: errorText,
         messageType: 'turnError',
+        createdAtIso: turnCreatedAtIso || undefined,
         turnId,
         turnIndex,
       })

@@ -688,6 +688,7 @@ function mergeRecoveredFileChangeMessages(messages: UiMessage[], fallbackEntries
       id: `session-file-change:${entry.turnId}`,
       role: 'system',
       text: '',
+      createdAtIso: messages.find((message) => message.turnId === entry.turnId)?.createdAtIso,
       messageType: 'fileChange',
       fileChangeStatus: 'completed',
       fileChanges: entry.fileChanges,

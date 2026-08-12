@@ -214,6 +214,7 @@ export type UiMessage = {
   id: string
   role: 'user' | 'assistant' | 'system'
   text: string
+  createdAtIso?: string
   images?: string[]
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: UiFileAttachment[]

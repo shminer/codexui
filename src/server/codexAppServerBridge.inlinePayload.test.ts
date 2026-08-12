@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BackendQueueProcessor,
-  mergeSessionSkillInputsIntoTurns,
+  mergeSessionMetadataIntoTurns,
   parseAutomationToml,
   sanitizeThreadTurnsInlinePayloads,
   toAutomationApiRecord,
@@ -239,6 +239,28 @@ describe('thread inline media sanitization', () => {
 })
 
 describe('thread session skill recovery', () => {
+  it('adds exact item timestamps and falls back to the turn start time', () => {
+    const turns = [{
+      id: 'turn-1',
+      items: [
+        { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
+        { id: 'agent-1', type: 'agentMessage', text: 'hi' },
+      ],
+    }]
+    const sessionLog = [
+      JSON.stringify({ timestamp: '2026-08-12T01:02:03.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-1' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:02:04.000Z', type: 'response_item', payload: { id: 'agent-1', type: 'message', role: 'assistant' } }),
+    ].join('\n')
+
+    const merged = mergeSessionMetadataIntoTurns(turns, sessionLog) as Array<{
+      createdAtIso?: string
+      items: Array<{ createdAtIso?: string }>
+    }>
+    expect(merged[0].createdAtIso).toBe('2026-08-12T01:02:03.000Z')
+    expect(merged[0].items[0].createdAtIso).toBe('2026-08-12T01:02:03.000Z')
+    expect(merged[0].items[1].createdAtIso).toBe('2026-08-12T01:02:04.000Z')
+  })
+
   it('adds selected skill inputs from session JSONL to matching user messages', () => {
     const turns = [{
       id: 'turn-1',
@@ -271,7 +293,7 @@ describe('thread session skill recovery', () => {
       }),
     ].join('\n')
 
-    const merged = mergeSessionSkillInputsIntoTurns(turns, sessionLog) as typeof turns
+    const merged = mergeSessionMetadataIntoTurns(turns, sessionLog) as typeof turns
     expect(merged[0].items[0].content).toEqual([
       { type: 'text', text: 'use a skill', text_elements: [] },
       { type: 'skill', name: 'browser-use:browser', path: '/Users/igor/.codex/plugins/browser/SKILL.md' },
@@ -305,7 +327,7 @@ describe('thread session skill recovery', () => {
       }),
     ].join('\n')
 
-    expect(mergeSessionSkillInputsIntoTurns(turns, sessionLog)).toBe(turns)
+    expect(mergeSessionMetadataIntoTurns(turns, sessionLog)).toBe(turns)
   })
 
   it('adds selected skill inputs to the last user message in a multi-message turn', () => {
@@ -344,7 +366,7 @@ describe('thread session skill recovery', () => {
       }),
     ].join('\n')
 
-    const merged = mergeSessionSkillInputsIntoTurns(turns, sessionLog) as typeof turns
+    const merged = mergeSessionMetadataIntoTurns(turns, sessionLog) as typeof turns
     expect(merged[0].items[0].content).toEqual([{ type: 'text', text: 'first message', text_elements: [] }])
     expect(merged[0].items[2].content).toEqual([
       { type: 'text', text: 'second message', text_elements: [] },
