@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BackendQueueProcessor,
+  buildSessionFileChangeFallback,
+  mergeSessionHistoryIntoTurns,
   mergeSessionMetadataIntoTurns,
   parseAutomationToml,
   sanitizeThreadTurnsInlinePayloads,
@@ -239,6 +241,33 @@ describe('thread inline media sanitization', () => {
 })
 
 describe('thread session skill recovery', () => {
+  it('keeps exact timestamps for recovered commands and file changes', () => {
+    const turns = [{
+      id: 'turn-1',
+      items: [
+        { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'run it' }] },
+        { id: 'agent-1', type: 'agentMessage', text: 'running' },
+      ],
+    }]
+    const sessionLog = [
+      JSON.stringify({ timestamp: '2026-08-12T01:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-1' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:01:00.000Z', type: 'response_item', payload: { id: 'agent-1', type: 'message', role: 'assistant' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:02:00.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: 'cmd-1', arguments: '{"cmd":"date"}' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:02:01.000Z', type: 'response_item', payload: { type: 'function_call_output', call_id: 'cmd-1', output: 'Process exited with code 0\nOutput:\nok' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:03:00.000Z', type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', call_id: 'patch-1', status: 'completed', input: '*** Begin Patch\n*** Add File: result.txt\n+ok\n*** End Patch' } }),
+    ].join('\n')
+
+    const merged = mergeSessionHistoryIntoTurns(turns, sessionLog) as Array<{
+      items: Array<{ id: string; createdAtIso?: string }>
+    }>
+    expect(merged[0].items.find((item) => item.id === 'session-cmd-cmd-1')?.createdAtIso)
+      .toBe('2026-08-12T01:02:00.000Z')
+    expect(merged[0].items.find((item) => item.id === 'session-fc-patch-1')?.createdAtIso)
+      .toBe('2026-08-12T01:03:00.000Z')
+    expect(buildSessionFileChangeFallback({ thread: { turns } }, sessionLog)[0]?.createdAtIso)
+      .toBe('2026-08-12T01:03:00.000Z')
+  })
+
   it('adds exact item timestamps and falls back to the turn start time', () => {
     const turns = [{
       id: 'turn-1',

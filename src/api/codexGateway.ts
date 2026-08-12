@@ -454,6 +454,7 @@ export type AccountsListResult = {
 type ThreadFileChangeFallbackEntry = {
   turnId: string
   turnIndex: number
+  createdAtIso?: string
   fileChanges: UiFileChange[]
 }
 
@@ -631,7 +632,7 @@ function normalizeThreadFileChangeFallback(value: unknown): ThreadFileChangeFall
       : []
 
     if (!turnId || turnIndex === null || fileChanges.length === 0) continue
-    normalized.push({ turnId, turnIndex, fileChanges })
+    normalized.push({ turnId, turnIndex, createdAtIso: readString(record.createdAtIso) ?? undefined, fileChanges })
   }
 
   return normalized
@@ -688,7 +689,7 @@ function mergeRecoveredFileChangeMessages(messages: UiMessage[], fallbackEntries
       id: `session-file-change:${entry.turnId}`,
       role: 'system',
       text: '',
-      createdAtIso: messages.find((message) => message.turnId === entry.turnId)?.createdAtIso,
+      createdAtIso: entry.createdAtIso ?? messages.find((message) => message.turnId === entry.turnId)?.createdAtIso,
       messageType: 'fileChange',
       fileChangeStatus: 'completed',
       fileChanges: entry.fileChanges,

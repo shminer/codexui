@@ -257,6 +257,7 @@ type SessionRecoveredFileChange = {
 type SessionRecoveredTurnFileChanges = {
   turnId: string
   turnIndex: number
+  createdAtIso?: string
   fileChanges: SessionRecoveredFileChange[]
 }
 
@@ -288,7 +289,10 @@ function parseSessionSkillText(value: string): SessionRecoveredSkillInput | null
   return { name, path }
 }
 
-function buildSessionThreadMetadata(sessionLogRaw: string): SessionThreadMetadata {
+function buildSessionThreadMetadata(
+  sessionLogRaw: string,
+  visitResponseItem?: (payload: Record<string, unknown>, turnId: string, createdAtIso: string) => void,
+): SessionThreadMetadata {
   let currentTurnId = ''
   const createdAtIsoByItemId = new Map<string, string>()
   const createdAtIsoByTurnId = new Map<string, string>()
@@ -329,6 +333,7 @@ function buildSessionThreadMetadata(sessionLogRaw: string): SessionThreadMetadat
     if (itemId && createdAtIso && !createdAtIsoByItemId.has(itemId)) {
       createdAtIsoByItemId.set(itemId, createdAtIso)
     }
+    if (payloadRecord) visitResponseItem?.(payloadRecord, currentTurnId, createdAtIso)
     if (payloadRecord?.type !== 'message' || payloadRecord.role !== 'user') continue
     const content = Array.isArray(payloadRecord.content) ? payloadRecord.content : []
 
@@ -3288,7 +3293,7 @@ function parseApplyPatchInput(input: string): SessionRecoveredFileChange[] {
   return changes
 }
 
-function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRaw: string): SessionRecoveredTurnFileChanges[] {
+export function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRaw: string): SessionRecoveredTurnFileChanges[] {
   const payload = asRecord(threadReadPayload)
   const thread = asRecord(payload?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : []
@@ -3303,6 +3308,7 @@ function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRa
   }
 
   const collectedByTurnId = new Map<string, SessionRecoveredFileChange[]>()
+  const createdAtIsoByTurnId = new Map<string, string>()
   let currentTurnId = ''
 
   for (const line of sessionLogRaw.split('\n')) {
@@ -3342,12 +3348,15 @@ function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRa
     const previous = collectedByTurnId.get(currentTurnId) ?? []
     previous.push(...parsedChanges)
     collectedByTurnId.set(currentTurnId, previous)
+    const createdAtIso = readNonEmptyString(row.timestamp)
+    if (createdAtIso) createdAtIsoByTurnId.set(currentTurnId, createdAtIso)
   }
 
   const recovered: SessionRecoveredTurnFileChanges[] = []
   for (const [turnId, fileChanges] of collectedByTurnId.entries()) {
     const turnIndex = turnIndexById.get(turnId)
     if (typeof turnIndex !== 'number' || fileChanges.length === 0) continue
+    const createdAtIso = createdAtIsoByTurnId.get(turnId)
 
     const mergedByPath = new Map<string, SessionRecoveredFileChange>()
     for (const fileChange of fileChanges) {
@@ -3359,6 +3368,7 @@ function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRa
     recovered.push({
       turnId,
       turnIndex,
+      ...(createdAtIso ? { createdAtIso } : {}),
       fileChanges: Array.from(mergedByPath.values()),
     })
   }
@@ -3369,6 +3379,7 @@ function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRa
 type SessionRecoveredCommand = {
   id: string
   type: 'commandExecution'
+  createdAtIso?: string
   command: string
   cwd: string | null
   status: 'completed' | 'failed'
@@ -3412,6 +3423,7 @@ function parseExecCommandOutput(output: string): { exitCode: number | null; wall
 type SessionRecoveredFileChangeItem = {
   id: string
   type: 'fileChange'
+  createdAtIso?: string
   status: 'completed'
   changes: Record<string, unknown>[]
 }
@@ -3422,37 +3434,15 @@ type SessionItemSlot = {
   fileChange?: SessionRecoveredFileChangeItem
 }
 
-function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map<string, SessionItemSlot[]> {
-  let currentTurnId = ''
+function buildSessionItemOrder(
+  sessionLogRaw: string,
+  turnIds: Set<string>,
+): { metadata: SessionThreadMetadata; orderByTurnId: Map<string, SessionItemSlot[]> } {
   const orderByTurnId = new Map<string, SessionItemSlot[]>()
   const callIdToCommand = new Map<string, SessionRecoveredCommand>()
 
-  for (const line of sessionLogRaw.split('\n')) {
-    if (!line.trim()) continue
-    let row: Record<string, unknown> | null = null
-    try {
-      row = JSON.parse(line) as Record<string, unknown>
-    } catch {
-      continue
-    }
-
-    if (row.type === 'turn_context') {
-      const p = asRecord(row.payload)
-      currentTurnId = readNonEmptyString(p?.turn_id) || currentTurnId
-      continue
-    }
-    if (row.type === 'event_msg') {
-      const p = asRecord(row.payload)
-      if (p?.type === 'task_started') {
-        currentTurnId = readNonEmptyString(p.turn_id) || currentTurnId
-      }
-      continue
-    }
-
-    if (row.type !== 'response_item' || !currentTurnId || !turnIds.has(currentTurnId)) continue
-    const payload = asRecord(row.payload)
-    if (!payload) continue
-
+  const metadata = buildSessionThreadMetadata(sessionLogRaw, (payload, currentTurnId, createdAtIso) => {
+    if (!turnIds.has(currentTurnId)) return
     let slots = orderByTurnId.get(currentTurnId)
     if (!slots) {
       slots = []
@@ -3461,12 +3451,12 @@ function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map
 
     if (payload.type === 'message' && payload.role === 'assistant') {
       slots.push({ type: 'agentMessage' })
-      continue
+      return
     }
 
     if (payload.type === 'function_call' && payload.name === 'exec_command') {
       const callId = readNonEmptyString(payload.call_id)
-      if (!callId) continue
+      if (!callId) return
       let cmd = ''
       try {
         const args = JSON.parse(payload.arguments as string) as Record<string, unknown>
@@ -3475,6 +3465,7 @@ function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map
       const command: SessionRecoveredCommand = {
         id: `session-cmd-${callId}`,
         type: 'commandExecution',
+        ...(createdAtIso ? { createdAtIso } : {}),
         command: cmd,
         cwd: null,
         status: 'completed',
@@ -3484,14 +3475,14 @@ function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map
       }
       callIdToCommand.set(callId, command)
       slots.push({ type: 'commandExecution', command })
-      continue
+      return
     }
 
     if (payload.type === 'function_call_output') {
       const callId = readNonEmptyString(payload.call_id)
-      if (!callId) continue
+      if (!callId) return
       const existing = callIdToCommand.get(callId)
-      if (!existing) continue
+      if (!existing) return
       const rawOutput = typeof payload.output === 'string' ? payload.output : ''
       const parsed = parseExecCommandOutput(rawOutput)
       existing.aggregatedOutput = parsed.cleanOutput
@@ -3503,12 +3494,13 @@ function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map
     if (payload.type === 'custom_tool_call' && payload.name === 'apply_patch' && payload.status === 'completed') {
       const input = typeof payload.input === 'string' ? payload.input : ''
       const callId = readNonEmptyString(payload.call_id)
-      if (!input || !callId) continue
+      if (!input || !callId) return
       const parsedChanges = parseApplyPatchInput(input)
-      if (parsedChanges.length === 0) continue
+      if (parsedChanges.length === 0) return
       const fcItem: SessionRecoveredFileChangeItem = {
         id: `session-fc-${callId}`,
         type: 'fileChange',
+        ...(createdAtIso ? { createdAtIso } : {}),
         status: 'completed',
         changes: parsedChanges.map((fc) => ({
           ...fc,
@@ -3517,9 +3509,9 @@ function buildSessionItemOrder(sessionLogRaw: string, turnIds: Set<string>): Map
       }
       slots.push({ type: 'fileChange', fileChange: fcItem })
     }
-  }
+  })
 
-  return orderByTurnId
+  return { metadata, orderByTurnId }
 }
 
 function extractFilePathsFromCommand(cmd: string, cwd: string): string[] {
@@ -3991,7 +3983,7 @@ async function revertTurnFileChanges(
   return { reverted, errors, revertedPatchIds }
 }
 
-function mergeSessionCommandsIntoTurns(turns: unknown[], sessionLogRaw: string): unknown[] {
+export function mergeSessionHistoryIntoTurns(turns: unknown[], sessionLogRaw: string): unknown[] {
   const turnIds = new Set<string>()
   for (const turn of turns) {
     const turnRecord = asRecord(turn)
@@ -4001,10 +3993,9 @@ function mergeSessionCommandsIntoTurns(turns: unknown[], sessionLogRaw: string):
 
   if (turnIds.size === 0) return turns
 
-  const orderByTurnId = buildSessionItemOrder(sessionLogRaw, turnIds)
-  if (orderByTurnId.size === 0) return turns
+  const { metadata, orderByTurnId } = buildSessionItemOrder(sessionLogRaw, turnIds)
 
-  return turns.map((turn) => {
+  const turnsWithCommands = orderByTurnId.size === 0 ? turns : turns.map((turn) => {
     const turnRecord = asRecord(turn)
     if (!turnRecord) return turn
     const turnId = readNonEmptyString(turnRecord.id)
@@ -4049,6 +4040,8 @@ function mergeSessionCommandsIntoTurns(turns: unknown[], sessionLogRaw: string):
       items: interleaved,
     }
   })
+  const turnsWithSkills = mergeSessionSkillInputsIntoTurnsFromMap(turnsWithCommands, metadata.skillsByTurnId)
+  return mergeSessionMessageTimestampsIntoTurns(turnsWithSkills, metadata)
 }
 
 function isExactPhraseMatch(query: string, doc: ThreadSearchDocument): boolean {
@@ -8051,7 +8044,6 @@ export function createCodexBridgeMiddleware(options: {
             includeTurns: true,
           }))
           const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', threadReadResult)
-          appServer.storeThreadReadSnapshot(threadId, sanitized)
 
           const record = asRecord(sanitized)
           const thread = asRecord(record?.thread)
@@ -8077,11 +8069,20 @@ export function createCodexBridgeMiddleware(options: {
           if (sessionPath && isAbsolute(sessionPath) && sessionSize > 0) {
             try {
               const sessionLogRaw = await readFile(sessionPath, 'utf8')
-              turns = mergeSessionCommandsIntoTurns(turns, sessionLogRaw)
-              turns = mergeSessionMetadataIntoTurns(turns, sessionLogRaw)
+              turns = mergeSessionHistoryIntoTurns(turns, sessionLogRaw)
             } catch {
               // Session log not available — continue without command recovery
             }
+          }
+
+          if (record && thread) {
+            appServer.storeThreadReadSnapshot(threadId, {
+              ...record,
+              thread: {
+                ...thread,
+                turns,
+              },
+            })
           }
 
           const lastTurn = turns.length > 0 ? asRecord(turns[turns.length - 1]) : null
