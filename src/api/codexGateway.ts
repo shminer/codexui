@@ -40,6 +40,8 @@ import type {
   UiMessage,
   UiProjectGroup,
   UiThread,
+  UiThreadGoal,
+  ThreadGoalStatus,
   UiReviewAction,
   UiReviewActionLevel,
   UiReviewFile,
@@ -480,6 +482,56 @@ function readBoolean(value: unknown): boolean | null {
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : []
+}
+
+function isThreadGoalStatus(value: unknown): value is ThreadGoalStatus {
+  return value === 'active'
+    || value === 'paused'
+    || value === 'blocked'
+    || value === 'usageLimited'
+    || value === 'budgetLimited'
+    || value === 'complete'
+}
+
+function isNonNegativeSafeInteger(value: number | null): value is number {
+  return value !== null && Number.isSafeInteger(value) && value >= 0
+}
+
+export function normalizeThreadGoal(value: unknown): UiThreadGoal | null {
+  const record = asRecord(value)
+  if (!record) return null
+
+  const threadId = readString(record.threadId)?.trim() ?? ''
+  const objective = readString(record.objective)?.trim() ?? ''
+  const tokenBudget = record.tokenBudget === null ? null : readNumber(record.tokenBudget)
+  const tokensUsed = readNumber(record.tokensUsed)
+  const timeUsedSeconds = readNumber(record.timeUsedSeconds)
+  const createdAt = readNumber(record.createdAt)
+  const updatedAt = readNumber(record.updatedAt)
+  if (
+    !threadId
+    || !objective
+    || [...objective].length > 4000
+    || !isThreadGoalStatus(record.status)
+    || (tokenBudget !== null && !isNonNegativeSafeInteger(tokenBudget))
+    || !isNonNegativeSafeInteger(tokensUsed)
+    || !isNonNegativeSafeInteger(timeUsedSeconds)
+    || !isNonNegativeSafeInteger(createdAt)
+    || !isNonNegativeSafeInteger(updatedAt)
+  ) {
+    return null
+  }
+
+  return {
+    threadId,
+    objective,
+    status: record.status,
+    tokenBudget,
+    tokensUsed,
+    timeUsedSeconds,
+    createdAt,
+    updatedAt,
+  }
 }
 
 function normalizeAccountUnavailableReason(value: unknown): UiAccountUnavailableReason | null {
@@ -1663,6 +1715,67 @@ export async function archiveThread(threadId: string): Promise<void> {
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
   await callRpc('thread/name/set', { threadId, name: threadName })
+}
+
+export async function getThreadGoal(threadId: string): Promise<UiThreadGoal | null> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) throw new Error('thread/goal/get requires threadId')
+
+  const payload = await callRpc<{ goal?: unknown }>('thread/goal/get', { threadId: normalizedThreadId })
+  if (payload.goal === null) return null
+  const goal = normalizeThreadGoal(payload.goal)
+  if (!goal || goal.threadId !== normalizedThreadId) {
+    throw new Error('thread/goal/get returned an invalid goal')
+  }
+  return goal
+}
+
+export async function setThreadGoal(
+  threadId: string,
+  input: { objective?: string; status?: ThreadGoalStatus; tokenBudget?: number | null },
+): Promise<UiThreadGoal> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) throw new Error('thread/goal/set requires threadId')
+
+  const params: Record<string, unknown> = { threadId: normalizedThreadId }
+  if (input.objective !== undefined) {
+    const objective = input.objective.trim()
+    if (!objective || [...objective].length > 4000) {
+      throw new Error('Goal objective must be between 1 and 4000 characters')
+    }
+    params.objective = objective
+  }
+  if (input.status !== undefined) {
+    if (!isThreadGoalStatus(input.status)) throw new Error('thread/goal/set requires a valid status')
+    params.status = input.status
+  }
+  if (input.tokenBudget !== undefined) {
+    if (
+      input.tokenBudget !== null
+      && (!Number.isSafeInteger(input.tokenBudget) || input.tokenBudget < 0)
+    ) {
+      throw new Error('Goal token budget must be a non-negative safe integer or null')
+    }
+    params.tokenBudget = input.tokenBudget
+  }
+
+  const payload = await callRpc<{ goal?: unknown }>('thread/goal/set', params)
+  const goal = normalizeThreadGoal(payload.goal)
+  if (!goal || goal.threadId !== normalizedThreadId) {
+    throw new Error('thread/goal/set returned an invalid goal')
+  }
+  return goal
+}
+
+export async function clearThreadGoal(threadId: string): Promise<boolean> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) throw new Error('thread/goal/clear requires threadId')
+
+  const payload = await callRpc<{ cleared?: unknown }>('thread/goal/clear', { threadId: normalizedThreadId })
+  if (typeof payload.cleared !== 'boolean') {
+    throw new Error('thread/goal/clear returned an invalid response')
+  }
+  return payload.cleared
 }
 
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {

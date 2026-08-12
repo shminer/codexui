@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { discardSideConversationThread, discardSideConversationThreadInBackground, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startSideConversation, startThreadTurn } from './codexGateway'
+import { clearThreadGoal, discardSideConversationThread, discardSideConversationThreadInBackground, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -27,6 +27,59 @@ function mockRpcFetch(): { requests: Array<{ method: string, params: Record<stri
 
   return { requests }
 }
+
+describe('thread goal RPC', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reads, edits, updates status, and clears the official thread goal', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: Record<string, unknown> }
+      requests.push(request)
+      if (request.method === 'thread/goal/clear') return Response.json({ result: { cleared: true } })
+      return Response.json({
+        result: {
+          goal: {
+            threadId: 'thread-1',
+            objective: request.params.objective ?? 'Ship the goal UI',
+            status: request.params.status ?? 'active',
+            tokenBudget: 40_000,
+            tokensUsed: 12_500,
+            timeUsedSeconds: 90,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      })
+    }))
+
+    await expect(getThreadGoal('thread-1')).resolves.toMatchObject({ objective: 'Ship the goal UI' })
+    await setThreadGoal('thread-1', { objective: 'Edit the goal', status: 'active', tokenBudget: 40_000 })
+    await setThreadGoal('thread-1', { status: 'paused' })
+    await expect(clearThreadGoal('thread-1')).resolves.toBe(true)
+
+    expect(requests).toEqual([
+      { method: 'thread/goal/get', params: { threadId: 'thread-1' } },
+      {
+        method: 'thread/goal/set',
+        params: { threadId: 'thread-1', objective: 'Edit the goal', status: 'active', tokenBudget: 40_000 },
+      },
+      { method: 'thread/goal/set', params: { threadId: 'thread-1', status: 'paused' } },
+      { method: 'thread/goal/clear', params: { threadId: 'thread-1' } },
+    ])
+  })
+
+  it('rejects invalid objectives and malformed goal responses', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ result: { goal: { threadId: 'thread-1' } } })))
+
+    await expect(setThreadGoal('thread-1', { objective: ' '.repeat(5) })).rejects.toThrow('between 1 and 4000')
+    await expect(setThreadGoal('thread-1', { objective: 'x'.repeat(4001) })).rejects.toThrow('between 1 and 4000')
+    await expect(setThreadGoal('thread-1', { tokenBudget: -1 })).rejects.toThrow('non-negative safe integer')
+    await expect(getThreadGoal('thread-1')).rejects.toThrow('invalid goal')
+  })
+})
 
 describe('pinned thread state', () => {
   afterEach(() => {

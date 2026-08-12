@@ -934,6 +934,7 @@
                   :skills="installedSkills"
                   :thread-token-usage="selectedThreadTokenUsage"
                   :codex-quota="codexQuota"
+                  :goal="null"
                   :is-turn-in-progress="false"
                   :is-stop-pending="false"
                   :is-interrupting-turn="false" :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
@@ -1024,6 +1025,12 @@
                     :skills="installedSkills"
                     :thread-token-usage="selectedThreadTokenUsage"
                     :codex-quota="codexQuota"
+                    :goal="selectedThreadGoal"
+                    :goal-observed-at-ms="selectedThreadGoalObservedAtMs"
+                    :goal-active-turn-started-at-ms="selectedThreadGoalActiveTurnStartedAtMs"
+                    :is-goal-loading="isSelectedThreadGoalLoading"
+                    :is-goal-updating="isSelectedThreadGoalUpdating"
+                    :goal-error="selectedThreadGoalError"
                     :is-turn-in-progress="isSelectedThreadInProgress"
                     :is-stop-pending="isSelectedThreadInterruptPending"
                     :is-interrupting-turn="isInterruptingTurn"
@@ -1035,6 +1042,11 @@
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
+                    @save-goal="onSaveGoal"
+                    @pause-goal="onPauseGoal"
+                    @resume-goal="onResumeGoal"
+                    @reload-goal="onReloadGoal"
+                    @clear-goal="onClearGoal"
                     @open-side-conversation="onOpenSideConversation"
                     @interrupt="onInterruptTurn" />
                 </div>
@@ -1318,6 +1330,12 @@ const {
   projectDisplayNameById,
   selectedThread,
   selectedThreadTokenUsage,
+  selectedThreadGoal,
+  selectedThreadGoalObservedAtMs,
+  selectedThreadGoalActiveTurnStartedAtMs,
+  isSelectedThreadGoalLoading,
+  isSelectedThreadGoalUpdating,
+  selectedThreadGoalError,
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedThreadSubagents,
@@ -1383,6 +1401,10 @@ const {
   reorderQueuedMessage,
   steerQueuedMessage,
   setSelectedCollaborationMode,
+  saveSelectedThreadGoal,
+  setSelectedThreadGoalStatus,
+  reloadSelectedThreadGoal,
+  clearSelectedThreadGoal,
   readModelIdForThread,
   setSelectedModelIdForThread,
 
@@ -4150,6 +4172,26 @@ function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
 
 function onSelectSpeedMode(mode: SpeedMode): void {
   void updateSelectedSpeedMode(mode)
+}
+
+function onSaveGoal(objective: string): void {
+  void saveSelectedThreadGoal(objective)
+}
+
+function onPauseGoal(): void {
+  void setSelectedThreadGoalStatus('paused')
+}
+
+function onResumeGoal(): void {
+  void setSelectedThreadGoalStatus('active')
+}
+
+function onReloadGoal(): void {
+  void reloadSelectedThreadGoal()
+}
+
+function onClearGoal(): void {
+  void clearSelectedThreadGoal()
 }
 
 function onInterruptTurn(): void {

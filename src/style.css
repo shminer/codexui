@@ -455,6 +455,46 @@
   @apply text-zinc-400;
 }
 
+:root.dark .thread-composer-goal-panel {
+  @apply border-zinc-700;
+}
+
+:root.dark .thread-composer-goal-input {
+  @apply border-zinc-600 bg-zinc-900 text-zinc-100 focus:border-zinc-400 disabled:bg-zinc-800;
+}
+
+:root.dark .thread-composer-goal-objective,
+:root.dark .thread-composer-goal-usage dd {
+  @apply text-zinc-100;
+}
+
+:root.dark .thread-composer-goal-usage dt {
+  @apply text-zinc-400;
+}
+
+:root.dark .thread-composer-goal-action {
+  @apply border-zinc-600 bg-zinc-900 text-zinc-300 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-goal-action.is-primary {
+  @apply border-zinc-200 bg-zinc-200 text-zinc-900 hover:bg-white;
+}
+
+:root.dark .thread-composer-goal-status {
+  @apply text-emerald-400;
+}
+
+:root.dark .thread-composer-goal-status[data-status='paused'],
+:root.dark .thread-composer-goal-status[data-status='blocked'],
+:root.dark .thread-composer-goal-status[data-status='usageLimited'] {
+  @apply text-amber-400;
+}
+
+:root.dark .thread-composer-goal-status[data-status='budgetLimited'],
+:root.dark .thread-composer-goal-status[data-status='complete'] {
+  @apply text-zinc-400;
+}
+
 :root.dark .thread-composer-attach-mode-label {
   @apply text-zinc-100;
 }

@@ -13,6 +13,7 @@ import type { WorkspaceRootsState } from '../api/codexGateway'
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
+  clearThreadGoal: vi.fn(),
   discardSideConversationThread: vi.fn(),
   discardSideConversationThreadInBackground: vi.fn(),
   forkThread: vi.fn(),
@@ -22,6 +23,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getCurrentModelConfig: vi.fn(),
   getPendingServerRequests: vi.fn(),
   getSkillsList: vi.fn(),
+  getThreadGoal: vi.fn(),
   getThreadDetail: vi.fn(),
   getThreadGroupsPage: vi.fn(),
   getThreadQueueState: vi.fn(),
@@ -35,7 +37,9 @@ const gatewayMocks = vi.hoisted(() => ({
   resumeThread: vi.fn(),
   revertThreadFileChanges: vi.fn(),
   rollbackThread: vi.fn(),
+  normalizeThreadGoal: vi.fn((value: unknown) => value),
   setCodexSpeedMode: vi.fn(),
+  setThreadGoal: vi.fn(),
   setThreadQueueState: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
   startThread: vi.fn(),
@@ -135,6 +139,8 @@ beforeEach(() => {
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
+  gatewayMocks.getThreadGoal.mockResolvedValue(null)
+  gatewayMocks.clearThreadGoal.mockResolvedValue(true)
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
 })
 
@@ -723,6 +729,119 @@ describe('startup request deduplication', () => {
     } finally {
       nowSpy.mockRestore()
     }
+  })
+})
+
+describe('thread goal state', () => {
+  const activeGoal = {
+    threadId: 'thread-1',
+    objective: 'Ship the Goal UI',
+    status: 'active' as const,
+    tokenBudget: 40_000,
+    tokensUsed: 12_500,
+    timeUsedSeconds: 90,
+    createdAt: 1,
+    updatedAt: 2,
+  }
+
+  it('deduplicates reads and applies official updated, cleared, and reconnect state', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGoal.mockResolvedValue(activeGoal)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-1')
+    await flushMicrotasks()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    expect(gatewayMocks.getThreadGoal).toHaveBeenCalledTimes(1)
+    expect(state.selectedThreadGoal.value).toEqual(activeGoal)
+
+    state.startPolling()
+    notificationHandler!({
+      method: 'thread/goal/updated',
+      params: { threadId: 'thread-1', goal: { ...activeGoal, status: 'paused', timeUsedSeconds: 120 } },
+    })
+    expect(state.selectedThreadGoal.value).toMatchObject({ status: 'paused', timeUsedSeconds: 120 })
+
+    notificationHandler!({ method: 'thread/goal/cleared', params: { threadId: 'thread-1' } })
+    expect(state.selectedThreadGoal.value).toBe(null)
+
+    gatewayMocks.getThreadGoal.mockResolvedValue({ ...activeGoal, objective: 'Restored from Codex' })
+    notificationHandler!({ method: 'ready' })
+    await flushMicrotasks()
+    expect(gatewayMocks.getThreadGoal).toHaveBeenCalledTimes(2)
+    expect(state.selectedThreadGoal.value?.objective).toBe('Restored from Codex')
+  })
+
+  it('preserves budget while editing and uses official status and clear calls', async () => {
+    installTestWindow()
+    const completeGoal = { ...activeGoal, status: 'complete' as const }
+    gatewayMocks.getThreadGoal.mockResolvedValue(completeGoal)
+    gatewayMocks.setThreadGoal
+      .mockResolvedValueOnce({ ...completeGoal, objective: 'Continue the task', status: 'active', tokensUsed: 0, timeUsedSeconds: 0 })
+      .mockResolvedValueOnce({ ...completeGoal, status: 'paused' })
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-1')
+    await flushMicrotasks()
+
+    await expect(state.saveSelectedThreadGoal('Continue the task')).resolves.toBe(true)
+    await expect(state.setSelectedThreadGoalStatus('paused')).resolves.toBe(true)
+    await expect(state.clearSelectedThreadGoal()).resolves.toBe(true)
+
+    expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(1, 'thread-1', {
+      objective: 'Continue the task',
+      status: 'active',
+      tokenBudget: 40_000,
+    })
+    expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(2, 'thread-1', { status: 'paused' })
+    expect(gatewayMocks.clearThreadGoal).toHaveBeenCalledWith('thread-1')
+    expect(state.selectedThreadGoal.value).toBe(null)
+  })
+
+  it('starts restored active-turn time at the first local observation', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-restored',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-1')
+
+    const beforeLoad = Date.now()
+    await state.loadMessages('thread-1')
+    const afterLoad = Date.now()
+
+    expect(state.selectedThreadGoalActiveTurnStartedAtMs.value).toBeGreaterThanOrEqual(beforeLoad)
+    expect(state.selectedThreadGoalActiveTurnStartedAtMs.value).toBeLessThanOrEqual(afterLoad)
+
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-restored',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    state.stopPolling()
+    await state.loadMessages('thread-1')
+
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('thread-1')
+    expect(state.selectedThreadGoalActiveTurnStartedAtMs.value).toBeGreaterThanOrEqual(beforeLoad)
   })
 })
 

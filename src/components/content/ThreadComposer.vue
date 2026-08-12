@@ -246,6 +246,107 @@
                 :class="{ 'is-on': isPlanModeSelected }"
               />
             </button>
+            <button
+              class="thread-composer-attach-setting"
+              type="button"
+              :aria-expanded="isGoalPanelOpen"
+              :disabled="!goalAvailable || isGoalLoading"
+              @click="toggleGoalPanel"
+            >
+              <span class="thread-composer-attach-setting-copy">
+                <span class="thread-composer-attach-setting-label">{{ t('Goal') }}</span>
+                <span class="thread-composer-attach-setting-description">{{ goalSummary }}</span>
+              </span>
+              <span v-if="goalAvailable && goal" class="thread-composer-goal-status" :data-status="goal.status">
+                {{ goalStatusLabel }}
+              </span>
+            </button>
+            <div v-if="isGoalPanelOpen && goalAvailable" class="thread-composer-goal-panel">
+              <template v-if="goalError && !goal">
+                <p class="thread-composer-goal-error" role="alert">{{ goalError }}</p>
+                <div class="thread-composer-goal-actions">
+                  <button class="thread-composer-goal-action" type="button" :disabled="isGoalLoading" @click="emit('reload-goal')">
+                    {{ t('Retry') }}
+                  </button>
+                </div>
+              </template>
+              <template v-else-if="isGoalEditing || !goal">
+                <textarea
+                  ref="goalInputRef"
+                  v-model="goalDraft"
+                  class="thread-composer-goal-input"
+                  :aria-label="t('Goal objective')"
+                  :placeholder="t('Goal objective')"
+                  :disabled="isGoalUpdating"
+                  @input="limitGoalDraft"
+                  @keydown.meta.enter.prevent="submitGoal"
+                  @keydown.ctrl.enter.prevent="submitGoal"
+                />
+                <div class="thread-composer-goal-actions">
+                  <button
+                    class="thread-composer-goal-action is-primary"
+                    type="button"
+                    :disabled="isGoalUpdating || goalDraft.trim().length === 0"
+                    @click="submitGoal"
+                  >
+                    {{ isGoalUpdating ? t('Saving…') : t('Save') }}
+                  </button>
+                  <button
+                    class="thread-composer-goal-action"
+                    type="button"
+                    :disabled="isGoalUpdating"
+                    @click="cancelGoalEdit"
+                  >
+                    {{ t('Cancel') }}
+                  </button>
+                </div>
+                <p v-if="goalError" class="thread-composer-goal-error" role="alert">{{ goalError }}</p>
+              </template>
+              <template v-else>
+                <p class="thread-composer-goal-objective">{{ goal.objective }}</p>
+                <dl class="thread-composer-goal-usage">
+                  <div>
+                    <dt>{{ t('Time used') }}</dt>
+                    <dd>{{ goalElapsedText }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t('Tokens used') }}</dt>
+                    <dd>{{ formatCompactTokenCount(goal.tokensUsed) }}</dd>
+                  </div>
+                  <div v-if="goal.tokenBudget !== null">
+                    <dt>{{ t('Token budget') }}</dt>
+                    <dd>{{ formatCompactTokenCount(goal.tokenBudget) }}</dd>
+                  </div>
+                </dl>
+                <p v-if="goalError" class="thread-composer-goal-error" role="alert">{{ goalError }}</p>
+                <div class="thread-composer-goal-actions">
+                  <button class="thread-composer-goal-action" type="button" :disabled="isGoalUpdating" @click="beginGoalEdit">
+                    {{ t('Edit') }}
+                  </button>
+                  <button
+                    v-if="goal.status === 'active'"
+                    class="thread-composer-goal-action"
+                    type="button"
+                    :disabled="isGoalUpdating"
+                    @click="emit('pause-goal')"
+                  >
+                    {{ t('Pause') }}
+                  </button>
+                  <button
+                    v-else-if="goalCanResume"
+                    class="thread-composer-goal-action"
+                    type="button"
+                    :disabled="isGoalUpdating"
+                    @click="emit('resume-goal')"
+                  >
+                    {{ t('Resume') }}
+                  </button>
+                  <button class="thread-composer-goal-action is-danger" type="button" :disabled="isGoalUpdating" @click="emit('clear-goal')">
+                    {{ t('Clear') }}
+                  </button>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -369,6 +470,7 @@ import type {
   UiRateLimitSnapshot,
   UiRateLimitWindow,
   UiThreadTokenUsage,
+  UiThreadGoal,
   UiTokenUsageBreakdown,
 } from '../../types/codex'
 import { DEFAULT_REASONING_EFFORTS } from '../../types/codex'
@@ -426,6 +528,12 @@ const props = defineProps<{
   inProgressSubmitMode?: 'steer' | 'queue'
   sideConversationAvailable?: boolean
   sideConversationOpen?: boolean
+  goal?: UiThreadGoal | null
+  goalObservedAtMs?: number
+  goalActiveTurnStartedAtMs?: number
+  isGoalLoading?: boolean
+  isGoalUpdating?: boolean
+  goalError?: string
 }>()
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
@@ -459,6 +567,11 @@ const emit = defineEmits<{
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
+  'save-goal': [objective: string]
+  'pause-goal': []
+  'resume-goal': []
+  'reload-goal': []
+  'clear-goal': []
 }>()
 const { t } = useUiLanguage()
 
@@ -502,8 +615,14 @@ const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const goalInputRef = ref<HTMLTextAreaElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
+const isGoalPanelOpen = ref(false)
+const isGoalEditing = ref(false)
+const goalDraft = ref('')
+const goalClockMs = ref(Date.now())
+let goalClockTimer: ReturnType<typeof setInterval> | null = null
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
@@ -615,6 +734,39 @@ const speedModeDescription = computed(() => {
   return props.selectedSpeedMode === 'fast'
     ? t('About 1.5x faster, with credits used at 2x')
     : t('Default speed with normal credit usage')
+})
+const goalAvailable = computed(() => (
+  Boolean(props.activeThreadId.trim()) && props.activeThreadId !== '__new-thread__'
+))
+const goalCanResume = computed(() => (
+  props.goal?.status === 'paused' || props.goal?.status === 'blocked' || props.goal?.status === 'usageLimited'
+))
+const goalStatusLabel = computed(() => {
+  const labels = {
+    active: 'Active',
+    paused: 'Paused',
+    blocked: 'Stalled',
+    usageLimited: 'Usage limited',
+    budgetLimited: 'Limited by budget',
+    complete: 'Complete',
+  } as const
+  return props.goal ? t(labels[props.goal.status]) : ''
+})
+const displayedGoalSeconds = computed(() => {
+  const goal = props.goal
+  if (!goal || goal.status !== 'active' || !props.isTurnInProgress) return goal?.timeUsedSeconds ?? 0
+  const activeTurnStartedAtMs = props.goalActiveTurnStartedAtMs ?? 0
+  if (activeTurnStartedAtMs <= 0) return goal.timeUsedSeconds
+  const baselineMs = Math.max(props.goalObservedAtMs ?? 0, activeTurnStartedAtMs)
+  return goal.timeUsedSeconds + Math.max(0, Math.floor((goalClockMs.value - baselineMs) / 1000))
+})
+const goalElapsedText = computed(() => formatGoalElapsedSeconds(displayedGoalSeconds.value))
+const goalSummary = computed(() => {
+  if (!goalAvailable.value) return t('Available after the chat is created')
+  if (props.isGoalLoading) return t('Loading goal…')
+  if (props.goalError && !props.goal) return t('Could not load goal')
+  if (!props.goal) return t('Set a long-running objective')
+  return `${props.goal.objective} · ${goalElapsedText.value}`
 })
 const inProgressMode = computed<'steer' | 'queue'>(() =>
   props.inProgressSubmitMode === 'steer' ? 'steer' : 'queue',
@@ -816,6 +968,20 @@ function formatCompactTokenCount(value: number): string {
     return `${compact.replace(/\.0$/, '')}k`
   }
   return String(Math.round(value))
+}
+
+function formatGoalElapsedSeconds(value: number): string {
+  const seconds = Math.max(0, Math.floor(value))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24)
+    return `${days}d ${hours % 24}h ${remainingMinutes}m`
+  }
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`
 }
 
 function formatBreakdownSummary(breakdown: UiTokenUsageBreakdown): string {
@@ -1076,6 +1242,49 @@ function onToggleSpeedMode(): void {
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
   isAttachMenuOpen.value = !isAttachMenuOpen.value
+}
+
+function startGoalClock(): void {
+  if (goalClockTimer || !props.goal || props.goal.status !== 'active' || !props.isTurnInProgress) return
+  goalClockMs.value = Date.now()
+  goalClockTimer = setInterval(() => {
+    goalClockMs.value = Date.now()
+  }, 1000)
+}
+
+function stopGoalClock(): void {
+  if (!goalClockTimer) return
+  clearInterval(goalClockTimer)
+  goalClockTimer = null
+}
+
+function toggleGoalPanel(): void {
+  if (!goalAvailable.value || props.isGoalLoading) return
+  isGoalPanelOpen.value = !isGoalPanelOpen.value
+  if (isGoalPanelOpen.value && !props.goal) beginGoalEdit()
+}
+
+function beginGoalEdit(): void {
+  goalDraft.value = props.goal?.objective ?? ''
+  isGoalEditing.value = true
+  void nextTick(() => goalInputRef.value?.focus())
+}
+
+function cancelGoalEdit(): void {
+  goalDraft.value = props.goal?.objective ?? ''
+  isGoalEditing.value = false
+  if (!props.goal) isGoalPanelOpen.value = false
+}
+
+function submitGoal(): void {
+  const objective = goalDraft.value.trim()
+  if (!objective || props.isGoalUpdating) return
+  emit('save-goal', objective)
+}
+
+function limitGoalDraft(): void {
+  const characters = [...goalDraft.value]
+  if (characters.length > 4000) goalDraft.value = characters.slice(0, 4000).join('')
 }
 
 function triggerPhotoLibrary(): void {
@@ -1714,6 +1923,7 @@ onBeforeUnmount(() => {
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
+  stopGoalClock()
 })
 
 watch(
@@ -1729,6 +1939,9 @@ watch(
       onInputChange()
     }
     lastActiveThreadId = nextThreadId.trim()
+    isGoalPanelOpen.value = false
+    isGoalEditing.value = false
+    goalDraft.value = ''
   },
   { immediate: true },
 )
@@ -1755,6 +1968,30 @@ watch(
   inProgressMode,
   (nextMode) => {
     activeInProgressMode.value = nextMode
+  },
+)
+
+watch(
+  () => [props.goal, props.isTurnInProgress] as const,
+  () => {
+    goalClockMs.value = Date.now()
+    stopGoalClock()
+    startGoalClock()
+    if (props.goal && isGoalEditing.value && props.goal.objective === goalDraft.value.trim()) {
+      isGoalEditing.value = false
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.goal,
+  (goal, previousGoal) => {
+    if (!goal && previousGoal) {
+      isGoalPanelOpen.value = false
+      isGoalEditing.value = false
+      goalDraft.value = ''
+    }
   },
 )
 
@@ -2056,7 +2293,70 @@ watch(
 }
 
 .thread-composer-attach-setting-description {
-  @apply mt-0.5 text-xs text-zinc-500;
+  @apply mt-0.5 max-w-52 truncate text-xs text-zinc-500;
+}
+
+.thread-composer-goal-status {
+  @apply shrink-0 text-xs text-emerald-700;
+}
+
+.thread-composer-goal-status[data-status='paused'],
+.thread-composer-goal-status[data-status='blocked'],
+.thread-composer-goal-status[data-status='usageLimited'] {
+  @apply text-amber-700;
+}
+
+.thread-composer-goal-status[data-status='budgetLimited'],
+.thread-composer-goal-status[data-status='complete'] {
+  @apply text-zinc-500;
+}
+
+.thread-composer-goal-panel {
+  @apply mx-2 mb-2 border-t border-zinc-200 px-1 pt-2;
+}
+
+.thread-composer-goal-input {
+  @apply min-h-20 w-full resize-y rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:bg-zinc-100;
+}
+
+.thread-composer-goal-objective {
+  @apply m-0 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-sm text-zinc-800;
+}
+
+.thread-composer-goal-usage {
+  @apply my-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs;
+}
+
+.thread-composer-goal-usage div {
+  @apply flex min-w-0 items-center justify-between gap-2;
+}
+
+.thread-composer-goal-usage dt {
+  @apply text-zinc-500;
+}
+
+.thread-composer-goal-usage dd {
+  @apply m-0 truncate text-zinc-800;
+}
+
+.thread-composer-goal-actions {
+  @apply mt-2 flex flex-wrap gap-1.5;
+}
+
+.thread-composer-goal-action {
+  @apply rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-400;
+}
+
+.thread-composer-goal-action.is-primary {
+  @apply border-zinc-900 bg-zinc-900 text-white hover:bg-black;
+}
+
+.thread-composer-goal-action.is-danger {
+  @apply ml-auto text-red-600;
+}
+
+.thread-composer-goal-error {
+  @apply mt-2 break-words text-xs text-red-600;
 }
 
 .thread-composer-attach-switch {
