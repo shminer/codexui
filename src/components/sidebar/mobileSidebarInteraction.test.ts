@@ -128,24 +128,37 @@ describe('mobile sidebar interaction policy', () => {
     expect(calls).toEqual({ overflow: ['thread-menu'], select: [] })
   })
 
-  it('waits for unpin success before archiving a thread', async () => {
+  it('waits for unpin success only when archiving a pinned thread', async () => {
     const source = await readFile(new URL('./SidebarThreadTree.vue', import.meta.url), 'utf8')
     const start = source.indexOf('async function deleteThreadById')
     const end = source.indexOf('\nfunction openAutomationDialog', start)
     const deleteBlock = source.slice(start, end)
 
-    expect(deleteBlock).toContain('if (!await queuePinnedThreadUpdate(threadId, false)) return')
-    expect(deleteBlock.indexOf('await queuePinnedThreadUpdate')).toBeLessThan(deleteBlock.indexOf("emit('archive', threadId)"))
+    expect(deleteBlock).toContain('if (!await unpinThreadBeforeArchive(')
+    expect(deleteBlock).toContain('(id) => queuePinnedThreadUpdate(id, false)')
+    expect(deleteBlock.indexOf('await unpinThreadBeforeArchive')).toBeLessThan(deleteBlock.indexOf("emit('archive', threadId)"))
   })
 
-  it('hydrates missing pinned summaries in bounded consecutive batches', async () => {
+  it('commits each bounded pinned-summary batch before loading the next batch', async () => {
     const source = await readFile(new URL('./SidebarThreadTree.vue', import.meta.url), 'utf8')
     const start = source.indexOf('async function hydrateMissingPinnedThreads')
     const end = source.indexOf('\nwatch([pinnedThreadIds', start)
     const hydrationBlock = source.slice(start, end)
 
-    expect(hydrationBlock).toContain('index += MAX_PINNED_THREAD_HYDRATION_BATCH')
-    expect(hydrationBlock).toContain('missingThreadIds.slice(index, index + MAX_PINNED_THREAD_HYDRATION_BATCH)')
-    expect(hydrationBlock).not.toContain('.slice(0, MAX_PINNED_THREAD_HYDRATION_BATCH)')
+    expect(hydrationBlock).toContain('await loadPinnedThreadSummaryBatches(')
+    expect(hydrationBlock).toContain('hydratedPinnedThreadById.value = next')
+    expect(hydrationBlock.indexOf('hydratedPinnedThreadById.value = next')).toBeLessThan(hydrationBlock.indexOf('return true'))
+  })
+
+  it('prunes hydrated summaries only from the authoritative pinned-thread state', async () => {
+    const source = await readFile(new URL('./SidebarThreadTree.vue', import.meta.url), 'utf8')
+    const start = source.indexOf('async function refreshPinnedThreadState')
+    const end = source.indexOf('\nfunction queuePinnedThreadUpdate', start)
+    const refreshBlock = source.slice(start, end)
+
+    expect(refreshBlock).toContain('const nextPinnedThreadIdSet = new Set(nextPinnedThreadIds)')
+    expect(refreshBlock).toContain('if (pinnedThreadIdsChanged) pinnedThreadIds.value = nextPinnedThreadIds')
+    expect(refreshBlock).toContain('Object.entries(hydratedPinnedThreadById.value).filter(([threadId]) => nextPinnedThreadIdSet.has(threadId))')
+    expect(refreshBlock).not.toContain('threadById.value')
   })
 })

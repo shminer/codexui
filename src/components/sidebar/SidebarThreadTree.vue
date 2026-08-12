@@ -899,7 +899,7 @@ import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics
 import { getPathLeafName, getPathParent, isAbsoluteLikePath, isProjectlessChatPath } from '../../pathUtils.js'
 import ComposerDropdown from '../content/ComposerDropdown.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
-import { updatePinnedThreadIds } from './pinnedThreadUtils'
+import { loadPinnedThreadSummaryBatches, unpinThreadBeforeArchive, updatePinnedThreadIds } from './pinnedThreadUtils'
 import { dispatchThreadRowInteraction } from './threadRowInteraction'
 
 const props = defineProps<{
@@ -1334,28 +1334,27 @@ async function hydrateMissingPinnedThreads(): Promise<void> {
   if (missingThreadIds.length === 0) return
 
   const version = (pinnedThreadHydrationVersion += 1)
-  const next = { ...hydratedPinnedThreadById.value }
-  for (let index = 0; index < missingThreadIds.length; index += MAX_PINNED_THREAD_HYDRATION_BATCH) {
-    const loadedThreads = await Promise.all(
-      missingThreadIds.slice(index, index + MAX_PINNED_THREAD_HYDRATION_BATCH).map(async (threadId) => {
-        try {
-          return { threadId, thread: await getThreadSummary(threadId) }
-        } catch {
-          return { threadId, thread: null }
-        }
-      }),
-    )
-    if (version !== pinnedThreadHydrationVersion) return
+  await loadPinnedThreadSummaryBatches(
+    missingThreadIds,
+    MAX_PINNED_THREAD_HYDRATION_BATCH,
+    getThreadSummary,
+    (loadedThreads) => {
+      if (version !== pinnedThreadHydrationVersion) return false
 
-    for (const { threadId, thread } of loadedThreads) {
-      if (thread) {
-        next[thread.id] = thread
-      } else {
-        failedPinnedThreadHydrationIds.add(threadId)
+      const currentPinnedThreadIds = new Set(pinnedThreadIds.value)
+      const next = { ...hydratedPinnedThreadById.value }
+      for (const { threadId, thread } of loadedThreads) {
+        if (!currentPinnedThreadIds.has(threadId)) continue
+        if (thread) {
+          next[thread.id] = thread
+        } else {
+          failedPinnedThreadHydrationIds.add(threadId)
+        }
       }
-    }
-  }
-  hydratedPinnedThreadById.value = next
+      hydratedPinnedThreadById.value = next
+      return true
+    },
+  )
 }
 
 watch([pinnedThreadIds, threadById, () => props.isLoading], () => {
@@ -1378,8 +1377,18 @@ async function refreshPinnedThreadState(): Promise<void> {
     try {
       const { threadIds } = await getPinnedThreadState()
       if (pendingPinnedThreadMutations === 0) {
+        const nextPinnedThreadIds = normalizePinnedThreadIds(threadIds)
+        const nextPinnedThreadIdSet = new Set(nextPinnedThreadIds)
+        const pinnedThreadIdsChanged = nextPinnedThreadIds.length !== pinnedThreadIds.value.length ||
+          nextPinnedThreadIds.some((threadId, index) => threadId !== pinnedThreadIds.value[index])
+        const hydratedThreadIds = Object.keys(hydratedPinnedThreadById.value)
+        if (hydratedThreadIds.some((threadId) => !nextPinnedThreadIdSet.has(threadId))) {
+          hydratedPinnedThreadById.value = Object.fromEntries(
+            Object.entries(hydratedPinnedThreadById.value).filter(([threadId]) => nextPinnedThreadIdSet.has(threadId)),
+          )
+        }
         failedPinnedThreadHydrationIds.clear()
-        pinnedThreadIds.value = normalizePinnedThreadIds(threadIds)
+        if (pinnedThreadIdsChanged) pinnedThreadIds.value = nextPinnedThreadIds
       }
       hasLoadedPinnedThreadState = true
     } catch (error) {
@@ -1924,7 +1933,11 @@ async function onInlineDeleteClick(threadId: string): Promise<void> {
 async function deleteThreadById(threadId: string): Promise<void> {
   inlineDeleteConfirmThreadId.value = ''
   closeThreadMenu()
-  if (!await queuePinnedThreadUpdate(threadId, false)) return
+  if (!await unpinThreadBeforeArchive(
+    threadId,
+    isPinned(threadId),
+    (id) => queuePinnedThreadUpdate(id, false),
+  )) return
 
   if (!optimisticallyArchivedThreadIdSet.value.has(threadId)) {
     optimisticallyArchivedThreadIds.value = [threadId, ...optimisticallyArchivedThreadIds.value]
