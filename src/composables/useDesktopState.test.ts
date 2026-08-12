@@ -468,7 +468,7 @@ describe('workspace roots project persistence helpers', () => {
       active: ['/tmp/existing-project'],
       projectOrder: ['/tmp/existing-project'],
     })
-    gatewayMocks.setWorkspaceRootsState.mockRejectedValue(new Error('workspace roots save failed'))
+    gatewayMocks.setWorkspaceRootsState.mockRejectedValueOnce(new Error('workspace roots save failed'))
 
     const state = useDesktopState()
     await state.refreshAll({ includeSelectedThreadMessages: false })
