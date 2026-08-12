@@ -13,6 +13,7 @@
 5. Confirm both previously visible local projects remain in the sidebar without selecting their folders again.
 6. Refresh the page and repeat the sidebar checks.
 7. Repeat the flow once in the light theme and once in the dark theme.
+8. Make the workspace-roots save request fail and select another folder.
 
 #### Expected Results
 - Selecting the new folder does not clear or hide projects discovered from existing thread history.
@@ -20,6 +21,7 @@
 - Projectless chat folders are not added as workspace projects.
 - Remote project IDs retain their existing project-order behavior.
 - Reloading preserves the same sidebar project set and order.
+- A workspace-roots save failure remains visible in the picker, reports the existing error, and does not continue with a sidebar refresh or close the picker.
 
 #### Rollback/Cleanup
 - Remove the test project from the sidebar if it is no longer needed.

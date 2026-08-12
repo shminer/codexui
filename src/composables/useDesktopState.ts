@@ -6245,7 +6245,7 @@ export function useDesktopState() {
       }
     }
 
-    await persistProjectOrderToWorkspaceRoots()
+    await persistProjectOrderToWorkspaceRoots().catch(() => undefined)
   }
 
   function reorderProject(projectName: string, toIndex: number): void {
@@ -6267,7 +6267,7 @@ export function useDesktopState() {
     const orderedGroups = orderGroupsByProjectOrder(sourceGroups.value, projectOrder.value)
     sourceGroups.value = mergeThreadGroups(sourceGroups.value, orderedGroups)
     applyThreadFlags()
-    void persistProjectOrderToWorkspaceRoots()
+    void persistProjectOrderToWorkspaceRoots().catch(() => undefined)
   }
 
   async function pinProjectToTop(projectName: string): Promise<void> {
@@ -6286,19 +6286,15 @@ export function useDesktopState() {
   }
 
   async function persistProjectOrderToWorkspaceRoots(): Promise<void> {
-    try {
-      const rootsState = await getWorkspaceRootsState()
-      const nextState = buildWorkspaceRootsProjectOrderState(rootsState, projectOrder.value, sourceGroups.value)
+    const rootsState = await getWorkspaceRootsState()
+    const nextState = buildWorkspaceRootsProjectOrderState(rootsState, projectOrder.value, sourceGroups.value)
 
-      await setWorkspaceRootsState({
-        order: nextState.order,
-        labels: rootsState.labels,
-        active: nextState.active,
-        projectOrder: nextState.projectOrder,
-      })
-    } catch {
-      // Keep local project order when global state persistence is unavailable.
-    }
+    await setWorkspaceRootsState({
+      order: nextState.order,
+      labels: rootsState.labels,
+      active: nextState.active,
+      projectOrder: nextState.projectOrder,
+    })
   }
 
   async function syncThreadStatus(): Promise<void> {

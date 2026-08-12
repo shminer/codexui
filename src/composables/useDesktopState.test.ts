@@ -455,6 +455,26 @@ describe('workspace roots project persistence helpers', () => {
       projectOrder: ['/tmp/new-project', '/tmp/existing-a', '/tmp/existing-b'],
     })
   })
+
+  it('propagates workspace-root save failures when pinning a newly opened project', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'existing-project', threads: [thread('existing-chat', '/tmp/existing-project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue({
+      order: ['/tmp/existing-project'],
+      labels: {},
+      active: ['/tmp/existing-project'],
+      projectOrder: ['/tmp/existing-project'],
+    })
+    gatewayMocks.setWorkspaceRootsState.mockRejectedValue(new Error('workspace roots save failed'))
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    await expect(state.pinProjectToTop('new-project')).rejects.toThrow('workspace roots save failed')
+  })
 })
 
 describe('thread unread state helpers', () => {
