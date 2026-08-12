@@ -57,6 +57,7 @@ describe('thread goal RPC', () => {
 
     await expect(getThreadGoal('thread-1')).resolves.toMatchObject({ objective: 'Ship the goal UI' })
     await setThreadGoal('thread-1', { objective: 'Edit the goal', status: 'active', tokenBudget: 40_000 })
+    await setThreadGoal('thread-1', { tokenBudget: null })
     await setThreadGoal('thread-1', { status: 'paused' })
     await expect(clearThreadGoal('thread-1')).resolves.toBe(true)
 
@@ -66,6 +67,7 @@ describe('thread goal RPC', () => {
         method: 'thread/goal/set',
         params: { threadId: 'thread-1', objective: 'Edit the goal', status: 'active', tokenBudget: 40_000 },
       },
+      { method: 'thread/goal/set', params: { threadId: 'thread-1', tokenBudget: null } },
       { method: 'thread/goal/set', params: { threadId: 'thread-1', status: 'paused' } },
       { method: 'thread/goal/clear', params: { threadId: 'thread-1' } },
     ])

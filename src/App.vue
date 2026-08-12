@@ -4174,8 +4174,8 @@ function onSelectSpeedMode(mode: SpeedMode): void {
   void updateSelectedSpeedMode(mode)
 }
 
-function onSaveGoal(objective: string): void {
-  void saveSelectedThreadGoal(objective)
+function onSaveGoal(objective: string, tokenBudget: number | null): void {
+  void saveSelectedThreadGoal(objective, tokenBudget)
 }
 
 function onPauseGoal(): void {

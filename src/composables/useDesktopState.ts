@@ -1900,7 +1900,7 @@ export function useDesktopState() {
     }
   }
 
-  function saveSelectedThreadGoal(objective: string): Promise<boolean> {
+  function saveSelectedThreadGoal(objective: string, tokenBudget: number | null): Promise<boolean> {
     const threadId = selectedThreadId.value
     const current = threadGoalByThreadId.value[threadId]
     const status = current && (current.status === 'budgetLimited' || current.status === 'complete')
@@ -1909,7 +1909,7 @@ export function useDesktopState() {
     return updateThreadGoal(threadId, {
       objective,
       status,
-      ...(current ? { tokenBudget: current.tokenBudget } : {}),
+      tokenBudget,
     })
   }
 

@@ -782,27 +782,34 @@ describe('thread goal state', () => {
     expect(state.selectedThreadGoal.value?.objective).toBe('Restored from Codex')
   })
 
-  it('preserves budget while editing and uses official status and clear calls', async () => {
+  it('updates or clears budget while editing and uses official status and clear calls', async () => {
     installTestWindow()
     const completeGoal = { ...activeGoal, status: 'complete' as const }
     gatewayMocks.getThreadGoal.mockResolvedValue(completeGoal)
     gatewayMocks.setThreadGoal
-      .mockResolvedValueOnce({ ...completeGoal, objective: 'Continue the task', status: 'active', tokensUsed: 0, timeUsedSeconds: 0 })
+      .mockResolvedValueOnce({ ...completeGoal, objective: 'Continue the task', status: 'active', tokenBudget: 60_000, tokensUsed: 0, timeUsedSeconds: 0 })
+      .mockResolvedValueOnce({ ...completeGoal, objective: 'Continue the task', status: 'active', tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0 })
       .mockResolvedValueOnce({ ...completeGoal, status: 'paused' })
     const state = useDesktopState()
     state.primeSelectedThread('thread-1')
     await flushMicrotasks()
 
-    await expect(state.saveSelectedThreadGoal('Continue the task')).resolves.toBe(true)
+    await expect(state.saveSelectedThreadGoal('Continue the task', 60_000)).resolves.toBe(true)
+    await expect(state.saveSelectedThreadGoal('Continue the task', null)).resolves.toBe(true)
     await expect(state.setSelectedThreadGoalStatus('paused')).resolves.toBe(true)
     await expect(state.clearSelectedThreadGoal()).resolves.toBe(true)
 
     expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(1, 'thread-1', {
       objective: 'Continue the task',
       status: 'active',
-      tokenBudget: 40_000,
+      tokenBudget: 60_000,
     })
-    expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(2, 'thread-1', { status: 'paused' })
+    expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(2, 'thread-1', {
+      objective: 'Continue the task',
+      status: 'active',
+      tokenBudget: null,
+    })
+    expect(gatewayMocks.setThreadGoal).toHaveBeenNthCalledWith(3, 'thread-1', { status: 'paused' })
     expect(gatewayMocks.clearThreadGoal).toHaveBeenCalledWith('thread-1')
     expect(state.selectedThreadGoal.value).toBe(null)
   })

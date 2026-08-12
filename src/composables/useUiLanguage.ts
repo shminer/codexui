@@ -122,6 +122,7 @@ const zhCN: Record<string, string> = {
   'Time used': '运行时间',
   'Tokens used': '已用 Token',
   'Token budget': 'Token 预算',
+  'Unlimited': '无限制',
   'Pause': '暂停',
   'Resume': '继续',
   'Clear': '清除',

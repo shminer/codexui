@@ -459,8 +459,13 @@
   @apply border-zinc-700;
 }
 
-:root.dark .thread-composer-goal-input {
+:root.dark .thread-composer-goal-input,
+:root.dark .thread-composer-goal-budget-input {
   @apply border-zinc-600 bg-zinc-900 text-zinc-100 focus:border-zinc-400 disabled:bg-zinc-800;
+}
+
+:root.dark .thread-composer-goal-budget-field {
+  @apply text-zinc-400;
 }
 
 :root.dark .thread-composer-goal-objective,

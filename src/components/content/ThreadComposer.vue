@@ -282,11 +282,27 @@
                   @keydown.meta.enter.prevent="submitGoal"
                   @keydown.ctrl.enter.prevent="submitGoal"
                 />
+                <label class="thread-composer-goal-budget-field">
+                  <span>{{ t('Token budget') }}</span>
+                  <input
+                    v-model="goalTokenBudgetDraft"
+                    class="thread-composer-goal-budget-input"
+                    type="number"
+                    min="0"
+                    :max="Number.MAX_SAFE_INTEGER"
+                    step="1"
+                    :placeholder="t('Unlimited')"
+                    :disabled="isGoalUpdating"
+                    :aria-invalid="parsedGoalTokenBudget === undefined"
+                    @keydown.meta.enter.prevent="submitGoal"
+                    @keydown.ctrl.enter.prevent="submitGoal"
+                  />
+                </label>
                 <div class="thread-composer-goal-actions">
                   <button
                     class="thread-composer-goal-action is-primary"
                     type="button"
-                    :disabled="isGoalUpdating || goalDraft.trim().length === 0"
+                    :disabled="isGoalUpdating || goalDraft.trim().length === 0 || parsedGoalTokenBudget === undefined"
                     @click="submitGoal"
                   >
                     {{ isGoalUpdating ? t('Saving…') : t('Save') }}
@@ -567,7 +583,7 @@ const emit = defineEmits<{
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
-  'save-goal': [objective: string]
+  'save-goal': [objective: string, tokenBudget: number | null]
   'pause-goal': []
   'resume-goal': []
   'reload-goal': []
@@ -621,6 +637,7 @@ const isAttachMenuOpen = ref(false)
 const isGoalPanelOpen = ref(false)
 const isGoalEditing = ref(false)
 const goalDraft = ref('')
+const goalTokenBudgetDraft = ref<string | number>('')
 const goalClockMs = ref(Date.now())
 let goalClockTimer: ReturnType<typeof setInterval> | null = null
 const mentionStartIndex = ref<number | null>(null)
@@ -1266,20 +1283,30 @@ function toggleGoalPanel(): void {
 
 function beginGoalEdit(): void {
   goalDraft.value = props.goal?.objective ?? ''
+  goalTokenBudgetDraft.value = props.goal?.tokenBudget?.toString() ?? ''
   isGoalEditing.value = true
   void nextTick(() => goalInputRef.value?.focus())
 }
 
 function cancelGoalEdit(): void {
   goalDraft.value = props.goal?.objective ?? ''
+  goalTokenBudgetDraft.value = props.goal?.tokenBudget?.toString() ?? ''
   isGoalEditing.value = false
   if (!props.goal) isGoalPanelOpen.value = false
 }
 
+const parsedGoalTokenBudget = computed<number | null | undefined>(() => {
+  const value = String(goalTokenBudgetDraft.value).trim()
+  if (!value) return null
+  const budget = Number(value)
+  return Number.isSafeInteger(budget) && budget >= 0 ? budget : undefined
+})
+
 function submitGoal(): void {
   const objective = goalDraft.value.trim()
-  if (!objective || props.isGoalUpdating) return
-  emit('save-goal', objective)
+  const tokenBudget = parsedGoalTokenBudget.value
+  if (!objective || tokenBudget === undefined || props.isGoalUpdating) return
+  emit('save-goal', objective, tokenBudget)
 }
 
 function limitGoalDraft(): void {
@@ -1942,6 +1969,7 @@ watch(
     isGoalPanelOpen.value = false
     isGoalEditing.value = false
     goalDraft.value = ''
+    goalTokenBudgetDraft.value = ''
   },
   { immediate: true },
 )
@@ -1977,7 +2005,12 @@ watch(
     goalClockMs.value = Date.now()
     stopGoalClock()
     startGoalClock()
-    if (props.goal && isGoalEditing.value && props.goal.objective === goalDraft.value.trim()) {
+    if (
+      props.goal
+      && isGoalEditing.value
+      && props.goal.objective === goalDraft.value.trim()
+      && props.goal.tokenBudget === parsedGoalTokenBudget.value
+    ) {
       isGoalEditing.value = false
     }
   },
@@ -1991,6 +2024,7 @@ watch(
       isGoalPanelOpen.value = false
       isGoalEditing.value = false
       goalDraft.value = ''
+      goalTokenBudgetDraft.value = ''
     }
   },
 )
@@ -2317,6 +2351,14 @@ watch(
 
 .thread-composer-goal-input {
   @apply min-h-20 w-full resize-y rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:bg-zinc-100;
+}
+
+.thread-composer-goal-budget-field {
+  @apply mt-2 flex items-center justify-between gap-3 text-xs text-zinc-500;
+}
+
+.thread-composer-goal-budget-input {
+  @apply min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:bg-zinc-100;
 }
 
 .thread-composer-goal-objective {
