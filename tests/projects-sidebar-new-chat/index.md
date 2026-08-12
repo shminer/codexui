@@ -24,3 +24,4 @@ Return to the [manual test index](../../tests.md).
 | [Sidebar sessions survive symlinked workspace roots](sidebar-sessions-survive-symlinked-workspace-roots.md) |
 | [Sidebar scroll position survives collapse](sidebar-scroll-position-survives-collapse.md) |
 | [Sidebar toolbar new thread and file browser actions](toolbar-new-thread-keeps-active-project.md) |
+| [Selecting a new folder preserves existing sidebar projects](selecting-new-folder-preserves-existing-projects.md) |

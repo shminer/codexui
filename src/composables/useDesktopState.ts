@@ -1274,6 +1274,7 @@ export function buildWorkspaceRootsProjectOrderState(
 ): Pick<WorkspaceRootsState, 'order' | 'active' | 'projectOrder'> {
   const remoteProjectIds = new Set((rootsState.remoteProjects ?? []).map((project) => project.id))
   const rootByProjectName = new Map<string, string>()
+  const groupRootPaths = new Set<string>()
   for (const rootPath of rootsState.order) {
     const projectName = toProjectNameFromWorkspaceRoot(rootPath)
     if (!rootByProjectName.has(projectName)) {
@@ -1281,9 +1282,13 @@ export function buildWorkspaceRootsProjectOrderState(
     }
   }
   for (const group of groups) {
-    const cwd = group.threads[0]?.cwd?.trim() ?? ''
+    const cwd = group.threads.find((thread) => {
+      const path = thread.cwd.trim()
+      return path.length > 0 && !isProjectlessChatPath(path)
+    })?.cwd.trim() ?? ''
     if (!cwd) continue
     rootByProjectName.set(group.projectName, cwd)
+    groupRootPaths.add(cwd)
   }
 
   const nextProjectOrder: string[] = []
@@ -1307,7 +1312,7 @@ export function buildWorkspaceRootsProjectOrderState(
     pushProjectOrderItem(item)
   }
 
-  const nextOrder = nextProjectOrder.filter((item) => rootsState.order.includes(item))
+  const nextOrder = nextProjectOrder.filter((item) => rootsState.order.includes(item) || groupRootPaths.has(item))
   for (const rootPath of rootsState.order) {
     if (!nextOrder.includes(rootPath)) {
       nextOrder.push(rootPath)
@@ -6253,18 +6258,19 @@ export function useDesktopState() {
     void persistProjectOrderToWorkspaceRoots()
   }
 
-  function pinProjectToTop(projectName: string): void {
+  async function pinProjectToTop(projectName: string): Promise<void> {
     const normalizedName = projectName.trim()
     if (!normalizedName) return
     const nextOrder = [normalizedName, ...projectOrder.value.filter((name) => name !== normalizedName)]
-    if (areStringArraysEqual(projectOrder.value, nextOrder)) return
-    projectOrder.value = nextOrder
-    saveProjectOrder(projectOrder.value)
+    if (!areStringArraysEqual(projectOrder.value, nextOrder)) {
+      projectOrder.value = nextOrder
+      saveProjectOrder(projectOrder.value)
 
-    const orderedGroups = orderGroupsByProjectOrder(sourceGroups.value, projectOrder.value)
-    sourceGroups.value = mergeThreadGroups(sourceGroups.value, orderedGroups)
-    applyThreadFlags()
-    void persistProjectOrderToWorkspaceRoots()
+      const orderedGroups = orderGroupsByProjectOrder(sourceGroups.value, projectOrder.value)
+      sourceGroups.value = mergeThreadGroups(sourceGroups.value, orderedGroups)
+      applyThreadFlags()
+    }
+    await persistProjectOrderToWorkspaceRoots()
   }
 
   async function persistProjectOrderToWorkspaceRoots(): Promise<void> {

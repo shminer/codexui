@@ -422,6 +422,39 @@ describe('workspace roots project persistence helpers', () => {
       projectOrder: ['remote-project-id', '/tmp/local-project'],
     })
   })
+
+  it('adds visible historical project roots when a newly opened root enables filtering', () => {
+    const groups: UiProjectGroup[] = [
+      {
+        projectName: 'existing-a',
+        threads: [thread('existing-a-chat', '/tmp/existing-a')],
+      },
+      {
+        projectName: 'existing-b',
+        threads: [thread('existing-b-chat', '/tmp/existing-b')],
+      },
+      {
+        projectName: 'Projectless',
+        threads: [thread('projectless-chat', '/home/jz/Documents/Codex/2026-08-12/chat-1')],
+      },
+    ]
+    const rootsState: WorkspaceRootsState = {
+      order: ['/tmp/new-project'],
+      labels: {},
+      active: ['/tmp/new-project'],
+      projectOrder: ['/tmp/new-project'],
+    }
+
+    expect(buildWorkspaceRootsProjectOrderState(
+      rootsState,
+      ['new-project', 'existing-a', 'existing-b', 'Projectless'],
+      groups,
+    )).toEqual({
+      order: ['/tmp/new-project', '/tmp/existing-a', '/tmp/existing-b'],
+      active: ['/tmp/new-project'],
+      projectOrder: ['/tmp/new-project', '/tmp/existing-a', '/tmp/existing-b'],
+    })
+  })
 })
 
 describe('thread unread state helpers', () => {

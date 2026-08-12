@@ -2918,7 +2918,7 @@ async function onCreateProjectWorktree(projectName: string): Promise<void> {
 
     newThreadCwd.value = normalizedPath
     newThreadRuntime.value = 'local'
-    pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
+    await pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
     await loadWorkspaceRootOptionsState()
     await refreshDefaultProjectName()
     if (isMobile.value) setSidebarCollapsed(true)
@@ -3754,7 +3754,7 @@ async function onSubmitProjectSetup(): Promise<void> {
     if (!normalizedPath) return
 
     newThreadCwd.value = normalizedPath
-    pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
+    await pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
     await loadWorkspaceRootOptionsState()
     await refreshDefaultProjectName()
     isProjectSetupModalOpen.value = false
@@ -3787,7 +3787,7 @@ async function finishProjectImport(
     const result = await importer(baseDir)
     if (!result.path) return
     newThreadCwd.value = result.path
-    pinProjectToTop(getProjectOrderNameForPath(result.path))
+    await pinProjectToTop(getProjectOrderNameForPath(result.path))
     await loadWorkspaceRootOptionsState()
     await refreshAll({ includeSelectedThreadMessages: false, forceThreadRefresh: true })
     await refreshDefaultProjectName()
@@ -3884,7 +3884,7 @@ async function onConfirmExistingFolder(path = resolvedExistingFolderPath.value):
     }
 
     newThreadCwd.value = normalizedPath
-    pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
+    await pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
     await loadWorkspaceRootOptionsState()
     await refreshAll({ includeSelectedThreadMessages: false, forceThreadRefresh: true })
     await refreshDefaultProjectName()
@@ -3977,7 +3977,7 @@ async function applyLaunchProjectPathFromUrl(): Promise<boolean> {
     })
     if (!normalizedPath) return false
     newThreadCwd.value = normalizedPath
-    pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
+    await pinProjectToTop(getProjectOrderNameForPath(normalizedPath))
     await router.replace({ name: 'home' })
     await loadWorkspaceRootOptionsState()
     const nextUrl = new URL(window.location.href)
