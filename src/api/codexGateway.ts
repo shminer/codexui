@@ -3672,6 +3672,99 @@ export type ThreadTitleCache = { titles: Record<string, string>; order: string[]
 export type ThreadPinnedState = { threadIds: string[] }
 export type FirstLaunchPluginsCardPreference = { dismissed: boolean }
 
+const PINNED_THREAD_SECTION_ID = '01984de2-8f74-7c91-a3b2-5c5e937cf318'
+const PINNED_THREAD_PAGE_LIMIT = 100
+const MAX_PINNED_THREAD_PAGES = 20
+let nativePinnedThreadCapabilityPromise: Promise<boolean> | null = null
+
+type NativePinnedThreadListResponse = {
+  data?: Array<{ id?: unknown }>
+  nextCursor?: unknown
+}
+
+function normalizePinnedThreadIds(threadIds: unknown): string[] {
+  if (!Array.isArray(threadIds)) return []
+  return threadIds
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item, index, rows) => item.length > 0 && rows.indexOf(item) === index)
+}
+
+async function supportsNativePinnedThreads(): Promise<boolean> {
+  if (!nativePinnedThreadCapabilityPromise) {
+    nativePinnedThreadCapabilityPromise = getMethodCatalog()
+      .then((methods) => methods.includes('threadSection/list') && methods.includes('thread/section/move'))
+      .catch(() => false)
+  }
+  return await nativePinnedThreadCapabilityPromise
+}
+
+async function readNativePinnedThreadIds(): Promise<string[]> {
+  const threadIds: string[] = []
+  const seenThreadIds = new Set<string>()
+  const seenCursors = new Set<string>()
+  let cursor: string | null = null
+
+  for (let page = 0; page < MAX_PINNED_THREAD_PAGES; page += 1) {
+    const payload: NativePinnedThreadListResponse = await callRpc('thread/list', {
+      archived: false,
+      sectionId: PINNED_THREAD_SECTION_ID,
+      sortKey: 'section_position',
+      sortDirection: 'asc',
+      limit: PINNED_THREAD_PAGE_LIMIT,
+      cursor,
+    })
+    for (const thread of payload.data ?? []) {
+      const threadId = typeof thread.id === 'string' ? thread.id.trim() : ''
+      if (!threadId || seenThreadIds.has(threadId)) continue
+      seenThreadIds.add(threadId)
+      threadIds.push(threadId)
+    }
+
+    const nextCursor: string = typeof payload.nextCursor === 'string' ? payload.nextCursor.trim() : ''
+    if (!nextCursor || seenCursors.has(nextCursor)) break
+    seenCursors.add(nextCursor)
+    cursor = nextCursor
+  }
+
+  return threadIds
+}
+
+async function persistNativePinnedThreadIds(threadIds: string[]): Promise<void> {
+  const desired = normalizePinnedThreadIds(threadIds)
+  const desiredSet = new Set(desired)
+  const current = await readNativePinnedThreadIds()
+  const working = current.filter((threadId) => desiredSet.has(threadId))
+
+  for (const threadId of current) {
+    if (desiredSet.has(threadId)) continue
+    await callRpc('thread/section/move', {
+      threadId,
+      sectionId: null,
+      beforeThreadId: null,
+    })
+  }
+
+  for (let index = desired.length - 1; index >= 0; index -= 1) {
+    const threadId = desired[index]
+    const beforeThreadId = desired[index + 1] ?? null
+    const currentIndex = working.indexOf(threadId)
+    const isAlreadyPlaced = beforeThreadId === null
+      ? currentIndex >= 0 && currentIndex === working.length - 1
+      : currentIndex >= 0 && working[currentIndex + 1] === beforeThreadId
+    if (isAlreadyPlaced) continue
+
+    await callRpc('thread/section/move', {
+      threadId,
+      sectionId: PINNED_THREAD_SECTION_ID,
+      beforeThreadId,
+    })
+    if (currentIndex >= 0) working.splice(currentIndex, 1)
+    const beforeIndex = beforeThreadId === null ? working.length : working.indexOf(beforeThreadId)
+    working.splice(beforeIndex < 0 ? working.length : beforeIndex, 0, threadId)
+  }
+}
+
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
   try {
     const response = await fetch('/codex-api/thread-titles')
@@ -3696,25 +3789,33 @@ export async function persistThreadTitle(id: string, title: string): Promise<voi
 }
 
 export async function getPinnedThreadState(): Promise<ThreadPinnedState> {
-  try {
-    const response = await fetch('/codex-api/thread-pins')
-    if (!response.ok) return { threadIds: [] }
-    const envelope = (await response.json()) as { data?: ThreadPinnedState }
-    return envelope.data ?? { threadIds: [] }
-  } catch {
-    return { threadIds: [] }
+  if (await supportsNativePinnedThreads()) {
+    return { threadIds: await readNativePinnedThreadIds() }
   }
+
+  const response = await fetch('/codex-api/thread-pins')
+  const payload = await response.json().catch(() => null) as { data?: ThreadPinnedState } | null
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load pinned threads (${response.status})`))
+  }
+  return { threadIds: normalizePinnedThreadIds(payload?.data?.threadIds) }
 }
 
 export async function persistPinnedThreadIds(threadIds: string[]): Promise<void> {
-  try {
-    await fetch('/codex-api/thread-pins', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadIds }),
-    })
-  } catch {
-    // Best-effort persist
+  const normalized = normalizePinnedThreadIds(threadIds)
+  if (await supportsNativePinnedThreads()) {
+    await persistNativePinnedThreadIds(normalized)
+    return
+  }
+
+  const response = await fetch('/codex-api/thread-pins', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadIds: normalized }),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to save pinned threads (${response.status})`))
   }
 }
 

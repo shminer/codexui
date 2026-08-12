@@ -14,6 +14,7 @@ import {
   isThreadNotFoundError,
   isUnauthenticatedRateLimitError,
   writeFreeModeStateFile,
+  writePinnedThreadIds,
   writeWorkspaceRootsState,
 } from './codexAppServerBridge'
 
@@ -234,6 +235,33 @@ describe('writeWorkspaceRootsState', () => {
         [canonicalRoot]: 'Canonical Demo',
         'remote-project-id': 'Remote Demo',
       })
+    } finally {
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves concurrent pin and workspace-root updates in global state', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-concurrent-global-state-'))
+    process.env.CODEX_HOME = codexHome
+
+    try {
+      await writeFile(join(codexHome, '.codex-global-state.json'), JSON.stringify({ untouched: 'value' }))
+      await Promise.all([
+        writePinnedThreadIds(['pinned-thread']),
+        writeWorkspaceRootsState({
+          order: [codexHome],
+          labels: { [codexHome]: 'Codex Home' },
+          active: [codexHome],
+          projectOrder: [codexHome],
+          remoteProjects: [],
+        }),
+      ])
+
+      const state = JSON.parse(await readFile(join(codexHome, '.codex-global-state.json'), 'utf8')) as Record<string, unknown>
+      expect(state.untouched).toBe('value')
+      expect(state['pinned-thread-ids']).toEqual(['pinned-thread'])
+      expect(state['electron-saved-workspace-roots']).toEqual([codexHome])
+      expect(state['project-order']).toEqual([codexHome])
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }

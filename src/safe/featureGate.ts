@@ -35,10 +35,12 @@ const ALLOWED_RPC_METHODS = new Set([
   'thread/read',
   'thread/resume',
   'thread/rollback',
+  'thread/section/move',
   'thread/start',
   'thread/start-turn',
   'thread/unsubscribe',
   'thread/unarchive',
+  'threadSection/list',
   'turn/interrupt',
   'turn/start',
 ])

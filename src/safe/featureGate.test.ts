@@ -7,6 +7,8 @@ describe('safe feature gate', () => {
     expect(isAllowedRpcMethod('thread/resume')).toBe(true)
     expect(isAllowedRpcMethod('thread/inject_items')).toBe(true)
     expect(isAllowedRpcMethod('thread/unsubscribe')).toBe(true)
+    expect(isAllowedRpcMethod('thread/section/move')).toBe(true)
+    expect(isAllowedRpcMethod('threadSection/list')).toBe(true)
     expect(isAllowedRpcMethod('turn/start')).toBe(true)
   })
 

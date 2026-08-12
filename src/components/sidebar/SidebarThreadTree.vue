@@ -984,6 +984,8 @@ const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const SECTION_EXPANSION_STORAGE_KEY = 'codex-web-local.sidebar-section-expansion.v1'
 const CHATS_FIRST_STORAGE_KEY = 'codex-web-local.sidebar-chats-first.v1'
 const CHAT_SORT_MODE_STORAGE_KEY = 'codex-web-local.sidebar-chat-sort-mode.v1'
+const PINNED_THREAD_REFRESH_INTERVAL_MS = 5_000
+const MAX_PINNED_THREAD_HYDRATION_BATCH = 20
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
 const isPinnedSectionExpanded = ref(true)
@@ -993,6 +995,10 @@ const isChatsListExpanded = ref(false)
 const showChatsFirst = ref(loadBooleanStorage(CHATS_FIRST_STORAGE_KEY, false))
 const chatSortMode = ref<ChatSortMode>(loadChatSortMode())
 let hasLoadedPinnedThreadState = false
+let pinnedThreadRefreshPromise: Promise<void> | null = null
+let pinnedThreadMutation: Promise<void> = Promise.resolve()
+let pendingPinnedThreadMutations = 0
+let pinnedThreadRefreshIntervalId: number | null = null
 const pinnedThreadIds = ref<string[]>([])
 const hydratedPinnedThreadById = ref<Record<string, UiThread>>({})
 const inlineDeleteConfirmThreadId = ref('')
@@ -1315,14 +1321,6 @@ const threadById = computed(() => {
   return map
 })
 
-watch(
-  pinnedThreadIds,
-  (threadIds) => {
-    if (!hasLoadedPinnedThreadState) return
-    void persistPinnedThreadIds(threadIds)
-  },
-)
-
 watch([threadById, () => props.isThreadListFullyLoaded], ([threadsById]) => {
   const filtered = reconcilePinnedThreadIds(pinnedThreadIds.value, new Set(threadsById.keys()), {
     canPruneMissing: props.isThreadListFullyLoaded,
@@ -1333,14 +1331,16 @@ watch([threadById, () => props.isThreadListFullyLoaded], ([threadsById]) => {
     Object.entries(hydratedPinnedThreadById.value).filter(([threadId]) => filteredIdSet.has(threadId)),
   )
   hydratedPinnedThreadById.value = nextHydratedPinnedThreads
-  pinnedThreadIds.value = filtered
+  queuePinnedThreadUpdate(() => filtered)
 })
 
 let pinnedThreadHydrationVersion = 0
 
 async function hydrateMissingPinnedThreads(): Promise<void> {
   if (props.isLoading) return
-  const missingThreadIds = pinnedThreadIds.value.filter((threadId) => !threadById.value.has(threadId) && !hydratedPinnedThreadById.value[threadId])
+  const missingThreadIds = pinnedThreadIds.value
+    .filter((threadId) => !threadById.value.has(threadId) && !hydratedPinnedThreadById.value[threadId])
+    .slice(0, MAX_PINNED_THREAD_HYDRATION_BATCH)
   if (missingThreadIds.length === 0) return
 
   const version = (pinnedThreadHydrationVersion += 1)
@@ -1367,30 +1367,86 @@ watch([pinnedThreadIds, threadById, () => props.isLoading], () => {
   void hydrateMissingPinnedThreads()
 })
 
-onMounted(async () => {
-  const { threadIds } = await getPinnedThreadState()
-  const normalized = Array.isArray(threadIds)
-    ? threadIds
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter((item, index, rows) => item.length > 0 && rows.indexOf(item) === index)
-    : []
+function normalizePinnedThreadIds(threadIds: unknown): string[] {
+  if (!Array.isArray(threadIds)) return []
+  return threadIds
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item, index, rows) => item.length > 0 && rows.indexOf(item) === index)
+}
 
-  if (normalized.length > 0) {
-    pinnedThreadIds.value = normalized
-  }
+async function refreshPinnedThreadState(): Promise<void> {
+  if (pinnedThreadRefreshPromise) return await pinnedThreadRefreshPromise
+
+  const request = (async () => {
+    try {
+      const { threadIds } = await getPinnedThreadState()
+      if (pendingPinnedThreadMutations === 0) {
+        pinnedThreadIds.value = normalizePinnedThreadIds(threadIds)
+      }
+      hasLoadedPinnedThreadState = true
+    } catch (error) {
+      if (!hasLoadedPinnedThreadState) {
+        recordVisibleFailure(error instanceof Error ? error.message : 'Failed to load pinned threads')
+      }
+      throw error
+    }
+  })()
+  pinnedThreadRefreshPromise = request
   try {
-    automationByThreadId.value = await getThreadAutomationMap()
-  } catch {
-    automationByThreadId.value = {}
+    await request
+  } finally {
+    if (pinnedThreadRefreshPromise === request) pinnedThreadRefreshPromise = null
   }
-  try {
-    await reloadProjectAutomations()
-  } catch {
+}
+
+function queuePinnedThreadUpdate(update: (threadIds: string[]) => string[]): void {
+  pinnedThreadMutation = pinnedThreadMutation.catch(() => undefined).then(async () => {
+    if (!hasLoadedPinnedThreadState) await refreshPinnedThreadState()
+    pendingPinnedThreadMutations += 1
+    try {
+      const previous = pinnedThreadIds.value
+      const next = normalizePinnedThreadIds(update(previous))
+      if (next.length === previous.length && next.every((threadId, index) => threadId === previous[index])) return
+
+      pinnedThreadIds.value = next
+      try {
+        await persistPinnedThreadIds(next)
+      } catch (error) {
+        pinnedThreadIds.value = previous
+        recordVisibleFailure(error instanceof Error ? error.message : 'Failed to save pinned threads')
+      }
+    } finally {
+      pendingPinnedThreadMutations -= 1
+    }
+  }).catch(() => undefined)
+}
+
+function refreshPinnedThreadsWhenVisible(): void {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+  void refreshPinnedThreadState().catch(() => undefined)
+}
+
+function onPinnedThreadVisibilityChange(): void {
+  if (document.visibilityState === 'visible') refreshPinnedThreadsWhenVisible()
+}
+
+onMounted(() => {
+  void refreshPinnedThreadState().catch(() => undefined)
+  void (async () => {
+    try {
+      automationByThreadId.value = await getThreadAutomationMap()
+    } catch {
+      automationByThreadId.value = {}
+    }
+  })()
+  void reloadProjectAutomations().catch(() => {
     automationByProjectName.value = {}
-  }
-  hasLoadedPinnedThreadState = true
-  void hydrateMissingPinnedThreads()
+  })
+
+  window.addEventListener('focus', refreshPinnedThreadsWhenVisible)
+  document.addEventListener('visibilitychange', onPinnedThreadVisibilityChange)
+  pinnedThreadRefreshIntervalId = window.setInterval(refreshPinnedThreadsWhenVisible, PINNED_THREAD_REFRESH_INTERVAL_MS)
 })
 
 const deleteThreadHasAutomation = computed(() => threadHasAutomation(deleteThreadDialogThreadId.value))
@@ -1528,12 +1584,9 @@ function isPinned(threadId: string): boolean {
 }
 
 function togglePin(threadId: string): void {
-  if (isPinned(threadId)) {
-    pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
-    return
-  }
-
-  pinnedThreadIds.value = [threadId, ...pinnedThreadIds.value]
+  queuePinnedThreadUpdate((threadIds) => threadIds.includes(threadId)
+    ? threadIds.filter((id) => id !== threadId)
+    : [threadId, ...threadIds])
 }
 
 function onTogglePinFromMenu(threadId: string): void {
@@ -1868,7 +1921,7 @@ function deleteThreadById(threadId: string): void {
   }
   inlineDeleteConfirmThreadId.value = ''
   closeThreadMenu()
-  pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
+  queuePinnedThreadUpdate((threadIds) => threadIds.filter((id) => id !== threadId))
   emit('archive', threadId)
 
   if (threadHasAutomation(threadId)) {
@@ -2996,6 +3049,12 @@ watch(openThreadMenuId, (threadId) => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshPinnedThreadsWhenVisible)
+  document.removeEventListener('visibilitychange', onPinnedThreadVisibilityChange)
+  if (pinnedThreadRefreshIntervalId !== null) {
+    window.clearInterval(pinnedThreadRefreshIntervalId)
+    pinnedThreadRefreshIntervalId = null
+  }
   for (const element of projectGroupElementByName.values()) {
     projectGroupResizeObserver?.unobserve(element)
   }

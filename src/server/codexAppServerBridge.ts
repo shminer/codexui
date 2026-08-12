@@ -2043,8 +2043,7 @@ async function importProjectZip(buffer: Buffer, destinationParent: string): Prom
     }
     importedSessionRecords.push(importedRecord)
     if (importedRecord.title) {
-      const cache = await readThreadTitleCache()
-      await writeThreadTitleCache(updateThreadTitleCache(cache, importedThreadId, importedRecord.title))
+      await updateStoredThreadTitle(importedThreadId, importedRecord.title)
     }
     importedSessions += 1
   }
@@ -4884,6 +4883,37 @@ function getCodexGlobalStatePath(): string {
   return join(getCodexHomeDir(), '.codex-global-state.json')
 }
 
+let codexGlobalStateMutation: Promise<void> = Promise.resolve()
+
+async function readCodexGlobalStateUnlocked(): Promise<Record<string, unknown>> {
+  try {
+    return asRecord(JSON.parse(await readFile(getCodexGlobalStatePath(), 'utf8'))) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+async function readCodexGlobalState(): Promise<Record<string, unknown>> {
+  await codexGlobalStateMutation.catch(() => undefined)
+  return await readCodexGlobalStateUnlocked()
+}
+
+function updateCodexGlobalState<T>(
+  update: (payload: Record<string, unknown>) => T | Promise<T>,
+): Promise<T> {
+  const run = codexGlobalStateMutation.catch(() => undefined).then(async () => {
+    const payload = await readCodexGlobalStateUnlocked()
+    const result = await update(payload)
+    await writeFile(getCodexGlobalStatePath(), JSON.stringify(payload), 'utf8')
+    return result
+  })
+  codexGlobalStateMutation = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 function getTelegramBridgeConfigPath(): string {
   return join(getCodexHomeDir(), 'telegram-bridge.json')
 }
@@ -5476,52 +5506,28 @@ function mergeThreadTitleCaches(base: ThreadTitleCache, overlay: ThreadTitleCach
 }
 
 async function readThreadTitleCache(): Promise<ThreadTitleCache> {
-  const statePath = getCodexGlobalStatePath()
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizeThreadTitleCache(payload['thread-titles'])
-  } catch {
-    return EMPTY_THREAD_TITLE_CACHE
-  }
+  const payload = await readCodexGlobalState()
+  return normalizeThreadTitleCache(payload['thread-titles'])
 }
 
-async function writeThreadTitleCache(cache: ThreadTitleCache): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  payload['thread-titles'] = cache
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+async function updateStoredThreadTitle(id: string, title: string): Promise<void> {
+  await updateCodexGlobalState((payload) => {
+    const cache = normalizeThreadTitleCache(payload['thread-titles'])
+    payload['thread-titles'] = title
+      ? updateThreadTitleCache(cache, id, title)
+      : removeFromThreadTitleCache(cache, id)
+  })
 }
 
 async function readPinnedThreadIds(): Promise<string[]> {
-  const statePath = getCodexGlobalStatePath()
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizePinnedThreadIds(payload[PINNED_THREAD_IDS_KEY])
-  } catch {
-    return []
-  }
+  const payload = await readCodexGlobalState()
+  return normalizePinnedThreadIds(payload[PINNED_THREAD_IDS_KEY])
 }
 
-async function writePinnedThreadIds(threadIds: string[]): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-
-  payload[PINNED_THREAD_IDS_KEY] = normalizePinnedThreadIds(threadIds)
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+export async function writePinnedThreadIds(threadIds: string[]): Promise<void> {
+  await updateCodexGlobalState((payload) => {
+    payload[PINNED_THREAD_IDS_KEY] = normalizePinnedThreadIds(threadIds)
+  })
 }
 
 const FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY = 'first-launch-plugins-card-dismissed'
@@ -5612,48 +5618,25 @@ function normalizeThreadQueueState(value: unknown): ThreadQueueState {
   return state
 }
 
-let threadQueueMutationChain: Promise<unknown> = Promise.resolve()
-
 async function readThreadQueueState(): Promise<ThreadQueueState> {
-  const statePath = getCodexGlobalStatePath()
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizeThreadQueueState(payload[THREAD_QUEUE_STATE_KEY])
-  } catch {
-    return {}
-  }
-}
-
-async function writeThreadQueueStateUnlocked(nextState: ThreadQueueState): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  const normalized = normalizeThreadQueueState(nextState)
-  if (Object.keys(normalized).length > 0) {
-    payload[THREAD_QUEUE_STATE_KEY] = normalized
-  } else {
-    delete payload[THREAD_QUEUE_STATE_KEY]
-  }
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  const payload = await readCodexGlobalState()
+  return normalizeThreadQueueState(payload[THREAD_QUEUE_STATE_KEY])
 }
 
 async function withThreadQueueStateUpdate<T>(
   update: (state: ThreadQueueState) => ThreadQueueStateUpdate<T> | Promise<ThreadQueueStateUpdate<T>>,
 ): Promise<T> {
-  const run = threadQueueMutationChain.then(async () => {
-    const currentState = await readThreadQueueState()
+  return await updateCodexGlobalState(async (payload) => {
+    const currentState = normalizeThreadQueueState(payload[THREAD_QUEUE_STATE_KEY])
     const { nextState, result } = await update(currentState)
-    await writeThreadQueueStateUnlocked(nextState)
+    const normalized = normalizeThreadQueueState(nextState)
+    if (Object.keys(normalized).length > 0) {
+      payload[THREAD_QUEUE_STATE_KEY] = normalized
+    } else {
+      delete payload[THREAD_QUEUE_STATE_KEY]
+    }
     return result
   })
-  threadQueueMutationChain = run.catch(() => {})
-  return run
 }
 
 async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
@@ -5760,27 +5743,14 @@ function isTurnCompletedNotification(notification: { method: string; params: unk
 }
 
 async function readFirstLaunchPluginsCardDismissed(): Promise<boolean> {
-  const statePath = getCodexGlobalStatePath()
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] === true
-  } catch {
-    return false
-  }
+  const payload = await readCodexGlobalState()
+  return payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] === true
 }
 
 async function writeFirstLaunchPluginsCardDismissed(dismissed: boolean): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] = dismissed === true
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  await updateCodexGlobalState((payload) => {
+    payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] = dismissed === true
+  })
 }
 
 function getSessionIndexFileSignature(stats: { mtimeMs: number; size: number }): string {
@@ -5961,16 +5931,7 @@ export async function canonicalizeThreadListResponseForRead(
 }
 
 async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    payload = asRecord(parsed) ?? {}
-  } catch {
-    payload = {}
-  }
+  const payload = await readCodexGlobalState()
 
   return await canonicalizeWorkspaceRootsState({
     order: normalizeStringArray(payload['electron-saved-workspace-roots']),
@@ -5983,32 +5944,12 @@ async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
 
 export async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise<void> {
   const state = await canonicalizeWorkspaceRootsState(nextState)
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-
-  payload['electron-saved-workspace-roots'] = normalizeStringArray(state.order)
-  payload['electron-workspace-root-labels'] = normalizeStringRecord(state.labels)
-  payload['active-workspace-roots'] = normalizeStringArray(state.active)
-  payload['project-order'] = normalizeStringArray(state.projectOrder)
-
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
-}
-
-let workspaceRootsMutation: Promise<void> = Promise.resolve()
-
-function queueWorkspaceRootsMutation<T>(mutation: () => Promise<T>): Promise<T> {
-  const run = workspaceRootsMutation.catch(() => undefined).then(mutation)
-  workspaceRootsMutation = run.then(
-    () => undefined,
-    () => undefined,
-  )
-  return run
+  await updateCodexGlobalState((payload) => {
+    payload['electron-saved-workspace-roots'] = normalizeStringArray(state.order)
+    payload['electron-workspace-root-labels'] = normalizeStringRecord(state.labels)
+    payload['active-workspace-roots'] = normalizeStringArray(state.active)
+    payload['project-order'] = normalizeStringArray(state.projectOrder)
+  })
 }
 
 function prependUniqueString(value: string, items: string[]): string[] {
@@ -6018,9 +5959,19 @@ function prependUniqueString(value: string, items: string[]): string[] {
 async function updateWorkspaceRootsState(
   updater: (existingState: WorkspaceRootsState) => WorkspaceRootsState,
 ): Promise<void> {
-  await queueWorkspaceRootsMutation(async () => {
-    const existingState = await readWorkspaceRootsState()
-    await writeWorkspaceRootsState(updater(existingState))
+  await updateCodexGlobalState(async (payload) => {
+    const existingState = await canonicalizeWorkspaceRootsState({
+      order: normalizeStringArray(payload['electron-saved-workspace-roots']),
+      labels: normalizeStringRecord(payload['electron-workspace-root-labels']),
+      active: normalizeStringArray(payload['active-workspace-roots']),
+      projectOrder: normalizeStringArray(payload['project-order']),
+      remoteProjects: normalizeRemoteProjects(payload['remote-projects']),
+    })
+    const state = await canonicalizeWorkspaceRootsState(updater(existingState))
+    payload['electron-saved-workspace-roots'] = normalizeStringArray(state.order)
+    payload['electron-workspace-root-labels'] = normalizeStringRecord(state.labels)
+    payload['active-workspace-roots'] = normalizeStringArray(state.active)
+    payload['project-order'] = normalizeStringArray(state.projectOrder)
   })
 }
 
@@ -9345,9 +9296,7 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing id' })
           return
         }
-        const cache = await readThreadTitleCache()
-        const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
-        await writeThreadTitleCache(next)
+        await updateStoredThreadTitle(id, title)
         setJson(res, 200, { ok: true })
         return
       }

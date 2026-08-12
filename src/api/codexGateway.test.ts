@@ -28,6 +28,88 @@ function mockRpcFetch(): { requests: Array<{ method: string, params: Record<stri
   return { requests }
 }
 
+describe('pinned thread state', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  it('uses and caches the legacy state endpoint when native sections are unavailable', async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      requests.push({ url, method, body })
+      if (url === '/codex-api/meta/methods') {
+        return Response.json({ data: ['thread/list'] })
+      }
+      if (method === 'GET') {
+        return Response.json({ data: { threadIds: [' pinned-a ', 'pinned-a', 'pinned-b'] } })
+      }
+      return Response.json({ ok: true })
+    }))
+
+    const { getPinnedThreadState, persistPinnedThreadIds } = await import('./codexGateway')
+    await expect(getPinnedThreadState()).resolves.toEqual({ threadIds: ['pinned-a', 'pinned-b'] })
+    await persistPinnedThreadIds([' pinned-b ', 'pinned-b'])
+
+    expect(requests).toEqual([
+      { url: '/codex-api/meta/methods', method: 'GET', body: null },
+      { url: '/codex-api/thread-pins', method: 'GET', body: null },
+      { url: '/codex-api/thread-pins', method: 'PUT', body: { threadIds: ['pinned-b'] } },
+    ])
+  })
+
+  it('pages through the native Pinned section and moves only changed threads', async () => {
+    const rpcRequests: Array<{ method: string; params: Record<string, unknown> }> = []
+    let methodCatalogRequests = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/codex-api/meta/methods') {
+        methodCatalogRequests += 1
+        return Response.json({ data: ['thread/list', 'threadSection/list', 'thread/section/move'] })
+      }
+
+      const request = JSON.parse(String(init?.body)) as { method: string; params: Record<string, unknown> }
+      rpcRequests.push(request)
+      if (request.method === 'thread/list') {
+        return Response.json({
+          result: request.params.cursor
+            ? { data: [{ id: 'pinned-b' }], nextCursor: null }
+            : { data: [{ id: 'pinned-a' }], nextCursor: 'page-2' },
+        })
+      }
+      return Response.json({ result: {} })
+    }))
+
+    const { getPinnedThreadState, persistPinnedThreadIds } = await import('./codexGateway')
+    await expect(getPinnedThreadState()).resolves.toEqual({ threadIds: ['pinned-a', 'pinned-b'] })
+    await persistPinnedThreadIds(['new-pin', 'pinned-a', 'pinned-b'])
+
+    expect(methodCatalogRequests).toBe(1)
+    expect(rpcRequests.filter((request) => request.method === 'thread/list')).toHaveLength(4)
+    expect(rpcRequests.filter((request) => request.method === 'thread/section/move')).toEqual([{
+      method: 'thread/section/move',
+      params: {
+        threadId: 'new-pin',
+        sectionId: '01984de2-8f74-7c91-a3b2-5c5e937cf318',
+        beforeThreadId: 'pinned-a',
+      },
+    }])
+  })
+
+  it('surfaces legacy pin write failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/codex-api/meta/methods') return Response.json({ data: [] })
+      return Response.json({ error: 'pin write failed' }, { status: 500 })
+    }))
+
+    const { persistPinnedThreadIds } = await import('./codexGateway')
+    await expect(persistPinnedThreadIds(['pinned-a'])).rejects.toThrow('pin write failed')
+  })
+})
+
 describe('startThreadTurn collaboration mode payloads', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
