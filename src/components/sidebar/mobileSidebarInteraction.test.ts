@@ -127,4 +127,25 @@ describe('mobile sidebar interaction policy', () => {
 
     expect(calls).toEqual({ overflow: ['thread-menu'], select: [] })
   })
+
+  it('waits for unpin success before archiving a thread', async () => {
+    const source = await readFile(new URL('./SidebarThreadTree.vue', import.meta.url), 'utf8')
+    const start = source.indexOf('async function deleteThreadById')
+    const end = source.indexOf('\nfunction openAutomationDialog', start)
+    const deleteBlock = source.slice(start, end)
+
+    expect(deleteBlock).toContain('if (!await queuePinnedThreadUpdate(threadId, false)) return')
+    expect(deleteBlock.indexOf('await queuePinnedThreadUpdate')).toBeLessThan(deleteBlock.indexOf("emit('archive', threadId)"))
+  })
+
+  it('hydrates missing pinned summaries in bounded consecutive batches', async () => {
+    const source = await readFile(new URL('./SidebarThreadTree.vue', import.meta.url), 'utf8')
+    const start = source.indexOf('async function hydrateMissingPinnedThreads')
+    const end = source.indexOf('\nwatch([pinnedThreadIds', start)
+    const hydrationBlock = source.slice(start, end)
+
+    expect(hydrationBlock).toContain('index += MAX_PINNED_THREAD_HYDRATION_BATCH')
+    expect(hydrationBlock).toContain('missingThreadIds.slice(index, index + MAX_PINNED_THREAD_HYDRATION_BATCH)')
+    expect(hydrationBlock).not.toContain('.slice(0, MAX_PINNED_THREAD_HYDRATION_BATCH)')
+  })
 })

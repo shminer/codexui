@@ -1,8 +1,8 @@
-export function reconcilePinnedThreadIds(
+export function updatePinnedThreadIds(
   pinnedThreadIds: string[],
-  loadedThreadIds: Set<string>,
-  options: { canPruneMissing: boolean },
+  threadId: string,
+  pinned: boolean,
 ): string[] {
-  if (!options.canPruneMissing) return pinnedThreadIds
-  return pinnedThreadIds.filter((threadId) => loadedThreadIds.has(threadId))
+  const remaining = pinnedThreadIds.filter((id) => id !== threadId)
+  return pinned ? [threadId, ...remaining] : remaining
 }

@@ -5574,9 +5574,15 @@ async function readPinnedThreadIds(): Promise<string[]> {
   return normalizePinnedThreadIds(payload[PINNED_THREAD_IDS_KEY])
 }
 
-export async function writePinnedThreadIds(threadIds: string[]): Promise<void> {
-  await updateCodexGlobalState((payload) => {
-    payload[PINNED_THREAD_IDS_KEY] = normalizePinnedThreadIds(threadIds)
+export async function updatePinnedThread(threadId: string, pinned: boolean): Promise<string[]> {
+  const normalizedThreadId = threadId.trim()
+  return await updateCodexGlobalState((payload) => {
+    const current = normalizePinnedThreadIds(payload[PINNED_THREAD_IDS_KEY])
+    const next = pinned
+      ? [normalizedThreadId, ...current.filter((id) => id !== normalizedThreadId)]
+      : current.filter((id) => id !== normalizedThreadId)
+    payload[PINNED_THREAD_IDS_KEY] = next
+    return next
   })
 }
 
@@ -9360,11 +9366,19 @@ export function createCodexBridgeMiddleware(options: {
         return
       }
 
-      if (req.method === 'PUT' && url.pathname === '/codex-api/thread-pins') {
+      if (req.method === 'PATCH' && url.pathname === '/codex-api/thread-pins') {
         const payload = asRecord(await readJsonBody(req))
-        const threadIds = normalizePinnedThreadIds(payload?.threadIds)
-        await writePinnedThreadIds(threadIds)
-        setJson(res, 200, { ok: true })
+        const threadId = typeof payload?.threadId === 'string' ? payload.threadId.trim() : ''
+        if (!threadId) {
+          setJson(res, 400, { error: 'Missing threadId' })
+          return
+        }
+        if (typeof payload?.pinned !== 'boolean') {
+          setJson(res, 400, { error: 'Invalid pinned value' })
+          return
+        }
+        const threadIds = await updatePinnedThread(threadId, payload.pinned)
+        setJson(res, 200, { data: { threadIds } })
         return
       }
 

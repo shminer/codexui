@@ -1,20 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { reconcilePinnedThreadIds } from './pinnedThreadUtils'
+import { updatePinnedThreadIds } from './pinnedThreadUtils'
 
-describe('reconcilePinnedThreadIds', () => {
-  it('keeps pins whose threads have not loaded while pagination is still incomplete', () => {
-    expect(
-      reconcilePinnedThreadIds(['loaded', 'not-yet-loaded'], new Set(['loaded']), {
-        canPruneMissing: false,
-      }),
-    ).toEqual(['loaded', 'not-yet-loaded'])
+describe('updatePinnedThreadIds', () => {
+  it('pins only the target and preserves pins outside the visible workspace', () => {
+    expect(updatePinnedThreadIds(['visible', 'hidden-workspace'], 'new-pin', true)).toEqual([
+      'new-pin',
+      'visible',
+      'hidden-workspace',
+    ])
   })
 
-  it('prunes missing pins after the thread list is fully loaded', () => {
-    expect(
-      reconcilePinnedThreadIds(['loaded', 'missing'], new Set(['loaded']), {
-        canPruneMissing: true,
-      }),
-    ).toEqual(['loaded'])
+  it('unpins only the target and preserves every other pin', () => {
+    expect(updatePinnedThreadIds(['visible', 'hidden-workspace'], 'visible', false)).toEqual([
+      'hidden-workspace',
+    ])
   })
 })

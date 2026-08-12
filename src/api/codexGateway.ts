@@ -3696,9 +3696,14 @@ async function supportsNativePinnedThreads(): Promise<boolean> {
   if (!nativePinnedThreadCapabilityPromise) {
     nativePinnedThreadCapabilityPromise = getMethodCatalog()
       .then((methods) => methods.includes('threadSection/list') && methods.includes('thread/section/move'))
-      .catch(() => false)
   }
-  return await nativePinnedThreadCapabilityPromise
+  const request = nativePinnedThreadCapabilityPromise
+  try {
+    return await request
+  } catch (error) {
+    if (nativePinnedThreadCapabilityPromise === request) nativePinnedThreadCapabilityPromise = null
+    throw error
+  }
 }
 
 async function readNativePinnedThreadIds(): Promise<string[]> {
@@ -3732,39 +3737,36 @@ async function readNativePinnedThreadIds(): Promise<string[]> {
   return threadIds
 }
 
-async function persistNativePinnedThreadIds(threadIds: string[]): Promise<void> {
-  const desired = normalizePinnedThreadIds(threadIds)
-  const desiredSet = new Set(desired)
-  const current = await readNativePinnedThreadIds()
-  const working = current.filter((threadId) => desiredSet.has(threadId))
+async function readFirstNativePinnedThreadId(): Promise<string | null> {
+  const payload: NativePinnedThreadListResponse = await callRpc('thread/list', {
+    archived: false,
+    sectionId: PINNED_THREAD_SECTION_ID,
+    sortKey: 'section_position',
+    sortDirection: 'asc',
+    limit: 1,
+    cursor: null,
+  })
+  const threadId = payload.data?.[0]?.id
+  return typeof threadId === 'string' && threadId.trim() ? threadId.trim() : null
+}
 
-  for (const threadId of current) {
-    if (desiredSet.has(threadId)) continue
+async function setNativeThreadPinned(threadId: string, pinned: boolean): Promise<void> {
+  if (!pinned) {
     await callRpc('thread/section/move', {
       threadId,
       sectionId: null,
       beforeThreadId: null,
     })
+    return
   }
 
-  for (let index = desired.length - 1; index >= 0; index -= 1) {
-    const threadId = desired[index]
-    const beforeThreadId = desired[index + 1] ?? null
-    const currentIndex = working.indexOf(threadId)
-    const isAlreadyPlaced = beforeThreadId === null
-      ? currentIndex >= 0 && currentIndex === working.length - 1
-      : currentIndex >= 0 && working[currentIndex + 1] === beforeThreadId
-    if (isAlreadyPlaced) continue
-
-    await callRpc('thread/section/move', {
-      threadId,
-      sectionId: PINNED_THREAD_SECTION_ID,
-      beforeThreadId,
-    })
-    if (currentIndex >= 0) working.splice(currentIndex, 1)
-    const beforeIndex = beforeThreadId === null ? working.length : working.indexOf(beforeThreadId)
-    working.splice(beforeIndex < 0 ? working.length : beforeIndex, 0, threadId)
-  }
+  const currentFirstThreadId = await readFirstNativePinnedThreadId()
+  if (currentFirstThreadId === threadId) return
+  await callRpc('thread/section/move', {
+    threadId,
+    sectionId: PINNED_THREAD_SECTION_ID,
+    beforeThreadId: currentFirstThreadId,
+  })
 }
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
@@ -3803,17 +3805,18 @@ export async function getPinnedThreadState(): Promise<ThreadPinnedState> {
   return { threadIds: normalizePinnedThreadIds(payload?.data?.threadIds) }
 }
 
-export async function persistPinnedThreadIds(threadIds: string[]): Promise<void> {
-  const normalized = normalizePinnedThreadIds(threadIds)
+export async function setThreadPinned(threadId: string, pinned: boolean): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
   if (await supportsNativePinnedThreads()) {
-    await persistNativePinnedThreadIds(normalized)
+    await setNativeThreadPinned(normalizedThreadId, pinned)
     return
   }
 
   const response = await fetch('/codex-api/thread-pins', {
-    method: 'PUT',
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threadIds: normalized }),
+    body: JSON.stringify({ threadId: normalizedThreadId, pinned }),
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok) {

@@ -879,8 +879,8 @@ import {
   getPinnedThreadState,
   getThreadAutomationMap,
   getThreadSummary,
-  persistPinnedThreadIds,
   runThreadAutomationNow,
+  setThreadPinned,
   upsertProjectAutomation,
   upsertThreadAutomation,
 } from '../../api/codexGateway'
@@ -899,7 +899,7 @@ import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics
 import { getPathLeafName, getPathParent, isAbsoluteLikePath, isProjectlessChatPath } from '../../pathUtils.js'
 import ComposerDropdown from '../content/ComposerDropdown.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
-import { reconcilePinnedThreadIds } from './pinnedThreadUtils'
+import { updatePinnedThreadIds } from './pinnedThreadUtils'
 import { dispatchThreadRowInteraction } from './threadRowInteraction'
 
 const props = defineProps<{
@@ -909,7 +909,6 @@ const props = defineProps<{
   projectCwdByName: Record<string, string>
   selectedThreadId: string
   isLoading: boolean
-  isThreadListFullyLoaded: boolean
   searchQuery: string
   searchMatchedThreadIds: string[] | null
 }>()
@@ -1321,43 +1320,40 @@ const threadById = computed(() => {
   return map
 })
 
-watch([threadById, () => props.isThreadListFullyLoaded], ([threadsById]) => {
-  const filtered = reconcilePinnedThreadIds(pinnedThreadIds.value, new Set(threadsById.keys()), {
-    canPruneMissing: props.isThreadListFullyLoaded,
-  })
-  if (filtered.length === pinnedThreadIds.value.length) return
-  const filteredIdSet = new Set(filtered)
-  const nextHydratedPinnedThreads = Object.fromEntries(
-    Object.entries(hydratedPinnedThreadById.value).filter(([threadId]) => filteredIdSet.has(threadId)),
-  )
-  hydratedPinnedThreadById.value = nextHydratedPinnedThreads
-  queuePinnedThreadUpdate(() => filtered)
-})
-
 let pinnedThreadHydrationVersion = 0
+const failedPinnedThreadHydrationIds = new Set<string>()
 
 async function hydrateMissingPinnedThreads(): Promise<void> {
   if (props.isLoading) return
   const missingThreadIds = pinnedThreadIds.value
-    .filter((threadId) => !threadById.value.has(threadId) && !hydratedPinnedThreadById.value[threadId])
-    .slice(0, MAX_PINNED_THREAD_HYDRATION_BATCH)
+    .filter((threadId) => (
+      !threadById.value.has(threadId) &&
+      !hydratedPinnedThreadById.value[threadId] &&
+      !failedPinnedThreadHydrationIds.has(threadId)
+    ))
   if (missingThreadIds.length === 0) return
 
   const version = (pinnedThreadHydrationVersion += 1)
-  const loadedThreads = await Promise.all(
-    missingThreadIds.map(async (threadId) => {
-      try {
-        return await getThreadSummary(threadId)
-      } catch {
-        return null
-      }
-    }),
-  )
-  if (version !== pinnedThreadHydrationVersion) return
-
   const next = { ...hydratedPinnedThreadById.value }
-  for (const thread of loadedThreads) {
-    if (thread) next[thread.id] = thread
+  for (let index = 0; index < missingThreadIds.length; index += MAX_PINNED_THREAD_HYDRATION_BATCH) {
+    const loadedThreads = await Promise.all(
+      missingThreadIds.slice(index, index + MAX_PINNED_THREAD_HYDRATION_BATCH).map(async (threadId) => {
+        try {
+          return { threadId, thread: await getThreadSummary(threadId) }
+        } catch {
+          return { threadId, thread: null }
+        }
+      }),
+    )
+    if (version !== pinnedThreadHydrationVersion) return
+
+    for (const { threadId, thread } of loadedThreads) {
+      if (thread) {
+        next[thread.id] = thread
+      } else {
+        failedPinnedThreadHydrationIds.add(threadId)
+      }
+    }
   }
   hydratedPinnedThreadById.value = next
 }
@@ -1382,6 +1378,7 @@ async function refreshPinnedThreadState(): Promise<void> {
     try {
       const { threadIds } = await getPinnedThreadState()
       if (pendingPinnedThreadMutations === 0) {
+        failedPinnedThreadHydrationIds.clear()
         pinnedThreadIds.value = normalizePinnedThreadIds(threadIds)
       }
       hasLoadedPinnedThreadState = true
@@ -1400,26 +1397,38 @@ async function refreshPinnedThreadState(): Promise<void> {
   }
 }
 
-function queuePinnedThreadUpdate(update: (threadIds: string[]) => string[]): void {
-  pinnedThreadMutation = pinnedThreadMutation.catch(() => undefined).then(async () => {
-    if (!hasLoadedPinnedThreadState) await refreshPinnedThreadState()
-    pendingPinnedThreadMutations += 1
-    try {
-      const previous = pinnedThreadIds.value
-      const next = normalizePinnedThreadIds(update(previous))
-      if (next.length === previous.length && next.every((threadId, index) => threadId === previous[index])) return
-
-      pinnedThreadIds.value = next
+function queuePinnedThreadUpdate(threadId: string, desiredPinned?: boolean): Promise<boolean> {
+  const request = pinnedThreadMutation.catch(() => undefined).then(async () => {
+    if (desiredPinned === undefined && !hasLoadedPinnedThreadState) {
       try {
-        await persistPinnedThreadIds(next)
-      } catch (error) {
-        pinnedThreadIds.value = previous
-        recordVisibleFailure(error instanceof Error ? error.message : 'Failed to save pinned threads')
+        await refreshPinnedThreadState()
+      } catch {
+        return false
       }
+    }
+
+    const previous = pinnedThreadIds.value
+    const pinned = desiredPinned ?? !previous.includes(threadId)
+    const next = updatePinnedThreadIds(previous, threadId, pinned)
+    pendingPinnedThreadMutations += 1
+    pinnedThreadIds.value = next
+    let persisted = false
+    try {
+      await setThreadPinned(threadId, pinned)
+      if (pinnedThreadRefreshPromise) await pinnedThreadRefreshPromise.catch(() => undefined)
+      persisted = true
+    } catch (error) {
+      pinnedThreadIds.value = previous
+      recordVisibleFailure(error instanceof Error ? error.message : 'Failed to save pinned threads')
     } finally {
       pendingPinnedThreadMutations -= 1
     }
-  }).catch(() => undefined)
+
+    if (persisted) await refreshPinnedThreadState().catch(() => undefined)
+    return persisted
+  })
+  pinnedThreadMutation = request.then(() => undefined, () => undefined)
+  return request
 }
 
 function refreshPinnedThreadsWhenVisible(): void {
@@ -1584,9 +1593,7 @@ function isPinned(threadId: string): boolean {
 }
 
 function togglePin(threadId: string): void {
-  queuePinnedThreadUpdate((threadIds) => threadIds.includes(threadId)
-    ? threadIds.filter((id) => id !== threadId)
-    : [threadId, ...threadIds])
+  void queuePinnedThreadUpdate(threadId)
 }
 
 function onTogglePinFromMenu(threadId: string): void {
@@ -1896,32 +1903,32 @@ function closeDeleteThreadDialog(): void {
 async function submitDeleteThread(): Promise<void> {
   const threadId = deleteThreadDialogThreadId.value
   if (!threadId) return
-  deleteThreadById(threadId)
   closeDeleteThreadDialog()
+  await deleteThreadById(threadId)
 }
 
 function isInlineDeleteConfirming(threadId: string): boolean {
   return inlineDeleteConfirmThreadId.value === threadId
 }
 
-function onInlineDeleteClick(threadId: string): void {
+async function onInlineDeleteClick(threadId: string): Promise<void> {
   if (inlineDeleteConfirmThreadId.value !== threadId) {
     inlineDeleteConfirmThreadId.value = threadId
     closeThreadMenu()
     return
   }
 
-  deleteThreadById(threadId)
-  inlineDeleteConfirmThreadId.value = ''
+  await deleteThreadById(threadId)
 }
 
-function deleteThreadById(threadId: string): void {
+async function deleteThreadById(threadId: string): Promise<void> {
+  inlineDeleteConfirmThreadId.value = ''
+  closeThreadMenu()
+  if (!await queuePinnedThreadUpdate(threadId, false)) return
+
   if (!optimisticallyArchivedThreadIdSet.value.has(threadId)) {
     optimisticallyArchivedThreadIds.value = [threadId, ...optimisticallyArchivedThreadIds.value]
   }
-  inlineDeleteConfirmThreadId.value = ''
-  closeThreadMenu()
-  queuePinnedThreadUpdate((threadIds) => threadIds.filter((id) => id !== threadId))
   emit('archive', threadId)
 
   if (threadHasAutomation(threadId)) {

@@ -14,7 +14,7 @@ import {
   isThreadNotFoundError,
   isUnauthenticatedRateLimitError,
   writeFreeModeStateFile,
-  writePinnedThreadIds,
+  updatePinnedThread,
   writeWorkspaceRootsState,
 } from './codexAppServerBridge'
 
@@ -247,7 +247,8 @@ describe('writeWorkspaceRootsState', () => {
     try {
       await writeFile(join(codexHome, '.codex-global-state.json'), JSON.stringify({ untouched: 'value' }))
       await Promise.all([
-        writePinnedThreadIds(['pinned-thread']),
+        updatePinnedThread('pinned-a', true),
+        updatePinnedThread('pinned-b', true),
         writeWorkspaceRootsState({
           order: [codexHome],
           labels: { [codexHome]: 'Codex Home' },
@@ -259,7 +260,7 @@ describe('writeWorkspaceRootsState', () => {
 
       const state = JSON.parse(await readFile(join(codexHome, '.codex-global-state.json'), 'utf8')) as Record<string, unknown>
       expect(state.untouched).toBe('value')
-      expect(state['pinned-thread-ids']).toEqual(['pinned-thread'])
+      expect(state['pinned-thread-ids']).toEqual(['pinned-b', 'pinned-a'])
       expect(state['electron-saved-workspace-roots']).toEqual([codexHome])
       expect(state['project-order']).toEqual([codexHome])
     } finally {
