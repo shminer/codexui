@@ -41,7 +41,7 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 | 2 | Click the side-conversation icon again after closing. | A new empty ephemeral side child opens; the previous transcript and draft do not return. |
 | 3 | While a side response is running, click `End chat`. | The result matches the close button and backdrop: immediate UI cleanup, interrupt when active, and unsubscribe without archive. |
 | 4 | Open an idle side conversation and click `End chat`. | The UI clears immediately, sends `thread/unsubscribe`, and does not send an empty `turn/interrupt` or `thread/archive`. |
-| 5 | Refresh while the side window is open. | The page sends best-effort keepalive interrupt/unsubscribe cleanup. After reload, no child ID, transcript, draft, model, or Thinking state is restored. |
+| 5 | Refresh while the side window is open, including immediately after sending a message. | The page sends one best-effort keepalive discard request. The server reads the current active turn, interrupts it when present, then unsubscribes in order. After reload, no child ID, transcript, draft, model, or Thinking state is restored. |
 | 6 | Switch to another main thread or account after opening a side conversation. | The side conversation ends, and reopening creates a new empty ephemeral child. |
 | 7 | Inspect the main thread list before and after closing or refreshing. | The ephemeral child never appears in the persistent thread list. |
 ## Rollback / Cleanup

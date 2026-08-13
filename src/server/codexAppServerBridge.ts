@@ -2615,6 +2615,37 @@ export async function callRpcWithArchiveRecovery(
   }
 }
 
+export async function discardSideConversationThread(
+  appServer: RpcExecutor,
+  threadId: string,
+): Promise<void> {
+  try {
+    const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
+    const thread = asRecord(response?.thread)
+    const turns = Array.isArray(thread?.turns) ? thread.turns : []
+    let activeTurnId = ''
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turn = asRecord(turns[index])
+      const status = readNonEmptyString(turn?.status)
+      if (status === 'inProgress' || status === 'running' || status === 'active') {
+        activeTurnId = readNonEmptyString(turn?.id)
+        break
+      }
+    }
+    if (activeTurnId) {
+      await appServer.rpc('turn/interrupt', { threadId, turnId: activeTurnId })
+    }
+  } catch {
+    // Page teardown cleanup still unsubscribes when the read or interrupt races with completion.
+  } finally {
+    try {
+      await appServer.rpc('thread/unsubscribe', { threadId })
+    } catch {
+      // The page is already leaving, so cleanup remains best-effort.
+    }
+  }
+}
+
 type TerminalQuickCommand = {
   label: string
   value: string
@@ -7843,6 +7874,18 @@ export function createCodexBridgeMiddleware(options: {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/upload-file') {
         handleFileUpload(req, res)
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/side-conversation/discard') {
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        if (!threadId) {
+          setJson(res, 400, { error: 'Missing threadId' })
+          return
+        }
+        await discardSideConversationThread(appServer, threadId)
+        setJson(res, 200, { ok: true })
         return
       }
 

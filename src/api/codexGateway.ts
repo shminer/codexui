@@ -2061,23 +2061,16 @@ export async function discardSideConversationThreadInBackground(threadId: string
   }
 }
 
-export function discardSideConversationThreadOnPageHide(threadId: string, turnId?: string): void {
+export function discardSideConversationThreadOnPageHide(threadId: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
-  const send = (method: string, params: Record<string, string>): void => {
-    void fetch('/codex-api/rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method, params }),
-      keepalive: true,
-    }).catch(() => {})
-  }
-  const normalizedTurnId = turnId?.trim() || ''
-  if (normalizedTurnId) {
-    send('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
-  }
-  send('thread/unsubscribe', { threadId: normalizedThreadId })
+  void fetch('/codex-api/side-conversation/discard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId: normalizedThreadId }),
+    keepalive: true,
+  }).catch(() => {})
 }
 
 export type FileAttachmentParam = { label: string; path: string; fsPath: string }

@@ -1587,6 +1587,7 @@ export function useDesktopState() {
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   let sideConversationTurnStartPromise: Promise<string> | null = null
   let sideConversationEpoch = 0
+  let sideConversationFirstTurnIndex = 0
   const sideConversationTurnIds = new Set<string>()
   const discardedSideConversationThreadIds = new Set<string>()
 
@@ -5095,6 +5096,7 @@ export function useDesktopState() {
       const needsResume = resumedThreadById.value[threadId] !== true
       const resumedThread = needsResume ? await resumeThread(threadId) : null
       const detail = resumedThread ?? await getThreadDetail(threadId)
+      if (discardedSideConversationThreadIds.has(threadId)) return
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
@@ -5111,7 +5113,18 @@ export function useDesktopState() {
 
       const { messages, inProgress: serverInProgress, activeTurnId, turnIndexByTurnId } = detail
       const isSideConversation = isKnownSideConversationThread(threadId)
-      if (isSideConversation && activeTurnId) sideConversationTurnIds.add(activeTurnId)
+      if (isSideConversation) {
+        for (const message of messages) {
+          if (
+            message.turnId
+            && typeof message.turnIndex === 'number'
+            && message.turnIndex >= sideConversationFirstTurnIndex
+          ) {
+            sideConversationTurnIds.add(message.turnId)
+          }
+        }
+        if (activeTurnId) sideConversationTurnIds.add(activeTurnId)
+      }
       const nextMessages = isSideConversation
         ? messages.filter((message) => Boolean(message.turnId && sideConversationTurnIds.has(message.turnId)))
         : messages
@@ -5658,6 +5671,7 @@ export function useDesktopState() {
     sideConversationReasoningEffort.value = ''
     sideConversationCollaborationMode.value = 'default'
     sideConversationTurnStartPromise = null
+    sideConversationFirstTurnIndex = 0
     sideConversationTurnIds.clear()
     isSideConversationOpening.value = false
   }
@@ -5703,6 +5717,7 @@ export function useDesktopState() {
         normalizedParentThreadId,
       )
       if (openEpoch !== sideConversationEpoch) return
+      sideConversationFirstTurnIndex = inferNextTurnIndex(normalizedParentThreadId)
 
       const adoptSideConversationThread = (threadId: string): void => {
         if (openEpoch !== sideConversationEpoch) {
@@ -5844,12 +5859,9 @@ export function useDesktopState() {
 
   function discardSideConversationOnPageHide(): void {
     const threadId = sideConversationThreadId.value
-    const turnId = isSideConversationInProgress.value
-      ? activeTurnIdByThreadId.value[threadId]
-      : ''
     sideConversationEpoch += 1
     resetSideConversationState()
-    if (threadId) discardSideConversationThreadOnPageHide(threadId, turnId)
+    if (threadId) discardSideConversationThreadOnPageHide(threadId)
   }
 
   async function sendMessageToSelectedThread(

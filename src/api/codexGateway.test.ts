@@ -381,23 +381,22 @@ describe('side conversation lifecycle', () => {
   })
 
   it('uses keepalive cleanup when the page is hidden', () => {
-    const requests: Array<{ method: string, params: Record<string, unknown> }> = []
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push(JSON.parse(String(init?.body)) as { method: string, params: Record<string, unknown> })
+    const requests: Array<{ url: string, body: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      })
       expect(init?.keepalive).toBe(true)
       return Response.json({ result: {} })
     }))
 
-    discardSideConversationThreadOnPageHide('side-thread-pagehide', 'side-turn-pagehide')
+    discardSideConversationThreadOnPageHide('side-thread-pagehide')
 
     expect(requests).toEqual([
       {
-        method: 'turn/interrupt',
-        params: { threadId: 'side-thread-pagehide', turnId: 'side-turn-pagehide' },
-      },
-      {
-        method: 'thread/unsubscribe',
-        params: { threadId: 'side-thread-pagehide' },
+        url: '/codex-api/side-conversation/discard',
+        body: { threadId: 'side-thread-pagehide' },
       },
     ])
   })

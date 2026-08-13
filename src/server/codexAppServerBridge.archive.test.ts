@@ -7,6 +7,7 @@ import {
   callRpcWithArchiveRecovery,
   canonicalizeThreadListResponseForRead,
   canonicalizeWorkspaceRootsStateForRead,
+  discardSideConversationThread,
   ensureDefaultFreeModeStateForMissingAuthSync,
   hasUsableCodexAuth,
   isEmptyThreadReadError,
@@ -137,6 +138,61 @@ describe('callRpcWithArchiveRecovery', () => {
         params: { threadId: 'test-thread', input: [{ type: 'text', text: 'hi' }] },
       },
     ])
+  })
+})
+
+describe('discardSideConversationThread', () => {
+  it('interrupts the active turn before unsubscribing', async () => {
+    const calls: Array<{ method: string; params: unknown }> = []
+    const appServer = {
+      async rpc(method: string, params: unknown): Promise<unknown> {
+        calls.push({ method, params })
+        return method === 'thread/read'
+          ? { thread: { turns: [{ id: 'turn-1', status: 'inProgress' }] } }
+          : {}
+      },
+    }
+
+    await discardSideConversationThread(appServer, 'side-thread')
+
+    expect(calls).toEqual([
+      { method: 'thread/read', params: { threadId: 'side-thread', includeTurns: true } },
+      { method: 'turn/interrupt', params: { threadId: 'side-thread', turnId: 'turn-1' } },
+      { method: 'thread/unsubscribe', params: { threadId: 'side-thread' } },
+    ])
+  })
+
+  it('unsubscribes an idle thread without interrupting', async () => {
+    const calls: string[] = []
+    const appServer = {
+      async rpc(method: string): Promise<unknown> {
+        calls.push(method)
+        return method === 'thread/read'
+          ? { thread: { turns: [{ id: 'turn-1', status: 'completed' }] } }
+          : {}
+      },
+    }
+
+    await discardSideConversationThread(appServer, 'side-thread')
+
+    expect(calls).toEqual(['thread/read', 'thread/unsubscribe'])
+  })
+
+  it.each(['thread/read', 'turn/interrupt'])('still unsubscribes when %s fails', async (failedMethod) => {
+    const calls: string[] = []
+    const appServer = {
+      async rpc(method: string): Promise<unknown> {
+        calls.push(method)
+        if (method === failedMethod) throw new Error('cleanup race')
+        return method === 'thread/read'
+          ? { thread: { turns: [{ id: 'turn-1', status: 'inProgress' }] } }
+          : {}
+      },
+    }
+
+    await discardSideConversationThread(appServer, 'side-thread')
+
+    expect(calls.at(-1)).toBe('thread/unsubscribe')
   })
 })
 
