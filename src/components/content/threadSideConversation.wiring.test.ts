@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
-  it('minimizes without ending and keeps desktop drag and resize wiring', async () => {
+  it('minimizes without ending and keeps desktop drag and accessible resize wiring', async () => {
     const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
 
@@ -25,6 +25,18 @@ describe('ThreadSideConversation wiring', () => {
     expect(source).toContain('side-conversation-action--stop')
     expect(source).toContain('@pointerdown="onSideConversationHeaderPointerDown"')
     expect(source).toContain('@pointerdown="onSideConversationResizePointerDown"')
+    expect(source).toContain('aria-orientation="vertical"')
+    expect(source).toContain(':aria-valuemin="sideConversationWindowWidthRange.minimum"')
+    expect(source).toContain(':aria-valuemax="sideConversationWindowWidthRange.maximum"')
+    expect(source).toContain(':aria-valuenow="sideConversationWindow.width"')
+    expect(source).toContain('tabindex="0"')
+    expect(source).toContain('@keydown="onSideConversationResizeKeydown"')
+    const resizeKeydownBody = source.match(/function onSideConversationResizeKeydown\(event: KeyboardEvent\): void \{([\s\S]*?)\n\}/u)?.[1] ?? ''
+    expect(resizeKeydownBody).toContain("event.key === 'ArrowLeft'")
+    expect(resizeKeydownBody).toContain("event.key === 'ArrowRight'")
+    expect(resizeKeydownBody).toContain("event.key === 'ArrowUp'")
+    expect(resizeKeydownBody).toContain("event.key === 'ArrowDown'")
+    expect(resizeKeydownBody).toContain('clampTerminalWindowRect')
     expect(source).toContain('clampTerminalWindowRect')
     expect(source).toContain("window.addEventListener('pointermove', onSideConversationWindowPointerMove)")
     expect(source).toContain("window.removeEventListener('pointermove', onSideConversationWindowPointerMove)")

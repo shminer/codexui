@@ -23,7 +23,7 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 | 6 | Briefly disconnect the upstream API while a side response is running, then allow its normal retry to recover. | The side window shows the reconnect state, clears it on the next side event, and continues the same side conversation. |
 | 7 | Switch between light and dark themes. | The panel, header, input, buttons, error surface, and message area remain readable with no light surface left on the dark page. |
 | 8 | Switch to another main thread or return to the home page. | The side window closes immediately and the side child is interrupted when active, then unsubscribed in the background. The new main thread stays selected. |
-| 9 | Drag the desktop header, then resize from the lower-right handle toward both minimum and viewport limits. | The window follows the pointer, remains inside the visual viewport, and the transcript and composer reflow without overlap. |
+| 9 | Drag the desktop header, then resize from the lower-right handle toward both minimum and viewport limits. Tab to the resize handle and repeat with the four arrow keys. | Pointer and keyboard resizing keep the window inside the visual viewport, expose the current size to assistive technology, and reflow the transcript and composer without overlap. |
 
 ## Mobile Bottom Sheet
 

@@ -95,9 +95,17 @@
           v-if="!isMobile"
           class="side-conversation-resize-handle"
           role="separator"
+          aria-orientation="vertical"
           :aria-label="t('Resize side conversation')"
+          :aria-valuemin="sideConversationWindowWidthRange.minimum"
+          :aria-valuemax="sideConversationWindowWidthRange.maximum"
+          :aria-valuenow="sideConversationWindow.width"
+          :aria-valuetext="sideConversationWindowSizeText"
+          aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
           :title="t('Resize side conversation')"
+          tabindex="0"
           @pointerdown="onSideConversationResizePointerDown"
+          @keydown="onSideConversationResizeKeydown"
         >
           <IconTablerMaximize />
         </div>
@@ -161,6 +169,7 @@ const emit = defineEmits<{
 const { isMobile } = useMobile()
 const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
+const SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP = 16
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const sideConversationWindow = ref<TerminalFloatingWindowRect>(initialSideConversationWindowRect(sideConversationViewportSize()))
 let sideConversationWindowGesture: SideConversationWindowGesture | null = null
@@ -176,6 +185,17 @@ const sideConversationWindowStyle = computed<Record<string, string>>(() => ({
   width: `${sideConversationWindow.value.width}px`,
   height: `${sideConversationWindow.value.height}px`,
 }))
+const sideConversationWindowWidthRange = computed(() => {
+  const viewport = sideConversationViewportSize()
+  const rect = sideConversationWindow.value
+  return {
+    minimum: clampTerminalWindowRect({ ...rect, width: 0 }, viewport).width,
+    maximum: clampTerminalWindowRect({ ...rect, width: viewport.width }, viewport).width,
+  }
+})
+const sideConversationWindowSizeText = computed(() => (
+  `${sideConversationWindow.value.width} x ${sideConversationWindow.value.height} px`
+))
 
 onMounted(() => {
   resetSideConversationWindow()
@@ -243,6 +263,22 @@ function onSideConversationHeaderPointerDown(event: PointerEvent): void {
 function onSideConversationResizePointerDown(event: PointerEvent): void {
   if (isMobile.value || event.button !== 0 || !event.isPrimary) return
   startSideConversationWindowGesture('resize', event)
+}
+
+function onSideConversationResizeKeydown(event: KeyboardEvent): void {
+  let width = sideConversationWindow.value.width
+  let height = sideConversationWindow.value.height
+  if (event.key === 'ArrowLeft') width -= SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP
+  else if (event.key === 'ArrowRight') width += SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP
+  else if (event.key === 'ArrowUp') height -= SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP
+  else if (event.key === 'ArrowDown') height += SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP
+  else return
+
+  event.preventDefault()
+  sideConversationWindow.value = clampTerminalWindowRect(
+    { ...sideConversationWindow.value, width, height },
+    sideConversationViewportSize(),
+  )
 }
 
 function startSideConversationWindowGesture(kind: SideConversationWindowGesture['kind'], event: PointerEvent): void {
@@ -407,7 +443,7 @@ watch(isMobile, (mobile) => {
 }
 
 .side-conversation-resize-handle {
-  @apply absolute bottom-0 right-0 z-10 flex h-8 w-8 cursor-nwse-resize items-end justify-end p-1 text-zinc-400 transition hover:text-zinc-700;
+  @apply absolute bottom-0 right-0 z-10 flex h-8 w-8 cursor-nwse-resize items-end justify-end p-1 text-zinc-400 transition hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-500;
   touch-action: none;
 }
 
