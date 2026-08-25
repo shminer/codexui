@@ -1330,6 +1330,38 @@ describe('live error overlay', () => {
 })
 
 describe('side conversation lifecycle', () => {
+  it('minimizes and restores the same child without forking again', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.4',
+      modelProvider: 'codex',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-minimized' })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-minimized')
+    await state.openSideConversation('parent-minimized')
+    state.setSideConversationDraft('keep this draft')
+    state.hideSideConversation()
+
+    expect(state.isSideConversationOpen.value).toBe(true)
+    expect(state.isSideConversationVisible.value).toBe(false)
+    expect(state.sideConversationThreadId.value).toBe('side-minimized')
+    expect(state.sideConversationDraft.value).toBe('keep this draft')
+
+    await state.openSideConversation('parent-minimized')
+
+    expect(state.isSideConversationVisible.value).toBe(true)
+    expect(state.sideConversationThreadId.value).toBe('side-minimized')
+    expect(gatewayMocks.startSideConversation).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.discardSideConversationThreadInBackground).not.toHaveBeenCalled()
+  })
+
   it('waits for an in-flight parent restore before forking with its model and provider', async () => {
     installTestWindow()
     let resolveResume: (value: unknown) => void = () => {}

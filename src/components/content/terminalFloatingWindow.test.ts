@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampTerminalWindowRect, initialTerminalWindowRect } from './terminalFloatingWindow'
+import { clampTerminalWindowRect, initialSideConversationWindowRect, initialTerminalWindowRect } from './terminalFloatingWindow'
 
 describe('terminal floating window geometry', () => {
   it('clamps a window inside an offset visual viewport', () => {
@@ -19,5 +19,10 @@ describe('terminal floating window geometry', () => {
   it('starts below the visual viewport offset', () => {
     expect(initialTerminalWindowRect({ width: 390, height: 844, offsetLeft: 0, offsetTop: 50 }))
       .toEqual({ left: 8, top: 58, width: 374, height: 640 })
+  })
+
+  it('places a side conversation at its current lower-right default', () => {
+    expect(initialSideConversationWindowRect({ width: 1440, height: 900, offsetLeft: 0, offsetTop: 0 }))
+      .toEqual({ left: 1008, top: 254, width: 416, height: 630 })
   })
 })

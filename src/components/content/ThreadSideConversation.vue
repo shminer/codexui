@@ -1,29 +1,32 @@
 <template>
   <Teleport to="body">
-    <div class="side-conversation-host" @click.self="requestClose">
+    <div v-show="visible" class="side-conversation-host" @click.self="emit('minimize')">
       <section
         class="side-conversation-panel"
         role="dialog"
         :aria-modal="isMobile ? 'true' : undefined"
         :aria-labelledby="titleId"
+        :style="isMobile ? undefined : sideConversationWindowStyle"
         @click.stop
       >
         <div class="side-conversation-handle" aria-hidden="true" />
-        <header class="side-conversation-header">
+        <header class="side-conversation-header" @pointerdown="onSideConversationHeaderPointerDown">
           <h2 :id="titleId" class="side-conversation-title">{{ t('Side conversation') }}</h2>
           <button
-            class="side-conversation-end-button"
+            class="side-conversation-icon-button"
             type="button"
-            @click="requestClose"
+            :aria-label="t('Minimize side conversation')"
+            :title="t('Minimize side conversation')"
+            @click="emit('minimize')"
           >
-            {{ t('End chat') }}
+            <IconTablerMinimize />
           </button>
           <button
             class="side-conversation-icon-button"
             type="button"
-            :aria-label="t('Close side conversation')"
-            :title="t('Close side conversation')"
-            @click="requestClose"
+            :aria-label="t('End side conversation')"
+            :title="t('End side conversation')"
+            @click="emit('end')"
           >
             <IconTablerX />
           </button>
@@ -88,22 +91,49 @@
             <IconTablerArrowUp />
           </button>
         </footer>
+        <div
+          v-if="!isMobile"
+          class="side-conversation-resize-handle"
+          role="separator"
+          :aria-label="t('Resize side conversation')"
+          :title="t('Resize side conversation')"
+          @pointerdown="onSideConversationResizePointerDown"
+        >
+          <IconTablerMaximize />
+        </div>
       </section>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiLiveOverlay, UiMessage, UiServerRequest, UiServerRequestReply } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
+import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
+import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import ThreadConversation from './ThreadConversation.vue'
 import ThreadPendingRequestPanel from './ThreadPendingRequestPanel.vue'
 import { shouldSubmitComposer } from './composerSubmitShortcut'
+import {
+  clampTerminalWindowRect,
+  initialSideConversationWindowRect,
+  type TerminalFloatingWindowRect,
+  type TerminalVisualViewport,
+} from './terminalFloatingWindow'
+
+type SideConversationWindowGesture = {
+  kind: 'drag' | 'resize'
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  startRect: TerminalFloatingWindowRect
+  target: HTMLElement
+}
 
 const props = defineProps<{
   threadId: string
@@ -115,11 +145,13 @@ const props = defineProps<{
   isOpening: boolean
   isTurnInProgress: boolean
   sendWithEnter?: boolean
+  visible: boolean
   draft: string
 }>()
 
 const emit = defineEmits<{
-  close: []
+  minimize: []
+  end: []
   send: [text: string]
   'update:draft': [value: string]
   interrupt: []
@@ -130,21 +162,39 @@ const { isMobile } = useMobile()
 const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const sideConversationWindow = ref<TerminalFloatingWindowRect>(initialSideConversationWindowRect(sideConversationViewportSize()))
+let sideConversationWindowGesture: SideConversationWindowGesture | null = null
 const canSend = computed(() => (
   props.threadId.length > 0
   && props.draft.trim().length > 0
   && !props.isOpening
   && !props.isTurnInProgress
 ))
+const sideConversationWindowStyle = computed<Record<string, string>>(() => ({
+  left: `${sideConversationWindow.value.left}px`,
+  top: `${sideConversationWindow.value.top}px`,
+  width: `${sideConversationWindow.value.width}px`,
+  height: `${sideConversationWindow.value.height}px`,
+}))
+
+onMounted(() => {
+  resetSideConversationWindow()
+  window.addEventListener('resize', onSideConversationViewportResize)
+  window.visualViewport?.addEventListener('resize', onSideConversationViewportResize)
+  window.visualViewport?.addEventListener('scroll', clampSideConversationWindowToViewport)
+})
+
+onBeforeUnmount(() => {
+  stopSideConversationWindowGesture()
+  window.removeEventListener('resize', onSideConversationViewportResize)
+  window.visualViewport?.removeEventListener('resize', onSideConversationViewportResize)
+  window.visualViewport?.removeEventListener('scroll', clampSideConversationWindowToViewport)
+})
 
 function submit(): void {
   if (!canSend.value) return
   emit('send', props.draft.trim())
   emit('update:draft', '')
-}
-
-function requestClose(): void {
-  emit('close')
 }
 
 function updateDraft(event: Event): void {
@@ -157,14 +207,128 @@ function onInputKeydown(event: KeyboardEvent): void {
   submit()
 }
 
+function sideConversationViewportSize(): TerminalVisualViewport {
+  if (typeof window === 'undefined') {
+    return { width: 1200, height: 640, offsetLeft: 0, offsetTop: 0 }
+  }
+  const viewport = window.visualViewport
+  return {
+    width: Math.max(1, Math.round(viewport?.width ?? window.innerWidth)),
+    height: Math.max(1, Math.round(viewport?.height ?? window.innerHeight)),
+    offsetLeft: Math.max(0, Math.round(viewport?.offsetLeft ?? 0)),
+    offsetTop: Math.max(0, Math.round(viewport?.offsetTop ?? 0)),
+  }
+}
+
+function resetSideConversationWindow(): void {
+  sideConversationWindow.value = initialSideConversationWindowRect(sideConversationViewportSize())
+}
+
+function clampSideConversationWindowToViewport(): void {
+  if (isMobile.value) return
+  sideConversationWindow.value = clampTerminalWindowRect(sideConversationWindow.value, sideConversationViewportSize())
+}
+
+function onSideConversationViewportResize(): void {
+  clampSideConversationWindowToViewport()
+}
+
+function onSideConversationHeaderPointerDown(event: PointerEvent): void {
+  if (isMobile.value || event.button !== 0 || !event.isPrimary) return
+  const target = event.target
+  if (target instanceof Element && target.closest('button')) return
+  startSideConversationWindowGesture('drag', event)
+}
+
+function onSideConversationResizePointerDown(event: PointerEvent): void {
+  if (isMobile.value || event.button !== 0 || !event.isPrimary) return
+  startSideConversationWindowGesture('resize', event)
+}
+
+function startSideConversationWindowGesture(kind: SideConversationWindowGesture['kind'], event: PointerEvent): void {
+  event.preventDefault()
+  stopSideConversationWindowGesture()
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  sideConversationWindowGesture = {
+    kind,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startRect: { ...sideConversationWindow.value },
+    target,
+  }
+  try {
+    target.setPointerCapture(event.pointerId)
+  } catch {
+    // Pointer capture is unavailable in some embedded browser contexts.
+  }
+  target.addEventListener('lostpointercapture', onSideConversationWindowPointerCaptureLost)
+  window.addEventListener('pointermove', onSideConversationWindowPointerMove)
+  window.addEventListener('pointerup', onSideConversationWindowPointerEnd)
+  window.addEventListener('pointercancel', onSideConversationWindowPointerEnd)
+  window.addEventListener('blur', stopSideConversationWindowGesture)
+}
+
+function onSideConversationWindowPointerMove(event: PointerEvent): void {
+  const gesture = sideConversationWindowGesture
+  if (!gesture || event.pointerId !== gesture.pointerId) return
+  const deltaX = event.clientX - gesture.startClientX
+  const deltaY = event.clientY - gesture.startClientY
+  sideConversationWindow.value = clampTerminalWindowRect(
+    gesture.kind === 'drag'
+      ? {
+          ...gesture.startRect,
+          left: gesture.startRect.left + deltaX,
+          top: gesture.startRect.top + deltaY,
+        }
+      : {
+          ...gesture.startRect,
+          width: gesture.startRect.width + deltaX,
+          height: gesture.startRect.height + deltaY,
+        },
+    sideConversationViewportSize(),
+  )
+}
+
+function onSideConversationWindowPointerEnd(event: PointerEvent): void {
+  if (!sideConversationWindowGesture || event.pointerId !== sideConversationWindowGesture.pointerId) return
+  stopSideConversationWindowGesture()
+}
+
+function onSideConversationWindowPointerCaptureLost(event: PointerEvent): void {
+  if (!sideConversationWindowGesture || event.pointerId !== sideConversationWindowGesture.pointerId) return
+  stopSideConversationWindowGesture()
+}
+
+function stopSideConversationWindowGesture(): void {
+  const gesture = sideConversationWindowGesture
+  sideConversationWindowGesture = null
+  if (typeof window === 'undefined') return
+  window.removeEventListener('pointermove', onSideConversationWindowPointerMove)
+  window.removeEventListener('pointerup', onSideConversationWindowPointerEnd)
+  window.removeEventListener('pointercancel', onSideConversationWindowPointerEnd)
+  window.removeEventListener('blur', stopSideConversationWindowGesture)
+  if (!gesture) return
+  gesture.target.removeEventListener('lostpointercapture', onSideConversationWindowPointerCaptureLost)
+  if (gesture.target.hasPointerCapture(gesture.pointerId)) {
+    gesture.target.releasePointerCapture(gesture.pointerId)
+  }
+}
+
 watch(
-  () => props.threadId,
-  (threadId) => {
-    if (!threadId) return
+  () => [props.threadId, props.visible] as const,
+  ([threadId, visible]) => {
+    if (!threadId || !visible) return
     void nextTick(() => inputRef.value?.focus())
   },
   { immediate: true },
 )
+
+watch(isMobile, (mobile) => {
+  stopSideConversationWindowGesture()
+  if (!mobile) resetSideConversationWindow()
+})
 
 </script>
 
@@ -176,7 +340,7 @@ watch(
 }
 
 .side-conversation-panel {
-  @apply pointer-events-auto flex h-[min(70dvh,40rem)] w-[min(26rem,calc(100vw-2rem))] min-h-80 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl;
+  @apply pointer-events-auto fixed flex flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl;
 }
 
 .side-conversation-handle {
@@ -184,7 +348,8 @@ watch(
 }
 
 .side-conversation-header {
-  @apply flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3;
+  @apply flex h-12 shrink-0 cursor-move items-center gap-2 border-b border-zinc-200 px-3 select-none;
+  touch-action: none;
 }
 
 .side-conversation-title {
@@ -194,10 +359,6 @@ watch(
 .side-conversation-icon-button,
 .side-conversation-action {
   @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 transition disabled:cursor-not-allowed disabled:opacity-50;
-}
-
-.side-conversation-end-button {
-  @apply shrink-0 rounded-md px-2 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900;
 }
 
 .side-conversation-icon-button {
@@ -226,11 +387,11 @@ watch(
 }
 
 .side-conversation-request {
-  @apply max-h-[55%] shrink-0 overflow-y-auto border-t border-zinc-200 p-2;
+  @apply max-h-[55%] shrink-0 overflow-y-auto border-t border-zinc-200 p-2 pb-8 pr-10;
 }
 
 .side-conversation-composer {
-  @apply flex shrink-0 items-end gap-2 border-t border-zinc-200 p-3;
+  @apply flex shrink-0 items-end gap-2 border-t border-zinc-200 p-3 pr-10;
 }
 
 .side-conversation-input {
@@ -245,17 +406,39 @@ watch(
   @apply bg-zinc-200 text-zinc-700 hover:bg-zinc-300;
 }
 
+.side-conversation-resize-handle {
+  @apply absolute bottom-0 right-0 z-10 flex h-8 w-8 cursor-nwse-resize items-end justify-end p-1 text-zinc-400 transition hover:text-zinc-700;
+  touch-action: none;
+}
+
+.side-conversation-resize-handle :deep(svg) {
+  @apply h-3.5 w-3.5;
+}
+
 @media (max-width: 767px) {
   .side-conversation-host {
     @apply pointer-events-auto bg-black/40 p-0;
   }
 
   .side-conversation-panel {
-    @apply h-[min(78dvh,42rem)] w-full min-h-80 rounded-b-none rounded-t-lg border-x-0 border-b-0;
+    @apply static h-[min(78dvh,42rem)] w-full min-h-80 rounded-b-none rounded-t-lg border-x-0 border-b-0;
   }
 
   .side-conversation-handle {
     @apply mx-auto mt-2 block h-1 w-10 shrink-0 rounded-full bg-zinc-300;
+  }
+
+  .side-conversation-header {
+    @apply cursor-default select-auto;
+    touch-action: auto;
+  }
+
+  .side-conversation-request {
+    @apply p-2;
+  }
+
+  .side-conversation-composer {
+    @apply p-3;
   }
 }
 </style>

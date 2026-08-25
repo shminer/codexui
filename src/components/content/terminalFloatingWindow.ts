@@ -17,6 +17,10 @@ const DEFAULT_TERMINAL_WINDOW_WIDTH = 1200
 const DEFAULT_TERMINAL_WINDOW_HEIGHT = 640
 const MIN_TERMINAL_WINDOW_WIDTH = 240
 const MIN_TERMINAL_WINDOW_HEIGHT = 200
+const SIDE_CONVERSATION_MARGIN = 16
+const DEFAULT_SIDE_CONVERSATION_WIDTH = 416
+const DEFAULT_SIDE_CONVERSATION_MAX_HEIGHT = 640
+const DEFAULT_SIDE_CONVERSATION_MIN_HEIGHT = 320
 
 export function initialTerminalWindowRect(viewport: TerminalVisualViewport): TerminalFloatingWindowRect {
   const width = Math.min(DEFAULT_TERMINAL_WINDOW_WIDTH, availableWindowWidth(viewport))
@@ -24,6 +28,20 @@ export function initialTerminalWindowRect(viewport: TerminalVisualViewport): Ter
   return clampTerminalWindowRect({
     left: viewport.offsetLeft + Math.round((viewport.width - width) / 2),
     top: viewport.offsetTop + TERMINAL_WINDOW_MARGIN,
+    width,
+    height,
+  }, viewport)
+}
+
+export function initialSideConversationWindowRect(viewport: TerminalVisualViewport): TerminalFloatingWindowRect {
+  const width = Math.min(DEFAULT_SIDE_CONVERSATION_WIDTH, Math.max(1, viewport.width - (SIDE_CONVERSATION_MARGIN * 2)))
+  const height = Math.min(
+    Math.max(1, viewport.height - (SIDE_CONVERSATION_MARGIN * 2)),
+    Math.max(DEFAULT_SIDE_CONVERSATION_MIN_HEIGHT, Math.min(DEFAULT_SIDE_CONVERSATION_MAX_HEIGHT, Math.round(viewport.height * 0.7))),
+  )
+  return clampTerminalWindowRect({
+    left: viewport.offsetLeft + viewport.width - SIDE_CONVERSATION_MARGIN - width,
+    top: viewport.offsetTop + viewport.height - SIDE_CONVERSATION_MARGIN - height,
     width,
     height,
   }, viewport)

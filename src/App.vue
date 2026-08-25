@@ -1037,7 +1037,7 @@
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :side-conversation-available="Boolean(selectedThreadId)"
-                    :side-conversation-open="isSideConversationOpen"
+                    :side-conversation-open="isSideConversationVisible"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
@@ -1059,6 +1059,7 @@
   </DesktopLayout>
   <ThreadSideConversation
     v-if="isSideConversationOpen"
+    :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
     :cwd="composerCwd"
     :messages="sideConversationMessages"
@@ -1069,7 +1070,8 @@
     :is-turn-in-progress="isSideConversationInProgress"
     :send-with-enter="sendWithEnter"
     :draft="sideConversationDraft"
-    @close="endSideConversation"
+    @minimize="hideSideConversation"
+    @end="endSideConversation"
     @update:draft="setSideConversationDraft"
     @send="sendSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
@@ -1344,6 +1346,7 @@ const {
   sideConversationServerRequests,
   sideConversationError,
   isSideConversationOpen,
+  isSideConversationVisible,
   isSideConversationOpening,
   isSideConversationInProgress,
   sideConversationDraft,
@@ -1385,6 +1388,7 @@ const {
   sendMessageToNewThread,
   interruptSelectedThreadTurn,
   openSideConversation,
+  hideSideConversation,
   endSideConversation,
   setSideConversationDraft,
   sendSideConversationMessage,

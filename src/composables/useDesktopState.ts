@@ -1579,6 +1579,7 @@ export function useDesktopState() {
   const activeAccountStorageId = ref(DEFAULT_ACCOUNT_STORAGE_ID)
   const sideConversationParentThreadId = ref('')
   const sideConversationThreadId = ref('')
+  const isSideConversationVisible = ref(false)
   const sideConversationDraft = ref('')
   const sideConversationError = ref('')
   const isSideConversationOpening = ref(false)
@@ -5656,6 +5657,10 @@ export function useDesktopState() {
     sideConversationDraft.value = value
   }
 
+  function hideSideConversation(): void {
+    if (isSideConversationOpen.value) isSideConversationVisible.value = false
+  }
+
   function resetSideConversationState(): void {
     const threadId = sideConversationThreadId.value
     if (threadId) {
@@ -5665,6 +5670,7 @@ export function useDesktopState() {
     }
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
+    isSideConversationVisible.value = false
     sideConversationDraft.value = ''
     sideConversationError.value = ''
     sideConversationModelId.value = ''
@@ -5682,8 +5688,14 @@ export function useDesktopState() {
     effort?: ReasoningEffort,
   ): Promise<void> {
     const normalizedParentThreadId = parentThreadId.trim()
-    if (!normalizedParentThreadId || isSideConversationOpening.value) return
-    if (isSideConversationOpen.value) return
+    if (!normalizedParentThreadId) return
+    if (isSideConversationOpen.value) {
+      if (sideConversationParentThreadId.value === normalizedParentThreadId) {
+        isSideConversationVisible.value = true
+      }
+      return
+    }
+    if (isSideConversationOpening.value) return
 
     const openEpoch = ++sideConversationEpoch
     let initialModelId = readModelIdForThread(normalizedParentThreadId) || modelId || ''
@@ -5694,6 +5706,7 @@ export function useDesktopState() {
       normalizedParentThreadId,
     )
     sideConversationParentThreadId.value = normalizedParentThreadId
+    isSideConversationVisible.value = true
     sideConversationError.value = ''
     isSideConversationOpening.value = true
     try {
@@ -6794,6 +6807,7 @@ export function useDesktopState() {
     sideConversationServerRequests,
     sideConversationError,
     isSideConversationOpen,
+    isSideConversationVisible,
     isSideConversationOpening,
     isSideConversationInProgress,
     sideConversationDraft,
@@ -6839,6 +6853,7 @@ export function useDesktopState() {
     sendMessageToNewThread,
     interruptSelectedThreadTurn,
     openSideConversation,
+    hideSideConversation,
     endSideConversation,
     setSideConversationDraft,
     sendSideConversationMessage,
