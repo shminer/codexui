@@ -455,6 +455,10 @@
   @apply text-zinc-400;
 }
 
+:root.dark .thread-composer-token-usage-value {
+  @apply text-zinc-200;
+}
+
 :root.dark .thread-composer-goal-panel {
   @apply border-zinc-700;
 }

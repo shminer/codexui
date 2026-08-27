@@ -363,6 +363,19 @@
                 </div>
               </template>
             </div>
+            <div class="thread-composer-attach-separator" />
+            <div
+              class="thread-composer-token-usage"
+              role="status"
+              aria-live="polite"
+              :title="cumulativeThreadTokenTitle"
+            >
+              <span class="thread-composer-attach-setting-copy">
+                <span class="thread-composer-attach-setting-label">{{ t('Tokens used') }}</span>
+                <span class="thread-composer-attach-setting-description">{{ t('Cumulative thread usage') }}</span>
+              </span>
+              <span class="thread-composer-token-usage-value">{{ cumulativeThreadTokenText }}</span>
+            </div>
           </div>
         </div>
 
@@ -839,6 +852,16 @@ const contextUsageSummaryText = computed(() => contextUsageView.value?.summaryTe
 const contextUsageTooltipText = computed(() => contextUsageView.value?.tooltipText ?? '')
 const contextUsageRemainingPercent = computed(() => contextUsageView.value?.percentRemaining ?? 0)
 const contextUsageTone = computed(() => contextUsageView.value?.tone ?? 'healthy')
+const cumulativeThreadTokenText = computed(() => {
+  const totalTokens = props.threadTokenUsage?.total.totalTokens
+  return typeof totalTokens === 'number' ? formatCompactTokenCount(totalTokens) : t('Awaiting data')
+})
+const cumulativeThreadTokenTitle = computed(() => {
+  const totalTokens = props.threadTokenUsage?.total.totalTokens
+  return typeof totalTokens === 'number'
+    ? `${totalTokens.toLocaleString()} ${t('tokens')}`
+    : t('Waiting for Codex thread/tokenUsage/updated events for this thread.')
+})
 
 function formatPlanType(planType: string | null | undefined): string {
   if (!planType || planType === 'unknown') return ''
@@ -2328,6 +2351,14 @@ watch(
 
 .thread-composer-attach-setting-description {
   @apply mt-0.5 max-w-52 truncate text-xs text-zinc-500;
+}
+
+.thread-composer-token-usage {
+  @apply flex min-w-0 items-center justify-between gap-3 px-3 py-2;
+}
+
+.thread-composer-token-usage-value {
+  @apply shrink-0 text-sm font-medium tabular-nums text-zinc-700;
 }
 
 .thread-composer-goal-status {

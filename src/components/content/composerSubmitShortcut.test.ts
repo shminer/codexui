@@ -37,3 +37,17 @@ describe('ThreadComposer Goal budget wiring', () => {
     expect(source).toContain('Number.isSafeInteger(budget) && budget >= 0 ? budget : undefined')
   })
 })
+
+describe('ThreadComposer cumulative token usage wiring', () => {
+  it('shows the current thread total in the add menu and preserves the unknown state', async () => {
+    const source = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('class="thread-composer-token-usage"')
+    expect(source).toContain("const totalTokens = props.threadTokenUsage?.total.totalTokens")
+    expect(source).toContain('formatCompactTokenCount(totalTokens)')
+    expect(source).toContain("t('Awaiting data')")
+    expect(source).toContain("t('Cumulative thread usage')")
+    expect(source).toContain('role="status"')
+    expect(source).toContain('aria-live="polite"')
+  })
+})
