@@ -1777,52 +1777,6 @@ function registerImportedSessionsInStateDb(sessions: ImportedSessionRecord[]): v
   }
 }
 
-function listImportedThreadsFromStateDb(): Array<Record<string, unknown>> {
-  const stateDbPath = join(getCodexHomeDir(), 'state_5.sqlite')
-  if (!existsSync(stateDbPath)) return []
-  const sql = `
-SELECT id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
-       cli_version, first_user_message, archived
-FROM threads
-WHERE archived = 0 AND replace(rollout_path, '\\', '/') LIKE '%/sessions/%' AND id IN (
-  SELECT id FROM threads WHERE first_user_message != '' OR title != ''
-)
-ORDER BY updated_at DESC
-LIMIT 200;
-`
-  const result = spawnSync('sqlite3', ['-json', stateDbPath, sql], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout.trim()) return []
-  try {
-    const rows = JSON.parse(result.stdout) as unknown
-    if (!Array.isArray(rows)) return []
-    return rows.flatMap((row) => {
-      const record = asRecord(row)
-      const id = readNonEmptyString(record?.id)
-      const path = readNonEmptyString(record?.rollout_path)
-      const cwd = readNonEmptyString(record?.cwd)
-      if (!id || !path || !cwd) return []
-      const title = readNonEmptyString(record?.title) || readNonEmptyString(record?.first_user_message) || 'Imported chat'
-      const createdAt = typeof record?.created_at === 'number' ? record.created_at : Math.floor(Date.now() / 1000)
-      const updatedAt = typeof record?.updated_at === 'number' ? record.updated_at : createdAt
-      return [{
-        id,
-        preview: title,
-        modelProvider: readNonEmptyString(record?.model_provider) || 'openai',
-        createdAt,
-        updatedAt,
-        path,
-        cwd,
-        cliVersion: readNonEmptyString(record?.cli_version),
-        source: 'cli',
-        gitInfo: null,
-        turns: [],
-      }]
-    })
-  } catch {
-    return []
-  }
-}
-
 function readStateDbThreadExportMetadata(): Map<string, ExportedThreadMetadata> {
   const stateDbPath = join(getCodexHomeDir(), 'state_5.sqlite')
   if (!existsSync(stateDbPath)) return new Map()
@@ -1869,38 +1823,6 @@ ${archivedPredicate};
     return metadata
   } catch {
     return new Map()
-  }
-}
-
-function mergeImportedThreadsIntoThreadListResult(result: unknown): unknown {
-  const record = asRecord(result)
-  const data = Array.isArray(record?.data) ? record.data : null
-  if (!record || !data) return result
-  const importedById = new Map<string, Record<string, unknown>>()
-  for (const thread of listImportedThreadsFromStateDb()) {
-    const id = readNonEmptyString(thread.id)
-    if (id) importedById.set(id, thread)
-  }
-  if (importedById.size === 0) return result
-  const mergedData: unknown[] = []
-  for (const item of data) {
-    const id = readNonEmptyString(asRecord(item)?.id)
-    const imported = id ? importedById.get(id) : undefined
-    if (imported) {
-      mergedData.push({ ...asRecord(item), ...imported })
-      importedById.delete(id)
-    } else {
-      mergedData.push(item)
-    }
-  }
-  mergedData.push(...importedById.values())
-  return {
-    ...record,
-    data: mergedData.sort((a, b) => {
-      const aUpdated = typeof asRecord(a)?.updatedAt === 'number' ? asRecord(a)?.updatedAt as number : 0
-      const bUpdated = typeof asRecord(b)?.updatedAt === 'number' ? asRecord(b)?.updatedAt as number : 0
-      return bUpdated - aUpdated
-    }),
   }
 }
 
@@ -7956,10 +7878,7 @@ export function createCodexBridgeMiddleware(options: {
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult)
           : trimmedResult
-        const listMergedResult = body.method === 'thread/list'
-          ? mergeImportedThreadsIntoThreadListResult(errorMergedResult)
-          : errorMergedResult
-        const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, listMergedResult)
+        const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, errorMergedResult)
         const result = THREAD_METHODS_WITH_TURNS.has(body.method)
           ? await mergeSessionMetadataIntoThreadResult(sanitizedResult)
           : sanitizedResult
