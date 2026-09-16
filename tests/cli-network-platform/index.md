@@ -21,6 +21,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: Default runtime uses workspace-write sandbox with on-request approvals](default-runtime-uses-workspace-write-sandbox-with-on-request-approvals.md) |
 | [Feature: Windows npx install no longer depends on legacy PTY package](windows-npx-install-no-longer-depends-on-legacy-pty-package.md) |
 | [Feature: Windows local clone install](windows-local-clone-install.md) |
+| [Feature: Windows PATH Codex CLI discovery](windows-global-codex-cli-discovery.md) |
 | [Feature: Default runtime uses unrestricted sandbox and no approvals](default-runtime-uses-unrestricted-sandbox-and-no-approvals.md) |
 | [Feature: npm run dev exports unrestricted runtime defaults](npm-run-dev-exports-unrestricted-runtime-defaults.md) |
 | [Feature: npm run dev2 uses a random Codex home](npm-run-dev2-uses-random-codex-home.md) |
