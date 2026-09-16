@@ -12,13 +12,20 @@
    codex --version
    ```
 
-2. Start `codexapp` and stop it after startup output appears:
+2. Start `codexapp` on a known local port:
 
    ```powershell
-   codexapp --no-login --no-tunnel --no-open
+   codexapp --no-login --no-tunnel --no-open --port 5987
    ```
 
-3. Repeat with the installed `codex-mobile` command:
+3. In a second PowerShell window, verify that the selected workspace roots remain readable and Codex returns models through the app bridge:
+
+   ```powershell
+   Invoke-RestMethod http://127.0.0.1:5987/codex-api/workspace-roots-state
+   Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"method":"model/list","params":{}}' http://127.0.0.1:5987/codex-api/rpc
+   ```
+
+4. Repeat with the installed `codex-mobile` command:
 
    ```powershell
    codex-mobile --no-login --no-tunnel --no-open
@@ -28,6 +35,7 @@
 - Both commands discover `codex` through `PATH`, including an npm-generated `codex.cmd` shim.
 - Startup does not print `Codex CLI not found. Installing official Codex CLI from npm...` and does not issue a second npm install.
 - Commands continue to work when `codex.cmd` is the only PATH-based CLI shim.
+- The roots response preserves the selected projects, and the `model/list` response contains a nonempty `data` array.
 
 #### Rollback/Cleanup
 - Stop each foreground server with `Ctrl+C`.
