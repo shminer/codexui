@@ -16,7 +16,15 @@ pnpm install
 pnpm run install:local
 ```
 
-The installer builds the current checkout and installs both commands under `${HOME}/.local` by default. Ensure `${HOME}/.local/bin` is on `PATH`.
+On Linux and macOS, the installer builds the current checkout and installs both commands under `${HOME}/.local` by default. Ensure `${HOME}/.local/bin` is on `PATH`.
+
+On Windows, the same command uses `scripts/install-local.bat` and installs into the current npm global prefix. PowerShell users can verify the prefix and installed commands with:
+
+```powershell
+npm prefix --global
+codex-mobile --help
+codex-mobile-safe doctor
+```
 
 Start the safe command in the foreground:
 
@@ -29,7 +37,7 @@ codex-mobile-safe status
 codex-mobile-safe urls
 ```
 
-For a persistent Linux user service:
+For a persistent Linux user service (not supported on Windows):
 
 ```bash
 pnpm run service:install
