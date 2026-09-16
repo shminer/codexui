@@ -130,6 +130,7 @@ async function runCommand(command: string, args: string[], options: { cwd?: stri
       cwd: options.cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(invocation.shell ? { shell: true } : {}),
     })
     let settled = false
     let stdout = ''
@@ -171,6 +172,7 @@ async function runCommandWithOutput(command: string, args: string[], options: { 
       cwd: options.cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(invocation.shell ? { shell: true } : {}),
     })
     let settled = false
     let stdout = ''

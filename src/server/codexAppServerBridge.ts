@@ -2792,7 +2792,7 @@ function readNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
-type ComposioCliInvocation = { command: string; args: string[]; displayCommand: string }
+type ComposioCliInvocation = { command: string; args: string[]; displayCommand: string; shell?: true }
 
 function buildComposioInvocation(args: string[]): ComposioCliInvocation | null {
   const overrideCommand = process.env.CODEXUI_COMPOSIO_COMMAND?.trim()
@@ -2801,6 +2801,7 @@ function buildComposioInvocation(args: string[]): ComposioCliInvocation | null {
     return {
       command: invocation.command,
       args: invocation.args,
+      shell: invocation.shell,
       displayCommand: `${overrideCommand} ${args.map(quoteShellTokenIfNeeded).join(' ')}`.trim(),
     }
   }
@@ -2818,6 +2819,7 @@ function buildInstalledComposioInvocation(args: string[]): ComposioCliInvocation
     return {
       command: invocation.command,
       args: invocation.args,
+      shell: invocation.shell,
       displayCommand: `${candidate} ${args.map(quoteShellTokenIfNeeded).join(' ')}`.trim(),
     }
   }
@@ -2829,6 +2831,7 @@ function probeComposioInvocation(invocation: ComposioCliInvocation): { available
     encoding: 'utf8',
     env: process.env,
     windowsHide: true,
+    ...(invocation.shell ? { shell: true } : {}),
   })
   const output = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim()
   return {
@@ -2862,6 +2865,7 @@ async function runComposioJson<T>(args: string[], fallback: string): Promise<T> 
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(invocation.shell ? { shell: true } : {}),
   })
 
   let stdout = ''
@@ -3113,6 +3117,7 @@ async function startComposioLogin(): Promise<ComposioLoginResult> {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(invocation.shell ? { shell: true } : {}),
   })
   proc.unref()
 
@@ -3171,6 +3176,7 @@ async function installComposioCli(): Promise<ComposioInstallResult> {
     encoding: 'utf8',
     env,
     windowsHide: true,
+    ...(invocation.shell ? { shell: true } : {}),
   })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
   if (result.error || result.status !== 0) {
@@ -6387,7 +6393,11 @@ class AppServerProcess {
     const spawnEnv = Object.keys(config.env).length > 0
       ? { ...process.env, ...config.env }
       : undefined
-    const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], ...(spawnEnv ? { env: spawnEnv } : {}) })
+    const proc = spawn(invocation.command, invocation.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(spawnEnv ? { env: spawnEnv } : {}),
+      ...(invocation.shell ? { shell: true } : {}),
+    })
     this.process = proc
 
     proc.stdout.setEncoding('utf8')
@@ -7157,6 +7167,7 @@ class MethodCatalog {
       const invocation = getSpawnInvocation(codexCommand, ['app-server', 'generate-json-schema', '--out', outDir])
       const process = spawn(invocation.command, invocation.args, {
         stdio: ['ignore', 'ignore', 'pipe'],
+        ...(invocation.shell ? { shell: true } : {}),
       })
 
       let stderr = ''
