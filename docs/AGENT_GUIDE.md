@@ -18,7 +18,8 @@ This repository maintains the upstream-compatible `codex-mobile` command and a h
 - `src/safe/doctor.ts`: static security-invariant diagnostics.
 - `src/server/securityPolicy.ts`: policy interface injected into HTTP and app-server bridges.
 - `packaging/systemd/`: template for the safe Linux user service.
-- `scripts/install-local.sh` and `scripts/*user-service.sh`: repeatable local installation and service lifecycle.
+- `scripts/install-local.cjs`: platform dispatcher for local installation.
+- `scripts/install-local.sh` and `scripts/install-local.bat`: Unix and Windows local installers; `scripts/*user-service.sh` remains the Linux service lifecycle.
 
 ## Non-negotiable safe-mode invariants
 
@@ -63,6 +64,16 @@ For an isolated local-install smoke test:
 PREFIX=/tmp/codex-mobile-prefix sh scripts/install-local.sh
 /tmp/codex-mobile-prefix/bin/codex-mobile --help
 /tmp/codex-mobile-prefix/bin/codex-mobile-safe doctor
+```
+
+On Windows, use a temporary npm prefix and the generated command shims instead:
+
+```powershell
+$env:PREFIX = Join-Path $env:TEMP 'codex-mobile-prefix'
+pnpm run install:local
+& (Join-Path $env:PREFIX 'codex-mobile.cmd') --help
+& (Join-Path $env:PREFIX 'codex-mobile-safe.cmd') doctor
+Remove-Item Env:PREFIX
 ```
 
 Instantiate the service template in a temporary location and run `systemd-analyze --user verify` before installing it. Follow the repository's CJS/closest-public-entry smoke-test rule and record the exact command and result in the PR.

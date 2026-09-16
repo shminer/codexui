@@ -60,7 +60,7 @@
     "prepublishOnly": "pnpm run build",
     "profile:browser": "node scripts/profile-browser-runtime.cjs",
     "profile:thread": "PROFILE_ROUTE='#/thread/019da7c0-4e12-7a91-837c-f7c11cc8ab6c' node scripts/profile-browser-runtime.cjs",
-    "install:local": "sh scripts/install-local.sh",
+    "install:local": "node scripts/install-local.cjs",
     "service:install": "sh scripts/install-user-service.sh",
     "service:restart": "systemctl --user restart codex-mobile-safe.service",
     "service:status": "systemctl --user --no-pager --full status codex-mobile-safe.service",
