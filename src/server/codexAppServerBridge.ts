@@ -7152,6 +7152,13 @@ export class BackendQueueProcessor {
   }
 }
 
+export function filterClientRpcMethodsForPlatform(methods: string[], platform: NodeJS.Platform): string[] {
+  if (platform !== 'win32') return methods
+
+  // Windows Codex removes sectioned threads from the normal project list.
+  return methods.filter((method) => method !== 'threadSection/list' && method !== 'thread/section/move')
+}
+
 class MethodCatalog {
   private methodCache: string[] | null = null
   private notificationCache: string[] | null = null
@@ -8372,7 +8379,7 @@ export function createCodexBridgeMiddleware(options: {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
-        const methods = await methodCatalog.listMethods()
+        const methods = filterClientRpcMethodsForPlatform(await methodCatalog.listMethods(), process.platform)
         setJson(res, 200, { data: methods })
         return
       }
