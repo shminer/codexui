@@ -17,7 +17,7 @@
 10. Pin more than 20 older threads and confirm every pinned summary eventually appears.
 
 #### Expected Results
-- CLIs exposing `threadSection/list` and `thread/section/move` use Codex's native `Pinned` section; older CLIs use `~/.codex/.codex-global-state.json` key `pinned-thread-ids`.
+- Linux CLIs exposing `threadSection/list` and `thread/section/move` use Codex's native `Pinned` section. Windows and older CLIs use `~/.codex/.codex-global-state.json` key `pinned-thread-ids` so pinned threads remain in their project list.
 - A visible page checks pin state at most once every 5 seconds; a hidden page sends no polling request, and focus/visibility recovery refreshes immediately.
 - Pin order is preserved between reloads.
 - A failed pin write restores the previous sidebar state instead of showing an unsaved change.
