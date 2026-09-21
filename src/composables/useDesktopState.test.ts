@@ -299,6 +299,92 @@ describe('turn token throughput', () => {
     )
   })
 
+  it('starts a recovered active turn from the first usage observed after reconnecting', async () => {
+    const persistedUsage = tokenUsageNotification('thread-1', 'old-turn', 1_000, 100).params.tokenUsage
+    installTestWindow({
+      'codex-web-local.thread-token-usage.v1': JSON.stringify({ 'thread-1': persistedUsage }),
+    })
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.resumeThread.mockResolvedValueOnce({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-restored',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      subagents: [],
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('thread-1')
+    await state.loadMessages('thread-1')
+    state.startPolling()
+    pollingCleanups.push(() => state.stopPolling())
+    expect(notificationHandler).toBeDefined()
+
+    notificationHandler!(tokenUsageNotification('thread-1', 'turn-restored', 1_200, 100))
+    notificationHandler!(tokenUsageNotification('thread-1', 'turn-restored', 1_250, 50))
+    notificationHandler!({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 10_000,
+        turn: { id: 'turn-restored', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 50 output tokens · 5.0 TPS',
+    )
+  })
+
+  it('does not charge late usage from the previous turn to the next turn', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 5_000, turn: { id: 'turn-1', status: 'completed' } },
+    })
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-2' } } })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 100))
+    emit(tokenUsageNotification('thread-1', 'turn-2', 1_150, 50))
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-2', status: 'completed' } },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 50 output tokens · 5.0 TPS',
+    )
+  })
+
+  it('drops throughput when a same-turn cumulative counter moves backward', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_120, 120))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_060, 60))
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain('Worked for 10s')
+    expect(state.messages.value.some((message) => message.text.includes('TPS'))).toBe(false)
+  })
+
   it.each([
     { name: 'no usage', durationMs: 5_000, usage: null },
     { name: 'a zero duration', durationMs: 0, usage: tokenUsageNotification('thread-1', 'turn-1', 1_100, 100) },
