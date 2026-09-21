@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { spawnSyncCommand } from './utils/commandInvocation.js'
 
 export type CommandInvocation = {
   command: string
@@ -52,20 +52,11 @@ function getPotentialCodexPackageDirs(prefix: string): string[] {
 }
 
 function getPotentialCodexExecutables(prefix: string): string[] {
-  return getPotentialCodexPackageDirs(prefix).map((packageDir) => (
-    process.platform === 'win32'
-      ? join(
-          packageDir,
-          'node_modules',
-          '@openai',
-          'codex-win32-x64',
-          'vendor',
-          'x86_64-pc-windows-msvc',
-          'codex',
-          'codex.exe',
-        )
-      : join(packageDir, 'bin', 'codex')
-  ))
+  return getPotentialCodexPackageDirs(prefix).map((packageDir) => join(packageDir, 'bin', 'codex'))
+}
+
+export function getCodexCommandCandidates(platform = process.platform): string[] {
+  return platform === 'win32' ? ['codex.exe', 'codex'] : ['codex']
 }
 
 function getPotentialRipgrepExecutables(prefix: string): string[] {
@@ -86,7 +77,7 @@ function getPotentialRipgrepExecutables(prefix: string): string[] {
 }
 
 export function canRunCommand(command: string, args: string[] = []): boolean {
-  const result = spawnSync(command, args, {
+  const result = spawnSyncCommand(command, args, {
     stdio: 'ignore',
     windowsHide: true,
   })
@@ -119,10 +110,10 @@ export function prependPathEntry(existingPath: string, entry: string): string {
 
 export function resolveCodexCommand(): string | null {
   const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
-  const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
-  const fallbackCandidates = process.platform === 'win32'
-    ? [...packageCandidates, 'codex']
-    : ['codex', ...packageCandidates]
+  const packageCandidates = process.platform === 'win32'
+    ? []
+    : getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
+  const fallbackCandidates = [...getCodexCommandCandidates(), ...packageCandidates]
 
   for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {
     if (isRunnableCommand(candidate, ['--version'])) {

@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
+const itPosix = process.platform === 'win32' ? it.skip : it
 
 async function readRepoFile(path: string): Promise<string> {
   return readFile(new URL(`../../${path}`, import.meta.url), 'utf8')
@@ -21,7 +22,7 @@ describe('local installation packaging', () => {
       files?: string[]
     }
     expect(packageJson.private).toBe(true)
-    expect(packageJson.scripts?.['install:local']).toBe('sh scripts/install-local.sh')
+    expect(packageJson.scripts?.['install:local']).toBe('node scripts/install-local.cjs')
     expect(packageJson.scripts?.['service:install']).toBe('sh scripts/install-user-service.sh')
     expect(packageJson.scripts?.['service:restart']).toContain('systemctl --user restart')
     expect(packageJson.bin?.['codex-mobile']).toBe('dist-cli/index.js')
@@ -42,7 +43,7 @@ describe('local installation packaging', () => {
     expect(unit).not.toContain('funnel')
   })
 
-  it('renders the installed safe unit and password through the isolated installer path', async () => {
+  itPosix('renders the installed safe unit and password through the isolated installer path', async () => {
     const temporaryRoot = await mkdtemp(join(tmpdir(), 'codex-mobile-service-test-'))
     try {
       const homeDirectory = join(temporaryRoot, 'home')
@@ -99,9 +100,11 @@ describe('local installation packaging', () => {
     }
   })
 
-  it('installs from the current clone and verifies the user unit', async () => {
-    const [localInstaller, serviceInstaller] = await Promise.all([
+  it('keeps platform-specific local installers behind one package command', async () => {
+    const [localInstaller, windowsInstaller, installerDispatcher, serviceInstaller] = await Promise.all([
       readRepoFile('scripts/install-local.sh'),
+      readRepoFile('scripts/install-local.bat'),
+      readRepoFile('scripts/install-local.cjs'),
       readRepoFile('scripts/install-user-service.sh'),
     ])
     expect(localInstaller).toContain('pnpm run build')
@@ -109,13 +112,20 @@ describe('local installation packaging', () => {
     expect(localInstaller).toContain('npm uninstall --global --prefix "$prefix" codex-mobile-safe')
     expect(localInstaller).toContain('legacy_mobile_bin="$prefix/bin/codex-mobile"')
     expect(localInstaller).toContain('rm -f "$legacy_mobile_bin"')
+    expect(windowsInstaller).toContain('npm prefix --global')
+    expect(windowsInstaller).toContain('call pnpm run build')
+    expect(windowsInstaller).toContain('call npm install --global --prefix "%INSTALL_PREFIX%" "%ROOT%"')
+    expect(windowsInstaller).toContain('Ensure %INSTALL_PREFIX% is in PATH.')
+    expect(installerDispatcher).toContain("process.platform === 'win32'")
+    expect(installerDispatcher).toContain("'install-local.bat'")
+    expect(installerDispatcher).toContain("'install-local.sh'")
     expect(serviceInstaller).toContain('systemd-analyze --user verify')
     expect(serviceInstaller).toContain('loginctl show-user')
     expect(serviceInstaller).toContain('systemctl --user enable codex-mobile-safe.service')
     expect(serviceInstaller).toContain('systemctl --user restart codex-mobile-safe.service')
   })
 
-  it('honors the conventional PREFIX override for isolated installs', async () => {
+  itPosix('honors the conventional PREFIX override for isolated installs', async () => {
     const temporaryRoot = await mkdtemp(join(tmpdir(), 'codex-mobile-prefix-test-'))
     const binDirectory = join(temporaryRoot, 'bin')
     const capturePath = join(temporaryRoot, 'npm-args.txt')

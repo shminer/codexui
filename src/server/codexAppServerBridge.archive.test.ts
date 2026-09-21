@@ -9,6 +9,7 @@ import {
   canonicalizeWorkspaceRootsStateForRead,
   discardSideConversationThread,
   ensureDefaultFreeModeStateForMissingAuthSync,
+  filterClientRpcMethodsForPlatform,
   hasUsableCodexAuth,
   isEmptyThreadReadError,
   isThreadMaterializationPendingError,
@@ -27,6 +28,18 @@ afterEach(() => {
   } else {
     process.env.CODEX_HOME = originalCodexHome
   }
+})
+
+describe('filterClientRpcMethodsForPlatform', () => {
+  const methods = ['thread/list', 'threadSection/list', 'thread/section/move']
+
+  it('keeps native pinned sections on Linux', () => {
+    expect(filterClientRpcMethodsForPlatform(methods, 'linux')).toBe(methods)
+  })
+
+  it('uses the persistent pin store on Windows', () => {
+    expect(filterClientRpcMethodsForPlatform(methods, 'win32')).toEqual(['thread/list'])
+  })
 })
 
 describe('callRpcWithArchiveRecovery', () => {
