@@ -196,9 +196,10 @@ describe('turn token throughput', () => {
       },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 1,234 output tokens · 123.4 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '1,234 output tokens · 123.4 TPS',
+    })
   })
 
   it('patches a completed summary when token usage arrives afterward', async () => {
@@ -221,9 +222,10 @@ describe('turn token throughput', () => {
 
     emit(tokenUsageNotification('thread-1', 'turn-1', 600, 100))
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 5s · 100 output tokens · 20.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 5s',
+      throughputText: '100 output tokens · 20.0 TPS',
+    })
   })
 
   it('uses cumulative deltas across multiple usage updates without double-counting duplicates', async () => {
@@ -246,9 +248,10 @@ describe('turn token throughput', () => {
       },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 120 output tokens · 12.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '120 output tokens · 12.0 TPS',
+    })
   })
 
   it('infers a missing baseline from the first observed usage update', async () => {
@@ -269,9 +272,10 @@ describe('turn token throughput', () => {
       },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 100 output tokens · 10.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '100 output tokens · 10.0 TPS',
+    })
   })
 
   it('ignores usage for another turn and keeps thread accumulators isolated', async () => {
@@ -294,9 +298,10 @@ describe('turn token throughput', () => {
       },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 100 output tokens · 10.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '100 output tokens · 10.0 TPS',
+    })
   })
 
   it('starts a recovered active turn from the first usage observed after reconnecting', async () => {
@@ -342,9 +347,10 @@ describe('turn token throughput', () => {
       },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 50 output tokens · 5.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '50 output tokens · 5.0 TPS',
+    })
   })
 
   it('does not charge late usage from the previous turn to the next turn', async () => {
@@ -364,9 +370,10 @@ describe('turn token throughput', () => {
       params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-2', status: 'completed' } },
     })
 
-    expect(state.messages.value.map((message) => message.text)).toContain(
-      'Worked for 10s · 50 output tokens · 5.0 TPS',
-    )
+    expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
+      text: 'Worked for 10s',
+      throughputText: '50 output tokens · 5.0 TPS',
+    })
   })
 
   it('drops throughput when a same-turn cumulative counter moves backward', async () => {
@@ -382,7 +389,7 @@ describe('turn token throughput', () => {
     })
 
     expect(state.messages.value.map((message) => message.text)).toContain('Worked for 10s')
-    expect(state.messages.value.some((message) => message.text.includes('TPS'))).toBe(false)
+    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText).toBe('')
   })
 
   it.each([
@@ -409,7 +416,7 @@ describe('turn token throughput', () => {
 
     const expectedDuration = durationMs > 0 ? '5s' : '<1s'
     expect(state.messages.value.map((message) => message.text)).toContain(`Worked for ${expectedDuration}`)
-    expect(state.messages.value.some((message) => message.text.includes('TPS'))).toBe(false)
+    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText).toBe('')
   })
 })
 

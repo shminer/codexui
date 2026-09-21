@@ -1005,22 +1005,23 @@ function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
     summary.durationMs > 0
   ) {
     const tokensPerSecond = summary.outputTokens / (summary.durationMs / 1000)
-    throughputText = ` · ${summary.outputTokens.toLocaleString('en-US')} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
+    throughputText = `${summary.outputTokens.toLocaleString('en-US')} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
   }
 
   return {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
-    text: `Worked for ${formatTurnDuration(summary.durationMs)}${throughputText}`,
+    text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
+    throughputText,
     createdAtIso: summary.completedAtIso,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
   }
 }
 
-function findLastAssistantMessageIndex(messages: UiMessage[]): number {
+function findLastAssistantMessageIndex(messages: UiMessage[], turnId: string): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant') {
+    if (messages[index].role === 'assistant' && messages[index].turnId === turnId) {
       return index
     }
   }
@@ -1030,7 +1031,7 @@ function findLastAssistantMessageIndex(messages: UiMessage[]): number {
 function insertTurnSummaryMessage(messages: UiMessage[], summary: TurnSummaryState): UiMessage[] {
   const summaryMessage = buildTurnSummaryMessage(summary)
   const sanitizedMessages = messages.filter((message) => message.messageType !== WORKED_MESSAGE_TYPE)
-  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages)
+  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages, summary.turnId)
   if (insertIndex < 0) {
     return [...sanitizedMessages, summaryMessage]
   }
