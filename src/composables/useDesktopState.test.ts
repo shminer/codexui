@@ -178,6 +178,28 @@ afterEach(() => {
 })
 
 describe('turn token throughput', () => {
+  it('attaches throughput to the final live assistant reply', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 100))
+    emit({
+      method: 'item/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'reply-1', type: 'agentMessage', text: 'Done' } },
+    })
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } },
+    })
+
+    const messages = state.messages.value
+    const summaryIndex = messages.findIndex((message) => message.messageType === 'worked')
+    expect(messages[summaryIndex]).toMatchObject({ throughputText: '100 output tokens · 10.0 TPS' })
+    expect(messages[summaryIndex + 1]).toMatchObject({ id: 'reply-1', role: 'assistant', turnId: 'turn-1' })
+    expect(messages[summaryIndex + 1].createdAtIso).toBeTruthy()
+  })
+
   it('adds output tokens and average TPS when usage arrives before completion', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
 

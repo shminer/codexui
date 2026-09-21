@@ -1019,9 +1019,9 @@ function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
   }
 }
 
-function findLastAssistantMessageIndex(messages: UiMessage[], turnId: string): number {
+function findLastAssistantMessageIndex(messages: UiMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant' && messages[index].turnId === turnId) {
+    if (messages[index].role === 'assistant') {
       return index
     }
   }
@@ -1031,7 +1031,7 @@ function findLastAssistantMessageIndex(messages: UiMessage[], turnId: string): n
 function insertTurnSummaryMessage(messages: UiMessage[], summary: TurnSummaryState): UiMessage[] {
   const summaryMessage = buildTurnSummaryMessage(summary)
   const sanitizedMessages = messages.filter((message) => message.messageType !== WORKED_MESSAGE_TYPE)
-  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages, summary.turnId)
+  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages)
   if (insertIndex < 0) {
     return [...sanitizedMessages, summaryMessage]
   }
@@ -3213,9 +3213,9 @@ export function useDesktopState() {
     setLivePlanMessagesForThread(threadId, next)
   }
 
-  function upsertLiveAgentMessage(threadId: string, nextMessage: UiMessage): void {
+  function upsertLiveAgentMessage(threadId: string, nextMessage: UiMessage, turnId: string): void {
     const previous = liveAgentMessagesByThreadId.value[threadId] ?? []
-    const next = upsertMessage(previous, nextMessage)
+    const next = upsertMessage(previous, { ...nextMessage, turnId: turnId || nextMessage.turnId })
     setLiveAgentMessagesForThread(threadId, next)
   }
 
@@ -4681,6 +4681,9 @@ export function useDesktopState() {
       : false
     const isSideConversationThread = isKnownSideConversationThread(notificationThreadId)
     if (!notificationThreadId || (notificationThreadId !== selectedThreadIdForNotification && !isSelectedSubagent && !isSideConversationThread)) return
+    const liveAgentTurnId = readString(asRecord(notification.params)?.turnId)
+      || activeTurnIdByThreadId.value[notificationThreadId]
+      || ''
 
     const startedAgentMessageId = readAgentMessageStartedId(notification)
     if (startedAgentMessageId) {
@@ -4697,17 +4700,17 @@ export function useDesktopState() {
         role: 'assistant',
         text: nextText,
         messageType: 'agentMessage.live',
-      })
+      }, liveAgentTurnId)
     }
 
     const completedAgentMessage = readAgentMessageCompleted(notification)
     if (completedAgentMessage) {
-      upsertLiveAgentMessage(notificationThreadId, completedAgentMessage)
+      upsertLiveAgentMessage(notificationThreadId, completedAgentMessage, liveAgentTurnId)
     }
 
     const completedImageView = readCompletedImageView(notification)
     if (completedImageView) {
-      upsertLiveAgentMessage(notificationThreadId, completedImageView)
+      upsertLiveAgentMessage(notificationThreadId, completedImageView, liveAgentTurnId)
 
     }
 
