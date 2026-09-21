@@ -5185,7 +5185,8 @@ onBeforeUnmount(() => {
 }
 
 .message-timestamp {
-  @apply mt-1 text-[10px] leading-4 text-zinc-400;
+  @apply mt-1 max-w-full text-[10px] leading-4 text-zinc-400;
+  overflow-wrap: anywhere;
 }
 
 .message-card[data-role='user'] {

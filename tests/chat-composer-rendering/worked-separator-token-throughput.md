@@ -20,7 +20,7 @@
 
 #### Expected Results
 - A completed turn with valid usage displays `Worked for <duration>` before the response and `<timestamp> - <output tokens> output tokens · <TPS> TPS` after the final assistant response.
-- Output tokens use thousands separators and TPS uses exactly one decimal place.
+- Output tokens below 1,000 show the full number; larger counts use compact units such as `1.2K` and `1M`. TPS uses exactly one decimal place.
 - TPS equals the turn's output-token delta divided by its full elapsed time, including reasoning, tool work, and waits.
 - Repeated usage notifications do not double-count tokens, and thread or turn changes do not leak prior values.
 - A recovered active turn counts only output observed after its first post-reconnect usage notification.

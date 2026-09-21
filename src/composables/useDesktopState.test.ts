@@ -220,8 +220,23 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '1,234 output tokens · 123.4 TPS',
+      throughputText: '1.2K output tokens · 123.4 TPS',
     })
+  })
+
+  it('compacts million-token counts without changing the TPS calculation', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_001_000, 1_000_000))
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } },
+    })
+
+    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText)
+      .toBe('1M output tokens · 100000.0 TPS')
   })
 
   it('patches a completed summary when token usage arrives afterward', async () => {

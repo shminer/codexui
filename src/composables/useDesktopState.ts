@@ -942,6 +942,7 @@ type TurnCompletedInfo = {
 }
 
 const WORKED_MESSAGE_TYPE = 'worked'
+const outputTokenFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 
 function parseIsoTimestamp(value: string): number | null {
   if (!value) return null
@@ -1005,7 +1006,7 @@ function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
     summary.durationMs > 0
   ) {
     const tokensPerSecond = summary.outputTokens / (summary.durationMs / 1000)
-    throughputText = `${summary.outputTokens.toLocaleString('en-US')} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
+    throughputText = `${outputTokenFormatter.format(summary.outputTokens)} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
   }
 
   return {
