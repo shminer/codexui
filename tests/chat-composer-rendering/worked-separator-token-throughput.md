@@ -17,6 +17,7 @@
 8. Queue a second prompt, let it start immediately after the first turn completes, and confirm a late usage notification for the first turn is not charged to the second.
 9. Replay a same-turn usage sequence whose cumulative output count decreases while remaining above its initial baseline.
 10. Repeat the timestamp and separator checks in light and dark themes at desktop, `375x812`, and `768x1024` viewports.
+11. Complete another turn, reload the same browser tab, and inspect both completed turns.
 
 #### Expected Results
 - A completed turn with valid usage displays `Worked for <duration>` before the response and `<timestamp> - <output tokens> output tokens · <TPS> TPS` after the final assistant response.
@@ -28,6 +29,7 @@
 - Any same-turn cumulative counter regression removes output-token and TPS text for that turn.
 - Missing, zero, or regressed usage and zero-duration turns retain `Worked for <duration>` and show no token or TPS text after the timestamp.
 - The timestamp and statistics remain readable without clipping, overlap, or horizontal overflow in both themes and all tested viewports.
+- After reload, each completed turn retains its own `Worked for` duration and valid token/TPS statistics beside its final response timestamp; newly completed turns do not erase earlier records. Records are local to this browser and limited to the latest 100 completed turns per thread.
 
 #### Rollback/Cleanup
-- No persistent setting or test data cleanup is required.
+- In a disposable test browser, remove `codex-web-local.turn-summaries.v1` from local storage to clear test records. Keep existing browser data untouched otherwise.

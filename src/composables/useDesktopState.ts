@@ -86,6 +86,7 @@ export function findAdjacentThreadId(threads: UiThread[], threadId: string): str
 const READ_STATE_STORAGE_KEY = 'codex-web-local.thread-read-state.v1'
 const UNREAD_CUTOFF_STORAGE_KEY = 'codex-web-local.thread-unread-cutoff.v1'
 const THREAD_TOKEN_USAGE_STORAGE_KEY = 'codex-web-local.thread-token-usage.v1'
+const TURN_SUMMARIES_STORAGE_KEY = 'codex-web-local.turn-summaries.v1'
 const THREAD_TERMINAL_OPEN_STORAGE_KEY = 'codex-web-local.thread-terminal-open.v1'
 const SELECTED_THREAD_STORAGE_KEY = 'codex-web-local.selected-thread-id.v1'
 const SELECTED_MODEL_BY_CONTEXT_STORAGE_KEY = 'codex-web-local.selected-model-by-context.v1'
@@ -111,6 +112,7 @@ const OPENCODE_ZEN_DEFAULT_MODEL = 'big-pickle'
 const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or set CODEXUI_CODEX_COMMAND.'
 const DEFAULT_ACCOUNT_STORAGE_ID = '__default__'
 const MAX_DISCARDED_SIDE_CONVERSATION_THREAD_IDS = 256
+const MAX_SAVED_TURN_SUMMARIES_PER_THREAD = 100
 type SelectThreadResult = 'ok' | 'not-found' | 'error'
 
 function isCodexCliMissingError(error: unknown): boolean {
@@ -944,6 +946,37 @@ type TurnCompletedInfo = {
 const WORKED_MESSAGE_TYPE = 'worked'
 const outputTokenFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 
+function loadTurnSummaries(): Record<string, TurnSummaryState[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(TURN_SUMMARIES_STORAGE_KEY) || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result = createStringKeyedRecord<TurnSummaryState[]>()
+    for (const [threadId, entries] of Object.entries(parsed)) {
+      if (!threadId || !Array.isArray(entries)) continue
+      const summaries = entries.filter((entry): entry is TurnSummaryState => (
+        entry !== null && typeof entry === 'object' &&
+        typeof entry.turnId === 'string' && entry.turnId.length > 0 &&
+        typeof entry.completedAtIso === 'string' && !Number.isNaN(Date.parse(entry.completedAtIso)) &&
+        typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 &&
+        (entry.outputTokens === undefined || (Number.isSafeInteger(entry.outputTokens) && entry.outputTokens > 0))
+      ))
+      if (summaries.length) result[threadId] = summaries.slice(-MAX_SAVED_TURN_SUMMARIES_PER_THREAD)
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function saveTurnSummaries(summaries: Record<string, TurnSummaryState[]>): void {
+  try {
+    window.localStorage.setItem(TURN_SUMMARIES_STORAGE_KEY, JSON.stringify(summaries))
+  } catch {
+    // Keep the in-memory records when storage is unavailable.
+  }
+}
+
 function parseIsoTimestamp(value: string): number | null {
   if (!value) return null
   const ms = new Date(value).getTime()
@@ -1029,16 +1062,34 @@ function findLastAssistantMessageIndex(messages: UiMessage[]): number {
   return -1
 }
 
-function insertTurnSummaryMessage(messages: UiMessage[], summary: TurnSummaryState): UiMessage[] {
-  const summaryMessage = buildTurnSummaryMessage(summary)
-  const sanitizedMessages = messages.filter((message) => message.messageType !== WORKED_MESSAGE_TYPE)
-  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages)
-  if (insertIndex < 0) {
-    return [...sanitizedMessages, summaryMessage]
+function insertTurnSummaryMessages(messages: UiMessage[], summaries: TurnSummaryState[], current?: TurnSummaryState): UiMessage[] {
+  const lastAssistantByTurnId = new Map<string, number>()
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role === 'assistant' && messages[index].turnId) {
+      lastAssistantByTurnId.set(messages[index].turnId!, index)
+    }
   }
-  const next = [...sanitizedMessages]
-  next.splice(insertIndex, 0, summaryMessage)
-  return next
+  const summaryByIndex = new Map<number, TurnSummaryState>()
+  for (const summary of summaries) {
+    const index = lastAssistantByTurnId.get(summary.turnId)
+    if (index !== undefined) summaryByIndex.set(index, summary)
+  }
+  if (current && !lastAssistantByTurnId.has(current.turnId)) {
+    const lastAssistantIndex = findLastAssistantMessageIndex(messages)
+    summaryByIndex.set(lastAssistantIndex >= 0 && !messages[lastAssistantIndex].turnId ? lastAssistantIndex : messages.length, current)
+  }
+  const result: UiMessage[] = []
+  for (let index = 0; index <= messages.length; index += 1) {
+    const summary = summaryByIndex.get(index)
+    if (summary) result.push(buildTurnSummaryMessage(summary))
+    if (index < messages.length && messages[index].messageType !== WORKED_MESSAGE_TYPE) {
+      const message = messages[index]
+      result.push(summary && message.role === 'assistant' && !message.createdAtIso
+        ? { ...message, createdAtIso: summary.completedAtIso }
+        : message)
+    }
+  }
+  return result
 }
 
 function omitKey<TValue>(record: Record<string, TValue>, key: string): Record<string, TValue> {
@@ -1597,6 +1648,7 @@ export function useDesktopState() {
   const resumedThreadById = ref<Record<string, boolean>>({})
   const turnIndexByTurnIdByThreadId = ref<Record<string, Record<string, number>>>({})
   const turnSummaryByThreadId = ref<Record<string, TurnSummaryState>>({})
+  const savedTurnSummariesByThreadId = ref<Record<string, TurnSummaryState[]>>(loadTurnSummaries())
   const turnActivityByThreadId = ref<Record<string, TurnActivityState>>({})
   const turnErrorByThreadId = ref<Record<string, TurnErrorState>>({})
   const activeTurnIdByThreadId = ref<Record<string, string>>({})
@@ -1987,9 +2039,13 @@ export function useDesktopState() {
     const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
     const combined = [...persisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
 
-    const summary = turnSummaryByThreadId.value[threadId]
-    if (!summary) return combined
-    return insertTurnSummaryMessage(combined, summary)
+    const saved = savedTurnSummariesByThreadId.value[threadId] ?? []
+    const current = turnSummaryByThreadId.value[threadId]
+    if (!saved.length && !current) return combined
+    const summaries = current && !saved.some((summary) => summary.turnId === current.turnId)
+      ? [...saved, current]
+      : saved
+    return insertTurnSummaryMessages(combined, summaries, current)
   }
   const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
   const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
@@ -2817,6 +2873,13 @@ export function useDesktopState() {
     liveFileChangeMessagesByThreadId.value = pruneThreadStateMap(liveFileChangeMessagesByThreadId.value, activeThreadIds)
     subagentsByParentThreadId.value = pruneThreadStateMap(subagentsByParentThreadId.value, activeThreadIds)
     turnSummaryByThreadId.value = pruneThreadStateMap(turnSummaryByThreadId.value, activeThreadIds)
+    if (hasLoadedAllThreadPages) {
+      const saved = pruneThreadStateMap(savedTurnSummariesByThreadId.value, activeThreadIds)
+      if (saved !== savedTurnSummariesByThreadId.value) {
+        savedTurnSummariesByThreadId.value = saved
+        saveTurnSummaries(saved)
+      }
+    }
     turnActivityByThreadId.value = pruneThreadStateMap(turnActivityByThreadId.value, activeThreadIds)
     turnErrorByThreadId.value = pruneThreadStateMap(turnErrorByThreadId.value, activeThreadIds)
     activeTurnIdByThreadId.value = pruneThreadStateMap(activeTurnIdByThreadId.value, activeThreadIds)
@@ -2926,7 +2989,7 @@ export function useDesktopState() {
     }
   }
 
-  function setTurnSummaryForThread(threadId: string, summary: TurnSummaryState | null): void {
+  function setTurnSummaryForThread(threadId: string, summary: TurnSummaryState | null, persist = false): void {
     if (!threadId) return
 
     const previous = turnSummaryByThreadId.value[threadId]
@@ -2935,6 +2998,18 @@ export function useDesktopState() {
       turnSummaryByThreadId.value = {
         ...turnSummaryByThreadId.value,
         [threadId]: summary,
+      }
+      const saved = savedTurnSummariesByThreadId.value[threadId] ?? []
+      const index = saved.findIndex((entry) => entry.turnId === summary.turnId)
+      if (persist || index >= 0) {
+        const next = [...saved]
+        if (index >= 0) next[index] = summary
+        else next.push(summary)
+        savedTurnSummariesByThreadId.value = {
+          ...savedTurnSummariesByThreadId.value,
+          [threadId]: next.slice(-MAX_SAVED_TURN_SUMMARIES_PER_THREAD),
+        }
+        saveTurnSummaries(savedTurnSummariesByThreadId.value)
       }
     } else {
       if (previous) {
@@ -4583,7 +4658,7 @@ export function useDesktopState() {
         durationMs,
         completedAtIso: new Date(completedTurn.completedAtMs).toISOString(),
         outputTokens: outputTokens && outputTokens > 0 ? outputTokens : undefined,
-      })
+      }, completedTurn.status === 'completed')
       if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
       }
@@ -5713,6 +5788,10 @@ export function useDesktopState() {
 
   function clearSideConversationThreadState(threadId: string): void {
     if (!threadId) return
+    if (savedTurnSummariesByThreadId.value[threadId]) {
+      savedTurnSummariesByThreadId.value = omitKey(savedTurnSummariesByThreadId.value, threadId)
+      saveTurnSummaries(savedTurnSummariesByThreadId.value)
+    }
     persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
     livePlanMessagesByThreadId.value = omitKey(livePlanMessagesByThreadId.value, threadId)
     liveAgentMessagesByThreadId.value = omitKey(liveAgentMessagesByThreadId.value, threadId)

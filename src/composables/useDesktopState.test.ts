@@ -178,6 +178,58 @@ afterEach(() => {
 })
 
 describe('turn token throughput', () => {
+  it('restores completed summaries for earlier turns after reload', async () => {
+    const { emit } = await setupTurnLifecycleNotificationState('thread-1')
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    emit({
+      method: 'item/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'reply-1', type: 'agentMessage', text: 'First' } },
+    })
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } },
+    })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-2' } } })
+    emit({
+      method: 'item/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-2', item: { id: 'reply-2', type: 'agentMessage', text: 'Second' } },
+    })
+    emit({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', durationMs: 5_000, turn: { id: 'turn-2', status: 'completed' } },
+    })
+
+    expect(window.localStorage.getItem('codex-web-local.turn-summaries.v1')).toContain('turn-1')
+    gatewayMocks.resumeThread.mockResolvedValueOnce({
+      messages: [
+        { id: 'reply-1', role: 'assistant', text: 'First', turnId: 'turn-1' },
+        { id: 'reply-2', role: 'assistant', text: 'Second', turnId: 'turn-2' },
+      ],
+      inProgress: false,
+      activeTurnId: null,
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      subagents: [],
+    })
+    const reloaded = useDesktopState()
+    reloaded.primeSelectedThread('thread-1')
+    await reloaded.loadMessages('thread-1')
+
+    expect(reloaded.messages.value.map((message) => [message.messageType, message.turnId, message.throughputText])).toEqual([
+      ['worked', 'turn-1', '100 output tokens · 10.0 TPS'],
+      [undefined, 'turn-1', undefined],
+      ['worked', 'turn-2', ''],
+      [undefined, 'turn-2', undefined],
+    ])
+    expect(reloaded.messages.value.filter((message) => message.messageType === 'worked').map((message) => message.text))
+      .toEqual(['Worked for 10s', 'Worked for 5s'])
+    for (const [index, message] of reloaded.messages.value.entries()) {
+      if (message.role === 'assistant') expect(message.createdAtIso).toBe(reloaded.messages.value[index - 1].createdAtIso)
+    }
+  })
+
   it('attaches throughput to the final live assistant reply', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
 
