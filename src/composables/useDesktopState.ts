@@ -900,6 +900,21 @@ type TurnSummaryState = {
   turnId: string
   durationMs: number
   completedAtIso: string
+  outputTokens?: number
+}
+
+type TurnTokenThroughputState = {
+  turnId: string
+  priorTurnId: string | null
+  baselineOutputTokens: number | null
+  outputTokens: number | null
+  phase: 'inferBaseline' | 'observeBaseline' | 'tracking' | 'invalid'
+}
+
+type ThreadTokenUsageUpdate = {
+  threadId: string
+  turnId: string
+  usage: UiThreadTokenUsage
 }
 
 type TurnActivityState = {
@@ -961,7 +976,12 @@ function formatTurnDuration(durationMs: number): string {
 function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummaryState): boolean {
   if (!first && !second) return true
   if (!first || !second) return false
-  return first.turnId === second.turnId && first.durationMs === second.durationMs && first.completedAtIso === second.completedAtIso
+  return (
+    first.turnId === second.turnId &&
+    first.durationMs === second.durationMs &&
+    first.completedAtIso === second.completedAtIso &&
+    first.outputTokens === second.outputTokens
+  )
 }
 
 function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivityState): boolean {
@@ -976,10 +996,22 @@ function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivity
 }
 
 function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
+  let throughputText = ''
+  if (
+    typeof summary.outputTokens === 'number' &&
+    Number.isFinite(summary.outputTokens) &&
+    summary.outputTokens > 0 &&
+    Number.isFinite(summary.durationMs) &&
+    summary.durationMs > 0
+  ) {
+    const tokensPerSecond = summary.outputTokens / (summary.durationMs / 1000)
+    throughputText = ` · ${summary.outputTokens.toLocaleString('en-US')} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
+  }
+
   return {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
-    text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
+    text: `Worked for ${formatTurnDuration(summary.durationMs)}${throughputText}`,
     createdAtIso: summary.completedAtIso,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
@@ -1669,6 +1701,7 @@ export function useDesktopState() {
   const activeReasoningItemIdByThreadId = new Map<string, string>()
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
+  const turnTokenThroughputByThreadId = new Map<string, TurnTokenThroughputState>()
   const threadGoalRequestByThreadId = new Map<string, Promise<void>>()
   const threadGoalRevisionByThreadId = new Map<string, number>()
   const loadedThreadGoalIds = new Set<string>()
@@ -1676,11 +1709,29 @@ export function useDesktopState() {
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonSuccessCompletionReadBaselineByThreadId = new Map<string, string>()
 
-  function rememberObservedTurnStart(threadId: string, turnId: string): void {
-    if (!turnId || pendingTurnStartsById.has(turnId)) return
+  function rememberObservedTurnStart(threadId: string, turnId: string, recovered = false): void {
+    if (!turnId) return
+    startTurnTokenThroughput(threadId, turnId, recovered)
+    if (pendingTurnStartsById.has(turnId)) return
     pendingTurnStartsById.set(turnId, { threadId, turnId, startedAtMs: Date.now() })
   }
 
+  function startTurnTokenThroughput(threadId: string, turnId: string, recovered = false): void {
+    if (!threadId || !turnId) return
+    const existing = turnTokenThroughputByThreadId.get(threadId)
+    if (existing?.turnId === turnId) return
+
+    const baselineOutputTokens = recovered
+      ? null
+      : threadTokenUsageByThreadId.value[threadId]?.total.outputTokens ?? null
+    turnTokenThroughputByThreadId.set(threadId, {
+      turnId,
+      priorTurnId: existing?.turnId ?? null,
+      baselineOutputTokens,
+      outputTokens: null,
+      phase: recovered ? 'observeBaseline' : baselineOutputTokens === null ? 'inferBaseline' : 'tracking',
+    })
+  }
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
   const selectedThread = computed(() =>
@@ -2181,6 +2232,84 @@ export function useDesktopState() {
       [normalizedThreadId]: usage,
     }
     saveThreadTokenUsageMap(threadTokenUsageByThreadId.value)
+  }
+
+  function applyTurnTokenUsage(update: ThreadTokenUsageUpdate): void {
+    if (!update.turnId) return
+
+    const summary = turnSummaryByThreadId.value[update.threadId]
+    const activeTurnId = activeTurnIdByThreadId.value[update.threadId]
+    let throughput = turnTokenThroughputByThreadId.get(update.threadId)
+    const totalOutputTokens = update.usage.total.outputTokens
+    if (throughput && throughput.turnId !== update.turnId) {
+      if (
+        throughput.priorTurnId === update.turnId &&
+        throughput.phase !== 'invalid' &&
+        throughput.outputTokens === null &&
+        (throughput.baselineOutputTokens === null || totalOutputTokens >= throughput.baselineOutputTokens)
+      ) {
+        turnTokenThroughputByThreadId.set(update.threadId, {
+          ...throughput,
+          baselineOutputTokens: totalOutputTokens,
+          phase: 'tracking',
+        })
+      }
+      return
+    }
+    if (!throughput) {
+      if (activeTurnId !== update.turnId && summary?.turnId !== update.turnId) return
+      throughput = {
+        turnId: update.turnId,
+        priorTurnId: null,
+        baselineOutputTokens: null,
+        outputTokens: null,
+        phase: 'inferBaseline',
+      }
+    }
+    if (throughput.phase === 'invalid') return
+
+    const lastOutputTokens = update.usage.last.outputTokens
+    let baselineOutputTokens = throughput.baselineOutputTokens
+    if (baselineOutputTokens === null) {
+      if (throughput.phase === 'observeBaseline') {
+        baselineOutputTokens = totalOutputTokens
+      } else {
+        const inferredBaseline = totalOutputTokens - lastOutputTokens
+        baselineOutputTokens = Number.isSafeInteger(inferredBaseline) && inferredBaseline >= 0
+          ? inferredBaseline
+          : null
+      }
+    }
+
+    const previousTotalOutputTokens = baselineOutputTokens === null
+      ? null
+      : baselineOutputTokens + (throughput.outputTokens ?? 0)
+    const outputTokens = baselineOutputTokens === null
+      ? null
+      : totalOutputTokens - baselineOutputTokens
+    const invalid = (
+      previousTotalOutputTokens !== null && totalOutputTokens < previousTotalOutputTokens
+    ) || !(
+      typeof outputTokens === 'number' &&
+      Number.isSafeInteger(outputTokens) &&
+      outputTokens >= 0
+    )
+    const validOutputTokens = invalid ? null : outputTokens
+
+    turnTokenThroughputByThreadId.set(update.threadId, {
+      turnId: update.turnId,
+      priorTurnId: throughput.priorTurnId,
+      baselineOutputTokens,
+      outputTokens: validOutputTokens,
+      phase: invalid ? 'invalid' : 'tracking',
+    })
+
+    if (summary?.turnId === update.turnId) {
+      setTurnSummaryForThread(update.threadId, {
+        ...summary,
+        outputTokens: validOutputTokens && validOutputTokens > 0 ? validOutputTokens : undefined,
+      })
+    }
   }
 
   function setSelectedCollaborationMode(mode: CollaborationModeKind): void {
@@ -2784,6 +2913,11 @@ export function useDesktopState() {
         nonSuccessCompletionReadBaselineByThreadId.delete(threadId)
       }
     }
+    for (const threadId of turnTokenThroughputByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) {
+        turnTokenThroughputByThreadId.delete(threadId)
+      }
+    }
     if (readStateChanged) {
       readStateByThreadId.value = nextReadState
       saveReadStateMap(nextReadState)
@@ -3358,13 +3492,14 @@ export function useDesktopState() {
     }
   }
 
-  function readThreadTokenUsageUpdate(notification: RpcNotification): { threadId: string; usage: UiThreadTokenUsage } | null {
+  function readThreadTokenUsageUpdate(notification: RpcNotification): ThreadTokenUsageUpdate | null {
     if (notification.method !== 'thread/tokenUsage/updated') return null
     const params = asRecord(notification.params)
     const threadId = extractThreadIdFromNotification(notification)
+    const turnId = readString(params?.turnId) || readString(params?.turn_id)
     const usage = normalizeThreadTokenUsage(params?.tokenUsage ?? params?.token_usage)
     if (!threadId || !usage) return null
-    return { threadId, usage }
+    return { threadId, turnId, usage }
   }
 
   function extractThreadIdFromNotification(notification: RpcNotification): string {
@@ -4365,6 +4500,7 @@ export function useDesktopState() {
 
     const tokenUsageUpdate = readThreadTokenUsageUpdate(notification)
     if (tokenUsageUpdate) {
+      applyTurnTokenUsage(tokenUsageUpdate)
       if (!isKnownSideConversationThread(tokenUsageUpdate.threadId)) {
         setThreadTokenUsage(tokenUsageUpdate.threadId, tokenUsageUpdate.usage)
       }
@@ -4387,6 +4523,7 @@ export function useDesktopState() {
       }
       nonSuccessCompletionReadBaselineByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
+      startTurnTokenThroughput(startedTurn.threadId, startedTurn.turnId)
       setTurnIndexForThread(startedTurn.threadId, startedTurn.turnId, inferNextTurnIndex(startedTurn.threadId))
       activeTurnIdByThreadId.value = {
         ...activeTurnIdByThreadId.value,
@@ -4435,10 +4572,15 @@ export function useDesktopState() {
         (startedTurnState ? completedTurn.completedAtMs - startedTurnState.startedAtMs : null)
 
       const durationMs = typeof rawDurationMs === 'number' ? Math.max(0, rawDurationMs) : 0
+      const throughput = turnTokenThroughputByThreadId.get(completedTurn.threadId)
+      const outputTokens = throughput?.turnId === completedTurn.turnId
+        ? throughput.outputTokens
+        : null
       setTurnSummaryForThread(completedTurn.threadId, {
         turnId: completedTurn.turnId,
         durationMs,
         completedAtIso: new Date(completedTurn.completedAtMs).toISOString(),
+        outputTokens: outputTokens && outputTokens > 0 ? outputTokens : undefined,
       })
       if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
@@ -5179,7 +5321,7 @@ export function useDesktopState() {
       setThreadInProgress(threadId, inProgress)
       clearTransientTurnErrorForThread(threadId)
       if (inProgress && activeTurnId) {
-        rememberObservedTurnStart(threadId, activeTurnId)
+        rememberObservedTurnStart(threadId, activeTurnId, true)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
           [threadId]: activeTurnId,
@@ -5601,6 +5743,7 @@ export function useDesktopState() {
     threadGoalErrorByThreadId.value = omitKey(threadGoalErrorByThreadId.value, threadId)
     threadGoalRevisionByThreadId.delete(threadId)
     loadedThreadGoalIds.delete(threadId)
+    turnTokenThroughputByThreadId.delete(threadId)
     setThreadTokenUsage(threadId, null)
     activeReasoningItemIdByThreadId.delete(threadId)
     pendingThreadMessageRefresh.delete(threadId)
@@ -5628,6 +5771,7 @@ export function useDesktopState() {
     threadGoalErrorByThreadId.value = {}
     threadGoalRevisionByThreadId.clear()
     loadedThreadGoalIds.clear()
+    turnTokenThroughputByThreadId.clear()
     modelPreferencesRequestEpoch += 1
     const threadId = selectedThreadId.value
     selectedModelId.value = readProviderCompatibleSelectedModel(readModelIdForThread(threadId))
@@ -6222,7 +6366,7 @@ export function useDesktopState() {
       const { activeTurnId } = await getThreadDetail(threadId)
       turnId = activeTurnId
       if (turnId) {
-        rememberObservedTurnStart(threadId, turnId)
+        rememberObservedTurnStart(threadId, turnId, true)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
           [threadId]: turnId,
@@ -6674,6 +6818,7 @@ export function useDesktopState() {
     pendingThreadMessageRefresh.clear()
     pendingSubagentParentRefresh.clear()
     pendingTurnStartsById.clear()
+    turnTokenThroughputByThreadId.clear()
     nonSuccessCompletionReadBaselineByThreadId.clear()
     if (eventSyncTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(eventSyncTimer)
