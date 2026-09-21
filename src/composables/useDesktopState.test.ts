@@ -130,6 +130,33 @@ async function setupTurnLifecycleNotificationState(selectedThreadId: string) {
   }
 }
 
+function tokenUsageNotification(
+  threadId: string,
+  turnId: string,
+  totalOutputTokens: number,
+  lastOutputTokens: number,
+) {
+  const breakdown = (outputTokens: number) => ({
+    totalTokens: outputTokens + 100,
+    inputTokens: 100,
+    cachedInputTokens: 0,
+    outputTokens,
+    reasoningOutputTokens: 0,
+  })
+  return {
+    method: 'thread/tokenUsage/updated',
+    params: {
+      threadId,
+      turnId,
+      tokenUsage: {
+        total: breakdown(totalOutputTokens),
+        last: breakdown(lastOutputTokens),
+        modelContextWindow: 200_000,
+      },
+    },
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
@@ -148,6 +175,156 @@ afterEach(() => {
     cleanup()
   }
   vi.unstubAllGlobals()
+})
+
+describe('turn token throughput', () => {
+  it('adds output tokens and average TPS when usage arrives before completion', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 2_234, 1_234))
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 10_000,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 1,234 output tokens · 123.4 TPS',
+    )
+  })
+
+  it('patches a completed summary when token usage arrives afterward', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 500, 50))
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 5_000,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+    expect(state.messages.value.map((message) => message.text)).toContain('Worked for 5s')
+
+    emit(tokenUsageNotification('thread-1', 'turn-1', 600, 100))
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 5s · 100 output tokens · 20.0 TPS',
+    )
+  })
+
+  it('uses cumulative deltas across multiple usage updates without double-counting duplicates', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_060, 60))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_060, 60))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_120, 60))
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 10_000,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 120 output tokens · 12.0 TPS',
+    )
+  })
+
+  it('infers a missing baseline from the first observed usage update', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_040, 40))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 60))
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 10_000,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 100 output tokens · 10.0 TPS',
+    )
+  })
+
+  it('ignores usage for another turn and keeps thread accumulators isolated', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    emit(tokenUsageNotification('thread-1', 'other-turn', 1_400, 400))
+    emit(tokenUsageNotification('thread-2', 'turn-1', 900, 900))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 100))
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs: 10_000,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.map((message) => message.text)).toContain(
+      'Worked for 10s · 100 output tokens · 10.0 TPS',
+    )
+  })
+
+  it.each([
+    { name: 'no usage', durationMs: 5_000, usage: null },
+    { name: 'a zero duration', durationMs: 0, usage: tokenUsageNotification('thread-1', 'turn-1', 1_100, 100) },
+    { name: 'a regressed counter', durationMs: 5_000, usage: tokenUsageNotification('thread-1', 'turn-1', 900, 100) },
+  ])('keeps the original summary for $name', async ({ durationMs, usage }) => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+    })
+    if (usage) emit(usage)
+    emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        durationMs,
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    })
+
+    const expectedDuration = durationMs > 0 ? '5s' : '<1s'
+    expect(state.messages.value.map((message) => message.text)).toContain(`Worked for ${expectedDuration}`)
+    expect(state.messages.value.some((message) => message.text.includes('TPS'))).toBe(false)
+  })
 })
 
 describe('filterGroupsByWorkspaceRoots', () => {
