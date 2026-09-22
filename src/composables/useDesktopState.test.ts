@@ -181,6 +181,16 @@ afterEach(() => {
 })
 
 describe('recent thread preview', () => {
+  it('updates a live context compaction marker in place', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    emit({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'compact-1', type: 'contextCompaction' } } })
+    expect(state.messages.value.filter((message) => message.messageType === 'contextCompaction'))
+      .toEqual([expect.objectContaining({ id: 'compact-1', text: 'Compacting context…' })])
+    emit({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'compact-1', type: 'contextCompaction' } } })
+    expect(state.messages.value.filter((message) => message.messageType === 'contextCompaction'))
+      .toEqual([expect.objectContaining({ id: 'compact-1', text: 'Context compacted' })])
+  })
+
   it('keeps an earlier page loaded while resume is pending', async () => {
     installTestWindow()
     gatewayMocks.getRecentThreadDetail.mockResolvedValue({
