@@ -937,7 +937,6 @@ type TurnCompletedInfo = {
 }
 
 const WORKED_MESSAGE_TYPE = 'worked'
-const outputTokenFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 
 function loadTurnSummaries(): Record<string, TurnSummaryState[]> {
   if (typeof window === 'undefined') return {}
@@ -1023,23 +1022,10 @@ function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivity
 }
 
 function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
-  let throughputText = ''
-  if (
-    typeof summary.outputTokens === 'number' &&
-    Number.isFinite(summary.outputTokens) &&
-    summary.outputTokens > 0 &&
-    Number.isFinite(summary.durationMs) &&
-    summary.durationMs > 0
-  ) {
-    const tokensPerSecond = summary.outputTokens / (summary.durationMs / 1000)
-    throughputText = `${outputTokenFormatter.format(summary.outputTokens)} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
-  }
-
   return {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
     text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
-    throughputText,
     createdAtIso: summary.completedAtIso,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
@@ -1753,6 +1739,7 @@ export function useDesktopState() {
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const turnTokenThroughputByThreadId = new Map<string, TurnTokenThroughputState>()
+  const turnTokenThroughputRevision = ref(0)
   const threadGoalRequestByThreadId = new Map<string, Promise<void>>()
   const threadGoalRevisionByThreadId = new Map<string, number>()
   const loadedThreadGoalIds = new Set<string>()
@@ -1782,6 +1769,7 @@ export function useDesktopState() {
       outputTokens: null,
       phase: recovered ? 'observeBaseline' : baselineOutputTokens === null ? 'inferBaseline' : 'tracking',
     })
+    turnTokenThroughputRevision.value += 1
   }
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
@@ -2025,6 +2013,20 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     if (!threadId) return null
     return threadTokenUsageByThreadId.value[threadId] ?? null
+  })
+  const selectedTurnThroughput = computed(() => {
+    turnTokenThroughputRevision.value
+    const threadId = selectedThreadId.value
+    if (!threadId) return null
+    const turnId = activeTurnIdByThreadId.value[threadId]
+    if (turnId) {
+      const startedAtMs = pendingTurnStartsById.get(turnId)?.startedAtMs ?? 0
+      const tracker = turnTokenThroughputByThreadId.get(threadId)
+      return { outputTokens: tracker?.turnId === turnId ? tracker.outputTokens : null, startedAtMs, durationMs: null, durationText: '' }
+    }
+    const summary = turnSummaryByThreadId.value[threadId]
+      ?? savedTurnSummariesByThreadId.value[threadId]?.at(-1)
+    return summary ? { outputTokens: summary.outputTokens ?? null, startedAtMs: 0, durationMs: summary.durationMs, durationText: formatTurnDuration(summary.durationMs) } : null
   })
   function getMessagesForThread(threadId: string): UiMessage[] {
     if (!threadId) return []
@@ -2358,6 +2360,7 @@ export function useDesktopState() {
       outputTokens: validOutputTokens,
       phase: invalid ? 'invalid' : 'tracking',
     })
+    turnTokenThroughputRevision.value += 1
 
     if (summary?.turnId === update.turnId) {
       setTurnSummaryForThread(update.threadId, {
@@ -7085,6 +7088,7 @@ export function useDesktopState() {
     projectDisplayNameById,
     selectedThread,
     selectedThreadTokenUsage,
+    selectedTurnThroughput,
     selectedThreadGoal,
     selectedThreadGoalObservedAtMs,
     selectedThreadGoalActiveTurnStartedAtMs,

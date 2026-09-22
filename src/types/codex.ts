@@ -233,7 +233,6 @@ export type UiMessage = {
   fileChanges?: UiFileChange[]
   fileChangeStatus?: UiFileChangeStatus
   messageType?: string
-  throughputText?: string
   rawPayload?: string
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData

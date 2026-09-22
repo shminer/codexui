@@ -933,6 +933,7 @@
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :skills="installedSkills"
                   :thread-token-usage="selectedThreadTokenUsage"
+                  :turn-throughput="selectedTurnThroughput"
                   :codex-quota="codexQuota"
                   :goal="null"
                   :is-turn-in-progress="false"
@@ -1024,6 +1025,7 @@
                     :is-updating-speed-mode="isUpdatingSpeedMode"
                     :skills="installedSkills"
                     :thread-token-usage="selectedThreadTokenUsage"
+                    :turn-throughput="selectedTurnThroughput"
                     :codex-quota="codexQuota"
                     :goal="selectedThreadGoal"
                     :goal-observed-at-ms="selectedThreadGoalObservedAtMs"
@@ -1330,6 +1332,7 @@ const {
   projectDisplayNameById,
   selectedThread,
   selectedThreadTokenUsage,
+  selectedTurnThroughput,
   selectedThreadGoal,
   selectedThreadGoalObservedAtMs,
   selectedThreadGoalActiveTurnStartedAtMs,

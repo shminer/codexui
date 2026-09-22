@@ -364,6 +364,32 @@ describe('recent thread preview', () => {
 })
 
 describe('turn token throughput', () => {
+  it('exposes live usage and retains the latest completed turn above the composer', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1', startedAt: '2026-09-22T00:00:00.000Z' } } })
+    expect(state.selectedTurnThroughput.value?.outputTokens).toBeNull()
+
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_040, 40))
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 40, durationMs: null })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_040, 40))
+    expect(state.selectedTurnThroughput.value?.outputTokens).toBe(40)
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 60))
+    expect(state.selectedTurnThroughput.value?.outputTokens).toBe(100)
+
+    emit({ method: 'turn/completed', params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } } })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 100, durationMs: 10_000, durationText: '10s' })
+    state.primeSelectedThread('other-thread')
+    expect(state.selectedTurnThroughput.value).toBeNull()
+    state.primeSelectedThread('thread-1')
+    expect(state.selectedTurnThroughput.value?.outputTokens).toBe(100)
+
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-2' } } })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: null, durationMs: null })
+    emit({ method: 'turn/completed', params: { threadId: 'thread-1', durationMs: 5_000, turn: { id: 'turn-2', status: 'completed' } } })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: null, durationText: '5s' })
+  })
+
   it('restores completed summaries for earlier turns after reload', async () => {
     const { emit } = await setupTurnLifecycleNotificationState('thread-1')
     emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
@@ -403,12 +429,13 @@ describe('turn token throughput', () => {
     reloaded.primeSelectedThread('thread-1')
     await reloaded.loadMessages('thread-1')
 
-    expect(reloaded.messages.value.map((message) => [message.messageType, message.turnId, message.throughputText])).toEqual([
-      ['worked', 'turn-1', '100 output tokens · 10.0 TPS'],
-      [undefined, 'turn-1', undefined],
-      ['worked', 'turn-2', ''],
-      [undefined, 'turn-2', undefined],
+    expect(reloaded.messages.value.map((message) => [message.messageType, message.turnId])).toEqual([
+      ['worked', 'turn-1'],
+      [undefined, 'turn-1'],
+      ['worked', 'turn-2'],
+      [undefined, 'turn-2'],
     ])
+    expect(reloaded.selectedTurnThroughput.value).toMatchObject({ outputTokens: null, durationMs: 5_000 })
     expect(reloaded.messages.value.filter((message) => message.messageType === 'worked').map((message) => message.text))
       .toEqual(['Worked for 10s', 'Worked for 5s'])
     for (const [index, message] of reloaded.messages.value.entries()) {
@@ -416,7 +443,7 @@ describe('turn token throughput', () => {
     }
   })
 
-  it('attaches throughput to the final live assistant reply', async () => {
+  it('retains the final live assistant reply without a timestamp suffix', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
 
     emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
@@ -433,7 +460,7 @@ describe('turn token throughput', () => {
 
     const messages = state.messages.value
     const summaryIndex = messages.findIndex((message) => message.messageType === 'worked')
-    expect(messages[summaryIndex]).toMatchObject({ throughputText: '100 output tokens · 10.0 TPS' })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 100, durationMs: 10_000 })
     expect(messages[summaryIndex + 1]).toMatchObject({ id: 'reply-1', role: 'assistant', turnId: 'turn-1' })
     expect(messages[summaryIndex + 1].createdAtIso).toBeTruthy()
   })
@@ -458,11 +485,11 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '1.2K output tokens · 123.4 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 1_234, durationMs: 10_000 })
   })
 
-  it('compacts million-token counts without changing the TPS calculation', async () => {
+  it('keeps million-token counts intact for the composer', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
 
     emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
@@ -473,8 +500,7 @@ describe('turn token throughput', () => {
       params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } },
     })
 
-    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText)
-      .toBe('1M output tokens · 100000.0 TPS')
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 1_000_000, durationMs: 10_000 })
   })
 
   it('patches a completed summary when token usage arrives afterward', async () => {
@@ -499,8 +525,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 5s',
-      throughputText: '100 output tokens · 20.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 100, durationMs: 5_000 })
   })
 
   it('uses cumulative deltas across multiple usage updates without double-counting duplicates', async () => {
@@ -525,8 +551,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '120 output tokens · 12.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 120, durationMs: 10_000 })
   })
 
   it('infers a missing baseline from the first observed usage update', async () => {
@@ -549,8 +575,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '100 output tokens · 10.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 100, durationMs: 10_000 })
   })
 
   it('ignores usage for another turn and keeps thread accumulators isolated', async () => {
@@ -575,8 +601,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '100 output tokens · 10.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 100, durationMs: 10_000 })
   })
 
   it('starts a recovered active turn from the first usage observed after reconnecting', async () => {
@@ -624,8 +650,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '50 output tokens · 5.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 50, durationMs: 10_000 })
   })
 
   it('does not charge late usage from the previous turn to the next turn', async () => {
@@ -647,8 +673,8 @@ describe('turn token throughput', () => {
 
     expect(state.messages.value.find((message) => message.messageType === 'worked')).toMatchObject({
       text: 'Worked for 10s',
-      throughputText: '50 output tokens · 5.0 TPS',
     })
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: 50, durationMs: 10_000 })
   })
 
   it('drops throughput when a same-turn cumulative counter moves backward', async () => {
@@ -664,7 +690,7 @@ describe('turn token throughput', () => {
     })
 
     expect(state.messages.value.map((message) => message.text)).toContain('Worked for 10s')
-    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText).toBe('')
+    expect(state.selectedTurnThroughput.value?.outputTokens).toBeNull()
   })
 
   it.each([
@@ -691,7 +717,7 @@ describe('turn token throughput', () => {
 
     const expectedDuration = durationMs > 0 ? '5s' : '<1s'
     expect(state.messages.value.map((message) => message.text)).toContain(`Worked for ${expectedDuration}`)
-    expect(state.messages.value.find((message) => message.messageType === 'worked')?.throughputText).toBe('')
+    expect(state.selectedTurnThroughput.value).toMatchObject({ outputTokens: usage ? (durationMs === 0 ? 100 : null) : null, durationMs })
   })
 })
 

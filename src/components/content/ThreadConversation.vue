@@ -771,7 +771,7 @@
               v-if="formatMessageDateTime(message.createdAtIso)"
               class="message-timestamp"
               :datetime="message.createdAtIso"
-            >{{ formatMessageDateTime(message.createdAtIso) }}<template v-if="throughputByMessageId[message.id]"> - {{ throughputByMessageId[message.id] }}</template></time>
+            >{{ formatMessageDateTime(message.createdAtIso) }}</time>
           </div>
         </div>
       </li>
@@ -2049,17 +2049,6 @@ const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderableMessages.value.length,
 ))
 const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value))
-const throughputByMessageId = computed<Record<string, string>>(() => {
-  const result: Record<string, string> = {}
-  for (let index = 1; index < props.messages.length; index += 1) {
-    const summary = props.messages[index - 1]
-    const message = props.messages[index]
-    if (summary.messageType === 'worked' && summary.throughputText && message.role === 'assistant' && message.turnId === summary.turnId) {
-      result[message.id] = summary.throughputText
-    }
-  }
-  return result
-})
 const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {

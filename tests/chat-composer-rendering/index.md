@@ -16,7 +16,8 @@ Return to the [manual test index](../../tests.md).
 | [Composer mode scoping and Fast mode support](composer-mode-scoping-and-fast-mode-support.md) |
 | [Native thread Goal management](native-thread-goal-management.md) |
 | [Composer add menu shows cumulative thread Token usage](composer-add-menu-cumulative-token-usage.md) |
-| [Worked separator shows per-turn token throughput](worked-separator-token-throughput.md) |
+| [Worked separator preserves turn duration](worked-separator-token-throughput.md) |
+| [Composer shows live and retained token throughput](composer-live-token-throughput.md) |
 | [Composer controls stay editable during responses](composer-controls-stay-editable-during-responses.md) |
 | [Feature: Markdown file links with backticked filename labels render correctly](markdown-file-links-with-backticked-filename-labels-render-correctly.md) |
 | [Feature: Sandbox approval requests recognize newer Codex payloads](sandbox-approval-requests-recognize-newer-codex-payloads.md) |
