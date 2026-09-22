@@ -15,6 +15,7 @@ import {
   getSkillsList,
   getThreadGoal,
   getThreadDetail,
+  getRecentThreadDetail,
   getOlderThreadMessages,
   getBackgroundThreadListLimit,
   interruptThreadTurn,
@@ -4593,6 +4594,26 @@ export function useDesktopState() {
       mergeSubagentNotification(notificationThreadId, notification)
     }
 
+    if (notificationThreadId && (notification.method === 'item/started' || notification.method === 'item/completed')) {
+      const params = asRecord(notification.params)
+      const item = asRecord(params?.item)
+      if (item?.type === 'contextCompaction' && typeof item.id === 'string') {
+        const previous = persistedMessagesByThreadId.value[notificationThreadId] ?? []
+        const marker: UiMessage = {
+          id: item.id,
+          role: 'system',
+          text: notification.method === 'item/started' ? 'Compacting context…' : 'Context compacted',
+          messageType: 'contextCompaction',
+          createdAtIso: new Date().toISOString(),
+          turnId: readString(params?.turnId) || undefined,
+        }
+        const index = previous.findIndex((message) => message.id === marker.id)
+        setPersistedMessagesForThread(notificationThreadId, index < 0
+          ? [...previous, marker]
+          : previous.map((message, messageIndex) => messageIndex === index ? { ...message, text: marker.text } : message))
+      }
+    }
+
     const startedTurn = readTurnStartedInfo(notification)
     if (startedTurn) {
       if (isKnownSideConversationThread(startedTurn.threadId)) {
@@ -5317,7 +5338,29 @@ export function useDesktopState() {
       }
 
       const needsResume = resumedThreadById.value[threadId] !== true
-      const resumedThread = needsResume ? await resumeThread(threadId) : null
+      const resumePromise = needsResume
+        ? resumeThread(threadId).then(result => ({ result, failure: null }), failure => ({ result: null, failure }))
+        : null
+      let quickTurnIds: Set<string> | null = null
+      if (needsResume && !alreadyLoaded && !isKnownSideConversationThread(threadId)) {
+        const recent = await getRecentThreadDetail(threadId)
+        if (recent && !discardedSideConversationThreadIds.has(threadId)) {
+          quickTurnIds = new Set(recent.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
+          setPersistedMessagesForThread(threadId, recent.messages)
+          replaceTurnIndexLookupForThread(threadId, recent.turnIndexByTurnId)
+          hasMoreOlderMessagesByThreadId.value = {
+            ...hasMoreOlderMessagesByThreadId.value,
+            [threadId]: recent.hasMoreOlder,
+          }
+          loadedMessagesByThreadId.value = { ...loadedMessagesByThreadId.value, [threadId]: true }
+          if (shouldShowLoading) isLoadingMessages.value = false
+        }
+      }
+      const resumeOutcome = resumePromise ? await resumePromise : null
+      if (resumeOutcome?.failure && !String(resumeOutcome.failure).includes('already has an active writer')) {
+        throw resumeOutcome.failure
+      }
+      const resumedThread = resumeOutcome?.result ?? null
       const detail = resumedThread ?? await getThreadDetail(threadId)
       if (discardedSideConversationThreadIds.has(threadId)) return
 
@@ -5354,9 +5397,12 @@ export function useDesktopState() {
       const nextTurnIndexByTurnId = isSideConversation
         ? Object.fromEntries(Object.entries(turnIndexByTurnId).filter(([turnId]) => sideConversationTurnIds.has(turnId)))
         : turnIndexByTurnId
+      const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
+      const olderLoadedDuringResume = quickTurnIds !== null
+        && previousPersisted.some((message) => message.turnId && !quickTurnIds?.has(message.turnId))
       subagentsByParentThreadId.value = {
         ...subagentsByParentThreadId.value,
-        [threadId]: detail.subagents,
+        [threadId]: detail.subagents ?? [],
       }
       const retainLocalInProgress =
         inProgressById.value[threadId] === true &&
@@ -5364,14 +5410,20 @@ export function useDesktopState() {
       const inProgress = serverInProgress || retainLocalInProgress
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
-        [threadId]: !isSideConversation && detail.hasMoreOlder === true,
+        [threadId]: !isSideConversation && (olderLoadedDuringResume
+          ? hasMoreOlderMessagesByThreadId.value[threadId] === true
+          : detail.hasMoreOlder === true),
       }
       markThreadMessagesPersisted(threadId, nextMessages)
-      replaceTurnIndexLookupForThread(threadId, nextTurnIndexByTurnId)
+      replaceTurnIndexLookupForThread(threadId, olderLoadedDuringResume
+        ? { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...nextTurnIndexByTurnId }
+        : nextTurnIndexByTurnId)
       rebindLiveFileChangeTurnIndices(threadId)
-      const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
-      const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
-        preserveMissing: options.silent === true || hasOptimisticUserMessages(previousPersisted),
+      const previousToMerge = quickTurnIds
+        ? previousPersisted.filter((message) => message.turnId && !quickTurnIds.has(message.turnId))
+        : previousPersisted
+      const mergedMessages = mergeMessages(previousToMerge, nextMessages, {
+        preserveMissing: olderLoadedDuringResume || options.silent === true || hasOptimisticUserMessages(previousPersisted),
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
 

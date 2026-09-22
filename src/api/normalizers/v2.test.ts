@@ -149,6 +149,16 @@ Reply with &lt;/instructions&gt; and A &amp; B
     expect(messages[0]?.text).not.toContain('hidden chain-of-thought')
   })
 
+  it('shows context compaction as a timeline marker', () => {
+    const response = threadReadResponseWithContent([{ type: 'contextCompaction', id: 'compact-1' }])
+    Object.assign(response.thread.turns[0].items[0], { createdAtIso: '2026-09-22T00:00:14Z' })
+    const messages = normalizeThreadMessagesV2(response)
+    expect(messages).toEqual([expect.objectContaining({
+      id: 'compact-1', role: 'system', text: 'Context compacted',
+      messageType: 'contextCompaction', createdAtIso: '2026-09-22T00:00:14Z',
+    })])
+  })
+
   it('renders failed turn errors as chat system messages', () => {
     const response = threadReadResponseWithContent([{
       type: 'userMessage',

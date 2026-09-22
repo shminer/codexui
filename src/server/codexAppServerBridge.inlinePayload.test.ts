@@ -290,6 +290,19 @@ describe('thread session skill recovery', () => {
     expect(merged[0].items[1].createdAtIso).toBe('2026-08-12T01:02:04.000Z')
   })
 
+  it('uses the compacted rollout timestamp for context compaction items', () => {
+    const turns = [{ id: 'turn-1', items: [{ id: 'compact-native', type: 'contextCompaction' }] }]
+    const sessionLog = [
+      JSON.stringify({ timestamp: '2026-08-12T01:02:03.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-1' } }),
+      JSON.stringify({ timestamp: '2026-08-12T01:05:04.000Z', type: 'compacted', payload: { message: 'not displayed' } }),
+    ].join('\n')
+
+    const merged = mergeSessionMetadataIntoTurns(turns, sessionLog) as Array<{
+      items: Array<{ createdAtIso?: string }>
+    }>
+    expect(merged[0].items[0].createdAtIso).toBe('2026-08-12T01:05:04.000Z')
+  })
+
   it('adds selected skill inputs from session JSONL to matching user messages', () => {
     const turns = [{
       id: 'turn-1',

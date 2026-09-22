@@ -1953,6 +1953,10 @@
   @apply bg-zinc-900;
 }
 
+:root.dark .context-compaction-marker { color: #a1a1aa; }
+:root.dark .context-compaction-marker::before,
+:root.dark .context-compaction-marker::after { background-color: #3f3f46; }
+
 :root.dark .automation-row {
   @apply border-zinc-800;
 }

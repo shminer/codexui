@@ -947,6 +947,29 @@ async function getThreadDetailV2(threadId: string): Promise<{
   }
 }
 
+export async function getRecentThreadDetail(threadId: string): Promise<{
+  messages: UiMessage[]
+  hasMoreOlder: boolean
+  turnIndexByTurnId: ThreadTurnIndexById
+} | null> {
+  try {
+    const response = await fetch(`/codex-api/thread-recent?${new URLSearchParams({ threadId })}`)
+    if (!response.ok) return null
+    const payload = await response.json() as { result?: { thread: ThreadReadResponse['thread']; hasMoreOlder: boolean } | null }
+    if (!payload.result) return null
+    const result = { thread: payload.result.thread } as ThreadReadResponse
+    const messages = normalizeThreadMessagesV2(result)
+    if (messages.length === 0) return null
+    return {
+      messages,
+      hasMoreOlder: payload.result.hasMoreOlder,
+      turnIndexByTurnId: buildTurnIndexByTurnId(result, 0),
+    }
+  } catch {
+    return null
+  }
+}
+
 async function getOlderThreadMessagesV2(threadId: string, beforeTurnId: string, limit = 10): Promise<ThreadTurnPage> {
   const params = new URLSearchParams({
     threadId,

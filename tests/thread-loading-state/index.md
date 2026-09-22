@@ -15,6 +15,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: No automatic restore of last active thread on startup](no-automatic-restore-of-last-active-thread-on-startup.md) |
 | [Feature: Disable auto-restore to last thread when opening home URL](disable-auto-restore-to-last-thread-when-opening-home-url.md) |
 | [Feature: Thread load capped to latest 10 turns](thread-load-capped-to-latest-10-turns.md) |
+| [Recent thread fast open and context compaction markers](recent-thread-fast-open-and-compaction-markers.md) |
 | [Feature: Pinned threads sync across Codex surfaces](pinned-threads-persist-across-reload-and-prune-removed-threads.md) |
 | [Feature: Keep manual chat scroll position during streaming](keep-manual-chat-scroll-position-during-streaming.md) |
 | [Feature: Rapid thread switching during active load](rapid-thread-switching-during-active-load.md) |

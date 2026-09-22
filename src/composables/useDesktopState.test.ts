@@ -25,6 +25,8 @@ const gatewayMocks = vi.hoisted(() => ({
   getSkillsList: vi.fn(),
   getThreadGoal: vi.fn(),
   getThreadDetail: vi.fn(),
+  getRecentThreadDetail: vi.fn(),
+  getOlderThreadMessages: vi.fn(),
   getThreadGroupsPage: vi.fn(),
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
@@ -166,6 +168,7 @@ beforeEach(() => {
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getThreadGoal.mockResolvedValue(null)
+  gatewayMocks.getRecentThreadDetail.mockResolvedValue(null)
   gatewayMocks.clearThreadGoal.mockResolvedValue(true)
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
 })
@@ -175,6 +178,88 @@ afterEach(() => {
     cleanup()
   }
   vi.unstubAllGlobals()
+})
+
+describe('recent thread preview', () => {
+  it('keeps an earlier page loaded while resume is pending', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValue({
+      messages: [{ id: 'recent', role: 'user', text: 'Recent', turnId: 'turn-10', turnIndex: 0 }],
+      hasMoreOlder: true, turnIndexByTurnId: { 'turn-10': 0 },
+    })
+    gatewayMocks.getOlderThreadMessages.mockResolvedValue({
+      messages: [{ id: 'older', role: 'user', text: 'Earlier', turnId: 'turn-9', turnIndex: 9 }],
+      hasMoreOlder: false, turnIndexByTurnId: { 'turn-9': 9 },
+    })
+    let finishResume: (value: unknown) => void = () => {}
+    gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => { finishResume = resolve }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-fast')
+    const loading = state.loadMessages('thread-fast')
+    await flushMicrotasks()
+    await state.loadOlderMessages('thread-fast')
+    finishResume({
+      model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [],
+      messages: [{ id: 'recent', role: 'user', text: 'Recent', turnId: 'turn-10', turnIndex: 10 }],
+      hasMoreOlder: true, turnIndexByTurnId: { 'turn-10': 10 },
+    })
+    await loading
+    expect(state.messages.value.map((message) => message.id)).toEqual(['older', 'recent'])
+    expect(state.hasMoreOlderMessages.value).toBe(false)
+  })
+
+  it('uses read-only detail when another process owns the thread writer', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValue({
+      messages: [{ id: 'preview', role: 'user', text: 'Hello', turnId: 'turn-1' }],
+      hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+    gatewayMocks.resumeThread.mockRejectedValue(new Error('thread already has an active writer'))
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [],
+      messages: [{ id: 'final', role: 'assistant', text: 'Done', turnId: 'turn-1' }],
+      hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-fast')
+    await state.loadMessages('thread-fast')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('thread-fast')
+    expect(state.messages.value.map((message) => message.id)).toEqual(['final'])
+  })
+
+  it('shows recent messages before resume and replaces preview markers without duplication', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValue({
+      messages: [
+        { id: 'user-1', role: 'user', text: 'Hello', turnId: 'turn-1', turnIndex: 0 },
+        { id: 'compaction-9', role: 'system', text: 'Context compacted', messageType: 'contextCompaction', turnId: 'turn-1', turnIndex: 0 },
+      ],
+      hasMoreOlder: true,
+      turnIndexByTurnId: { 'turn-1': 0 },
+    })
+    let finishResume: (value: unknown) => void = () => {}
+    gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => { finishResume = resolve }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-fast')
+    const loading = state.loadMessages('thread-fast')
+    await flushMicrotasks()
+    expect(state.messages.value.map((message) => message.id)).toEqual(['user-1', 'compaction-9'])
+    expect(state.isLoadingMessages.value).toBe(false)
+
+    finishResume({
+      model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [],
+      messages: [
+        { id: 'user-1', role: 'user', text: 'Hello', turnId: 'turn-1', turnIndex: 20 },
+        { id: 'native-compaction', role: 'system', text: 'Context compacted', messageType: 'contextCompaction', turnId: 'turn-1', turnIndex: 20 },
+      ],
+      hasMoreOlder: true, turnIndexByTurnId: { 'turn-1': 20 },
+    })
+    await loading
+    expect(state.messages.value.map((message) => message.id)).toEqual(['user-1', 'native-compaction'])
+  })
 })
 
 describe('turn token throughput', () => {

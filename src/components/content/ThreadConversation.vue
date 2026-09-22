@@ -26,7 +26,11 @@
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
-        <div v-if="isCommandMessage(message)" class="message-row" data-role="system">
+        <div v-if="message.messageType === 'contextCompaction'" class="context-compaction-marker" :role="message.text === 'Compacting context…' ? 'status' : undefined">
+          <span>{{ message.text }}</span>
+          <time v-if="formatMessageDateTime(message.createdAtIso)" :datetime="message.createdAtIso">{{ formatMessageDateTime(message.createdAtIso) }}</time>
+        </div>
+        <div v-else-if="isCommandMessage(message)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
             <button
               v-if="getGroupedCommandsForLatest(message).length > 0"
@@ -4577,6 +4581,19 @@ onBeforeUnmount(() => {
 .conversation-item {
   @apply m-0 w-full min-w-0 flex;
 }
+
+.context-compaction-marker {
+  @apply flex items-center justify-center gap-3 w-full mx-auto py-3 text-xs text-zinc-500;
+  max-width: var(--chat-column-max, 45rem);
+}
+
+.context-compaction-marker::before,
+.context-compaction-marker::after {
+  content: '';
+  @apply h-px flex-1 bg-zinc-200;
+}
+
+.context-compaction-marker time { @apply text-zinc-400; }
 
 .conversation-item-request {
   @apply justify-center;

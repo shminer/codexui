@@ -14,6 +14,7 @@ import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
+import { readRecentThreadTurns } from './recentThreadTurns.js'
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import {
   getRandomFreeKey,
@@ -270,6 +271,7 @@ type SessionThreadMetadata = {
   createdAtIsoByItemId: Map<string, string>
   createdAtIsoByTurnId: Map<string, string>
   skillsByTurnId: Map<string, SessionRecoveredSkillInput[]>
+  compactionTimesByTurnId: Map<string, string[]>
 }
 
 type SessionThreadMetadataCacheEntry = SessionThreadMetadata & {
@@ -297,6 +299,7 @@ function buildSessionThreadMetadata(
   const createdAtIsoByItemId = new Map<string, string>()
   const createdAtIsoByTurnId = new Map<string, string>()
   const skillsByTurnId = new Map<string, SessionRecoveredSkillInput[]>()
+  const compactionTimesByTurnId = new Map<string, string[]>()
 
   for (const line of sessionLogRaw.split('\n')) {
     if (!line.trim()) continue
@@ -308,6 +311,12 @@ function buildSessionThreadMetadata(
     }
 
     const createdAtIso = readNonEmptyString(row.timestamp)
+    if (row.type === 'compacted' && currentTurnId && createdAtIso) {
+      const times = compactionTimesByTurnId.get(currentTurnId) ?? []
+      times.push(createdAtIso)
+      compactionTimesByTurnId.set(currentTurnId, times)
+      continue
+    }
     if (row.type === 'turn_context') {
       const payloadRecord = asRecord(row.payload)
       currentTurnId = readNonEmptyString(payloadRecord?.turn_id) || currentTurnId
@@ -350,7 +359,7 @@ function buildSessionThreadMetadata(
     }
   }
 
-  return { createdAtIsoByItemId, createdAtIsoByTurnId, skillsByTurnId }
+  return { createdAtIsoByItemId, createdAtIsoByTurnId, skillsByTurnId, compactionTimesByTurnId }
 }
 
 async function readCachedSessionThreadMetadata(sessionPath: string): Promise<SessionThreadMetadata> {
@@ -452,11 +461,16 @@ function mergeSessionMessageTimestampsIntoTurns(
     if (!turnRecord || !items) return turn
 
     let itemsChanged = false
+    let compactionIndex = 0
     const nextItems = items.map((item) => {
       const itemRecord = asRecord(item)
-      if (!itemRecord || readNonEmptyString(itemRecord.createdAtIso)) return item
+      if (!itemRecord) return item
+      const compactionTime = itemRecord.type === 'contextCompaction'
+        ? metadata.compactionTimesByTurnId.get(turnId)?.[compactionIndex++]
+        : undefined
+      if (readNonEmptyString(itemRecord.createdAtIso)) return item
       const itemId = readNonEmptyString(itemRecord.id)
-      const createdAtIso = metadata.createdAtIsoByItemId.get(itemId) || turnCreatedAtIso
+      const createdAtIso = metadata.createdAtIsoByItemId.get(itemId) || compactionTime || turnCreatedAtIso
       if (!createdAtIso) return item
       itemsChanged = true
       changed = true
@@ -6256,6 +6270,7 @@ class AppServerProcess {
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
   private readonly threadTurnPageReadCacheByThreadId = new Map<string, { result: unknown; expiresAt: number }>()
   private readonly threadTurnPageReadPromiseByThreadId = new Map<string, Promise<unknown>>()
+  private readonly sessionPathByThreadId = new Map<string, string>()
   private readonly capturedItemsByThreadId = new Map<string, Map<string, CapturedItem>>()
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
@@ -6473,6 +6488,25 @@ class AppServerProcess {
 
   getLastThreadReadSnapshot(threadId: string): unknown | null {
     return this.lastThreadReadSnapshotByThreadId.get(threadId) ?? null
+  }
+
+  rememberThreadPaths(result: unknown): void {
+    const rows = asRecord(result)?.data
+    if (!Array.isArray(rows)) return
+    for (const row of rows) {
+      const thread = asRecord(row)
+      if (typeof thread?.id === 'string' && typeof thread.path === 'string') {
+        this.sessionPathByThreadId.set(thread.id, thread.path)
+      }
+    }
+    while (this.sessionPathByThreadId.size > 2000) {
+      const oldest = this.sessionPathByThreadId.keys().next().value
+      if (oldest) this.sessionPathByThreadId.delete(oldest)
+    }
+  }
+
+  getThreadSessionPath(threadId: string): string | undefined {
+    return this.sessionPathByThreadId.get(threadId)
   }
 
   async readThreadForTurnPage(threadId: string): Promise<unknown> {
@@ -7892,6 +7926,7 @@ export function createCodexBridgeMiddleware(options: {
           }
 		          throw error
 		        }
+        if (body.method === 'thread/list') appServer.rememberThreadPaths(rpcResult)
         const trimmedResult = trimThreadTurnsInRpcResult(body.method, rpcResult)
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult)
@@ -7911,6 +7946,25 @@ export function createCodexBridgeMiddleware(options: {
         }
 
         setJson(res, 200, { result })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/thread-recent') {
+        const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        const path = appServer.getThreadSessionPath(threadId)
+        if (!threadId || !path) {
+          setJson(res, 200, { result: null })
+          return
+        }
+        try {
+          const page = await readRecentThreadTurns(path, join(getCodexHomeDir(), 'sessions'), threadId)
+          setJson(res, 200, { result: page ? {
+            thread: { id: threadId, turns: page.turns },
+            hasMoreOlder: page.hasMoreOlder,
+          } : null })
+        } catch {
+          setJson(res, 200, { result: null })
+        }
         return
       }
 
