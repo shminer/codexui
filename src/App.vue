@@ -933,6 +933,7 @@
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :skills="installedSkills"
                   :thread-token-usage="selectedThreadTokenUsage"
+                  :turn-throughput="selectedTurnThroughput"
                   :codex-quota="codexQuota"
                   :goal="null"
                   :is-turn-in-progress="false"
@@ -1024,6 +1025,7 @@
                     :is-updating-speed-mode="isUpdatingSpeedMode"
                     :skills="installedSkills"
                     :thread-token-usage="selectedThreadTokenUsage"
+                    :turn-throughput="selectedTurnThroughput"
                     :codex-quota="codexQuota"
                     :goal="selectedThreadGoal"
                     :goal-observed-at-ms="selectedThreadGoalObservedAtMs"
@@ -1330,6 +1332,7 @@ const {
   projectDisplayNameById,
   selectedThread,
   selectedThreadTokenUsage,
+  selectedTurnThroughput,
   selectedThreadGoal,
   selectedThreadGoalObservedAtMs,
   selectedThreadGoalActiveTurnStartedAtMs,
@@ -1467,9 +1470,7 @@ const terminalProjectQuickCommands = ref<ThreadTerminalQuickCommand[]>([])
 const terminalStoredQuickCommands = ref<TerminalHeaderQuickCommand[]>(loadTerminalStoredQuickCommands())
 const terminalHeaderDropdownValue = ref('')
 const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
-const isRouteSyncInProgress = ref(false)
 const directoryTryInFlightKey = ref('')
-let hasPendingRouteSync = false
 const hasInitialized = ref(false)
 const newThreadCwd = ref('')
 const newThreadRuntime = ref<'local' | 'worktree'>('local')
@@ -4589,51 +4590,33 @@ async function initialize(): Promise<void> {
 
   await loadAccountsState({ silent: true })
   await refreshAll({
-    includeSelectedThreadMessages: route.name === 'thread',
+    includeSelectedThreadMessages: false,
   })
   await applyLaunchProjectPathFromUrl()
   hasInitialized.value = true
-  await syncThreadSelectionWithRoute()
+  if (route.name === 'thread' && routeThreadId.value) {
+    void selectThread(routeThreadId.value)
+  }
+  syncThreadSelectionWithRoute()
   startPolling()
 }
 
-async function syncThreadSelectionWithRoute(): Promise<void> {
-  if (isRouteSyncInProgress.value) {
-    hasPendingRouteSync = true
+function syncThreadSelectionWithRoute(): void {
+  if (route.name === 'home' || route.name === 'skills' || route.name === 'automations') {
+    if (selectedThreadId.value !== '') void selectThread('')
     return
   }
-  isRouteSyncInProgress.value = true
 
-  try {
-    do {
-      hasPendingRouteSync = false
-
-      if (route.name === 'home' || route.name === 'skills' || route.name === 'automations') {
-        if (selectedThreadId.value !== '') {
-          await selectThread('')
-        }
-        continue
-      }
-
-      if (route.name === 'thread') {
-        const threadId = routeThreadId.value
-        if (!threadId) continue
-
-        if (selectedThreadId.value !== threadId) {
-          const result = await selectThread(threadId)
-          if (result === 'not-found') {
-            continue
-          }
-        } else {
-          void ensureThreadMessagesLoaded(threadId, { silent: true }).catch(() => {
-            // The conversation overlay receives the error from useDesktopState.
-          })
-        }
-      }
-    } while (hasPendingRouteSync)
-
-  } finally {
-    isRouteSyncInProgress.value = false
+  if (route.name === 'thread') {
+    const threadId = routeThreadId.value
+    if (!threadId) return
+    if (selectedThreadId.value !== threadId) {
+      void selectThread(threadId)
+    } else {
+      void ensureThreadMessagesLoaded(threadId, { silent: true }).catch(() => {
+        // The conversation overlay receives the error from useDesktopState.
+      })
+    }
   }
 }
 
@@ -4645,9 +4628,9 @@ watch(
       isLoadingThreads.value,
       selectedThreadId.value,
     ] as const,
-  async () => {
+  () => {
     if (!hasInitialized.value) return
-    await syncThreadSelectionWithRoute()
+    syncThreadSelectionWithRoute()
   },
 )
 
@@ -4678,7 +4661,6 @@ watch(
   () => selectedThreadId.value,
   async (threadId) => {
     if (!hasInitialized.value) return
-    if (isRouteSyncInProgress.value) return
     if (isHomeRoute.value || isSkillsRoute.value || isAutomationsRoute.value) return
 
     if (!threadId) {

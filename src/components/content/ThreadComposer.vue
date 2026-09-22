@@ -1,5 +1,8 @@
 <template>
   <form class="thread-composer" @submit.prevent="onSubmit(isTurnInProgress ? activeInProgressMode : 'steer')">
+    <div v-if="turnThroughputText" class="thread-composer-throughput" :title="t('Average output tokens per second for the full turn, including tools and waiting.')" role="status">
+      {{ turnThroughputText }}
+    </div>
     <div
       class="thread-composer-shell"
       :class="{
@@ -546,6 +549,7 @@ const props = defineProps<{
   selectedSpeedMode: SpeedMode
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
+  turnThroughput?: { outputTokens: number | null; startedAtMs: number; durationMs: number | null; durationText: string } | null
   codexQuota?: UiRateLimitSnapshot | null
   isTurnInProgress?: boolean
   isStopPending?: boolean
@@ -861,6 +865,16 @@ const cumulativeThreadTokenTitle = computed(() => {
   return typeof totalTokens === 'number'
     ? `${totalTokens.toLocaleString()} ${t('tokens')}`
     : t('Waiting for Codex thread/tokenUsage/updated events for this thread.')
+})
+const turnThroughputText = computed(() => {
+  const throughput = props.turnThroughput
+  if (!throughput) return ''
+  const durationMs = throughput.durationMs ?? (throughput.startedAtMs > 0 ? Math.max(0, goalClockMs.value - throughput.startedAtMs) : 0)
+  const tokens = throughput.outputTokens
+  if (typeof tokens !== 'number' || tokens <= 0 || durationMs <= 0) {
+    return throughput.durationMs === null ? t('Waiting for token data') : `${t('Worked for')} ${throughput.durationText}`
+  }
+  return `${formatCompactTokenCount(tokens)} ${t('output tokens')} · ${(tokens / (durationMs / 1000)).toFixed(1)} TPS`
 })
 
 function formatPlanType(planType: string | null | undefined): string {
@@ -1285,7 +1299,7 @@ function toggleAttachMenu(): void {
 }
 
 function startGoalClock(): void {
-  if (goalClockTimer || !props.goal || props.goal.status !== 'active' || !props.isTurnInProgress) return
+  if (goalClockTimer || !props.isTurnInProgress) return
   goalClockMs.value = Date.now()
   goalClockTimer = setInterval(() => {
     goalClockMs.value = Date.now()
@@ -2060,6 +2074,10 @@ watch(
 
 .thread-composer {
   @apply w-full max-w-[min(var(--chat-column-max,72rem),100%)] mx-auto;
+}
+
+.thread-composer-throughput {
+  @apply px-2 pb-1 text-right text-[11px] leading-4 text-zinc-500 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis;
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {

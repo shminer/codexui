@@ -46,7 +46,6 @@ import {
   type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
-import { CodexApiError } from '../api/codexErrors'
 import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
 import type {
   CollaborationModeKind,
@@ -114,17 +113,10 @@ const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or
 const DEFAULT_ACCOUNT_STORAGE_ID = '__default__'
 const MAX_DISCARDED_SIDE_CONVERSATION_THREAD_IDS = 256
 const MAX_SAVED_TURN_SUMMARIES_PER_THREAD = 100
-type SelectThreadResult = 'ok' | 'not-found' | 'error'
 
 function isCodexCliMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '')
   return message.includes('Codex CLI is not available')
-}
-
-function isThreadNotFoundError(error: unknown): boolean {
-  if (error instanceof CodexApiError && error.status === 404) return true
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /\b404\b|thread.*not found|conversation.*not found|no such thread|no rollout found for thread id/i.test(message)
 }
 
 function loadReadStateMap(): Record<string, string> {
@@ -945,7 +937,6 @@ type TurnCompletedInfo = {
 }
 
 const WORKED_MESSAGE_TYPE = 'worked'
-const outputTokenFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 
 function loadTurnSummaries(): Record<string, TurnSummaryState[]> {
   if (typeof window === 'undefined') return {}
@@ -1031,23 +1022,10 @@ function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivity
 }
 
 function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
-  let throughputText = ''
-  if (
-    typeof summary.outputTokens === 'number' &&
-    Number.isFinite(summary.outputTokens) &&
-    summary.outputTokens > 0 &&
-    Number.isFinite(summary.durationMs) &&
-    summary.durationMs > 0
-  ) {
-    const tokensPerSecond = summary.outputTokens / (summary.durationMs / 1000)
-    throughputText = `${outputTokenFormatter.format(summary.outputTokens)} output tokens · ${tokensPerSecond.toFixed(1)} TPS`
-  }
-
   return {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
     text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
-    throughputText,
     createdAtIso: summary.completedAtIso,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
@@ -1685,7 +1663,11 @@ export function useDesktopState() {
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
 
   const isLoadingThreads = ref(false)
-  const isLoadingMessages = ref(false)
+  const loadingMessagesByThreadId = ref<Record<string, boolean>>({})
+  const isLoadingMessages = computed(() => (
+    loadingMessagesByThreadId.value[selectedThreadId.value] === true
+    && loadedMessagesByThreadId.value[selectedThreadId.value] !== true
+  ))
   const isThreadListFullyLoaded = ref(false)
   const isSendingMessage = ref(false)
   const isInterruptingTurn = ref(false)
@@ -1757,6 +1739,7 @@ export function useDesktopState() {
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const turnTokenThroughputByThreadId = new Map<string, TurnTokenThroughputState>()
+  const turnTokenThroughputRevision = ref(0)
   const threadGoalRequestByThreadId = new Map<string, Promise<void>>()
   const threadGoalRevisionByThreadId = new Map<string, number>()
   const loadedThreadGoalIds = new Set<string>()
@@ -1786,6 +1769,7 @@ export function useDesktopState() {
       outputTokens: null,
       phase: recovered ? 'observeBaseline' : baselineOutputTokens === null ? 'inferBaseline' : 'tracking',
     })
+    turnTokenThroughputRevision.value += 1
   }
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
@@ -2029,6 +2013,20 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     if (!threadId) return null
     return threadTokenUsageByThreadId.value[threadId] ?? null
+  })
+  const selectedTurnThroughput = computed(() => {
+    turnTokenThroughputRevision.value
+    const threadId = selectedThreadId.value
+    if (!threadId) return null
+    const turnId = activeTurnIdByThreadId.value[threadId]
+    if (turnId) {
+      const startedAtMs = pendingTurnStartsById.get(turnId)?.startedAtMs ?? 0
+      const tracker = turnTokenThroughputByThreadId.get(threadId)
+      return { outputTokens: tracker?.turnId === turnId ? tracker.outputTokens : null, startedAtMs, durationMs: null, durationText: '' }
+    }
+    const summary = turnSummaryByThreadId.value[threadId]
+      ?? savedTurnSummariesByThreadId.value[threadId]?.at(-1)
+    return summary ? { outputTokens: summary.outputTokens ?? null, startedAtMs: 0, durationMs: summary.durationMs, durationText: formatTurnDuration(summary.durationMs) } : null
   })
   function getMessagesForThread(threadId: string): UiMessage[] {
     if (!threadId) return []
@@ -2362,6 +2360,7 @@ export function useDesktopState() {
       outputTokens: validOutputTokens,
       phase: invalid ? 'invalid' : 'tracking',
     })
+    turnTokenThroughputRevision.value += 1
 
     if (summary?.turnId === update.turnId) {
       setTurnSummaryForThread(update.threadId, {
@@ -5302,7 +5301,17 @@ export function useDesktopState() {
 
     const existingLoad = loadMessagePromiseByThreadId.get(threadId)
     if (existingLoad) {
-      await existingLoad
+      const showExistingLoading = options.silent !== true && loadedMessagesByThreadId.value[threadId] !== true
+      if (showExistingLoading) {
+        loadingMessagesByThreadId.value = { ...loadingMessagesByThreadId.value, [threadId]: true }
+      }
+      try {
+        await existingLoad
+      } finally {
+        if (showExistingLoading) {
+          loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
+        }
+      }
       if (force) {
         await loadMessages(threadId, { ...options, force: true })
       }
@@ -5312,7 +5321,7 @@ export function useDesktopState() {
     const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
     const shouldShowLoading = options.silent !== true && !alreadyLoaded
     if (shouldShowLoading) {
-      isLoadingMessages.value = true
+      loadingMessagesByThreadId.value = { ...loadingMessagesByThreadId.value, [threadId]: true }
     }
 
     const loadPromise = (async () => {
@@ -5353,7 +5362,7 @@ export function useDesktopState() {
             [threadId]: recent.hasMoreOlder,
           }
           loadedMessagesByThreadId.value = { ...loadedMessagesByThreadId.value, [threadId]: true }
-          if (shouldShowLoading) isLoadingMessages.value = false
+          if (shouldShowLoading) loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
         }
       }
       const resumeOutcome = resumePromise ? await resumePromise : null
@@ -5468,14 +5477,12 @@ export function useDesktopState() {
       pendingSubagentParentRefresh.delete(threadId)
       } catch (unknownError) {
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-        if (selectedThreadId.value === threadId) {
-          setTurnErrorForThread(threadId, message, { transient: true })
-        }
+        setTurnErrorForThread(threadId, message, { transient: true })
         lastMessageLoadFailureAtByThreadId.set(threadId, Date.now())
         throw unknownError
       } finally {
       if (shouldShowLoading) {
-        isLoadingMessages.value = false
+        loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
       }
       }
     })().finally(() => {
@@ -5542,6 +5549,9 @@ export function useDesktopState() {
     const skillsLoadKey = selectedCwd || '__global__'
     if (refreshSkillsPromise) {
       await refreshSkillsPromise
+      if ((selectedThread.value?.cwd?.trim() || '__global__') === skillsLoadKey) {
+        await refreshSkills(options)
+      }
       return
     }
     if (
@@ -5555,7 +5565,9 @@ export function useDesktopState() {
 
     refreshSkillsPromise = (async () => {
       try {
-        installedSkills.value = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+        const skills = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+        if ((selectedThread.value?.cwd?.trim() || '__global__') !== skillsLoadKey) return
+        installedSkills.value = skills
         hasLoadedSkills = true
         lastSkillsLoadAt = Date.now()
         lastSkillsLoadKey = skillsLoadKey
@@ -5611,10 +5623,13 @@ export function useDesktopState() {
       await loadThreads({ force: options.forceThreadRefresh === true })
       void loadThreadGoal(selectedThreadId.value)
       if (includeSelectedThreadMessages) {
+        const threadId = selectedThreadId.value
         try {
-          await loadMessages(selectedThreadId.value)
+          await loadMessages(threadId)
         } catch (unknownError) {
-          error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+          if (selectedThreadId.value === threadId) {
+            error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+          }
         }
       }
       if (awaitAncillaryRefreshes) {
@@ -5638,22 +5653,23 @@ export function useDesktopState() {
     }
   }
 
-  async function selectThread(threadId: string): Promise<SelectThreadResult> {
+  async function selectThread(threadId: string): Promise<void> {
     setSelectedThreadId(threadId)
+    const initialProviderId = readProviderIdForThread(threadId)
+    void refreshModelPreferences({ includeProviderModels: true })
+    void refreshSkills()
 
     try {
-      await Promise.all([loadMessages(threadId), loadThreadGoal(threadId)])
-      await refreshModelPreferences({ includeProviderModels: true })
-      void refreshSkills()
-      return 'ok'
+      await loadMessages(threadId)
+      if (selectedThreadId.value === threadId && readProviderIdForThread(threadId) !== initialProviderId) {
+        void refreshModelPreferences({ includeProviderModels: true })
+      }
     } catch (unknownError) {
       const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-      error.value = message
-      const result = isThreadNotFoundError(unknownError) ? 'not-found' : 'error'
+      if (selectedThreadId.value === threadId) error.value = message
       if (threadId.trim()) {
         setTurnErrorForThread(threadId, message, { transient: true })
       }
-      return result
     }
   }
 
@@ -6399,6 +6415,9 @@ export function useDesktopState() {
 
     try {
       if (resumedThreadById.value[threadId] !== true) {
+        await loadMessagePromiseByThreadId.get(threadId)?.catch(() => {})
+      }
+      if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
         if (resumedThread.model) {
           setThreadModelId(threadId, resolveThreadModelForProvider(threadId, resumedThread.model, resumedThread.modelProvider))
@@ -7069,6 +7088,7 @@ export function useDesktopState() {
     projectDisplayNameById,
     selectedThread,
     selectedThreadTokenUsage,
+    selectedTurnThroughput,
     selectedThreadGoal,
     selectedThreadGoalObservedAtMs,
     selectedThreadGoalActiveTurnStartedAtMs,

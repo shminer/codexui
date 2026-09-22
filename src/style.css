@@ -247,6 +247,10 @@
   @apply border-zinc-700 bg-zinc-800;
 }
 
+:root.dark .thread-composer-throughput {
+  @apply text-zinc-400;
+}
+
 :root.dark .thread-composer:has(.thread-composer-input-wrap--expanded) {
   @apply bg-zinc-950/95;
 }
