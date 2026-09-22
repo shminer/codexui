@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeThreadMessagesV2, readThreadInProgressFromResponse } from './v2'
-import type { ThreadReadResponse } from '../appServerDtos'
+import { normalizeThreadGroupsV2, normalizeThreadMessagesV2, readThreadInProgressFromResponse } from './v2'
+import type { ThreadListResponse, ThreadReadResponse } from '../appServerDtos'
 
 function threadReadResponseWithContent(content: ThreadReadResponse['thread']['turns'][number]['items'][number][]): ThreadReadResponse {
   return {
@@ -24,6 +24,19 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
     },
   }
 }
+
+describe('normalizeThreadGroupsV2', () => {
+  it('shows a repeated thread id once while retaining distinct threads with the same title', () => {
+    const first = threadReadResponseWithContent([]).thread
+    const second = { ...first, id: 'thread-2' }
+    const response: ThreadListResponse = { data: [first, first, second], nextCursor: null }
+
+    expect(normalizeThreadGroupsV2(response)[0]?.threads.map((thread) => thread.id)).toEqual([
+      'thread-1',
+      'thread-2',
+    ])
+  })
+})
 
 describe('normalizeThreadMessagesV2', () => {
   it('preserves the message timestamp supplied by thread history', () => {

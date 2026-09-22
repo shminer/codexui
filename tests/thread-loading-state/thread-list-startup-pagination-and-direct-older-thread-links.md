@@ -13,12 +13,14 @@ Thread loading uses a smaller initial list page, hydrates later pages in the bac
 2. Inspect the first `thread/list` RPC request
 3. Keep the app open and watch subsequent `thread/list` RPC requests
 4. Open `/thread/<older-thread-id>` directly for a valid thread outside the first page
+5. With a test `thread/list` response that repeats one thread ID in the first page and includes another ID with the same title, inspect the sidebar before background pagination completes
 
 #### Expected Results
 - The first `thread/list` request uses a smaller initial limit instead of 100
 - Later thread pages load in the background using `nextCursor`
 - The sidebar gains older threads as background pages complete
 - The direct older thread URL stays on the thread route and loads messages instead of redirecting home
+- The repeated ID appears once immediately; the distinct same-title thread remains visible
 
 #### Rollback/Cleanup
 - None

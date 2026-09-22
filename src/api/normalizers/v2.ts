@@ -633,7 +633,12 @@ function groupThreadsByProject(threads: UiThread[]): UiProjectGroup[] {
 }
 
 export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectGroup[] {
-  const uiThreads = payload.data.map(toUiThread)
+  const seenIds = new Set<string>()
+  const uiThreads = payload.data.filter((thread) => {
+    if (seenIds.has(thread.id)) return false
+    seenIds.add(thread.id)
+    return true
+  }).map(toUiThread)
   return groupThreadsByProject(uiThreads)
 }
 
