@@ -13,12 +13,14 @@ Thread route load failures are visible in the conversation instead of silently s
 3. Confirm the conversation area shows the `thread/resume` or `thread/read` failure text and a `Send feedback` link.
 4. Confirm the model selector still loads the active provider model list instead of staying on disabled `Model`.
 5. Repeat in dark theme and confirm the error text, feedback link, and model selector remain readable.
+6. Before the missing thread request completes, switch to an existing thread; then return to the missing thread after it fails.
 
 #### Expected Results
 - The route does not fail silently with only `No messages in this thread yet`.
 - The chat area displays the load error as a visible overlay.
 - The model dropdown loads independently of the missing thread and remains usable for the current provider.
 - Light and dark theme error surfaces are readable.
+- The valid thread switches immediately and never shows the missing thread's late error; returning to the missing thread shows its error in the chat area.
 
 #### Rollback/Cleanup
 - Navigate back to home or a valid thread.

@@ -181,6 +181,97 @@ afterEach(() => {
 })
 
 describe('recent thread preview', () => {
+  it('switches immediately while older thread loads settle without replacing the active view', async () => {
+    installTestWindow()
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+    gatewayMocks.resumeThread.mockImplementation((threadId: string) => new Promise((resolve, reject) => {
+      pending.set(threadId, { resolve, reject })
+    }))
+
+    const state = useDesktopState()
+    const loadingA = state.selectThread('thread-a')
+    const loadingB = state.selectThread('thread-b')
+    const loadingC = state.selectThread('thread-c')
+    expect(state.selectedThreadId.value).toBe('thread-c')
+    expect(state.isLoadingMessages.value).toBe(true)
+    await flushMicrotasks()
+
+    pending.get('thread-a')?.resolve({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [], messages: [{ id: 'a', role: 'user', text: 'A' }], hasMoreOlder: false, turnIndexByTurnId: {} })
+    await loadingA
+    expect(state.selectedThreadId.value).toBe('thread-c')
+    expect(state.isLoadingMessages.value).toBe(true)
+    expect(state.messages.value).toEqual([])
+
+    pending.get('thread-b')?.reject(new Error('thread-b failed'))
+    await loadingB
+    expect(state.error.value).toBe('')
+    expect(state.selectedLiveOverlay.value?.errorText ?? '').not.toContain('thread-b failed')
+
+    pending.get('thread-c')?.resolve({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [], messages: [{ id: 'c', role: 'user', text: 'C' }], hasMoreOlder: false, turnIndexByTurnId: {} })
+    await loadingC
+    expect(state.messages.value.map((message) => message.id)).toEqual(['c'])
+    expect(state.isLoadingMessages.value).toBe(false)
+
+    await state.selectThread('thread-a')
+    expect(state.messages.value.map((message) => message.id)).toEqual(['a'])
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(3)
+    await state.selectThread('thread-b')
+    expect(state.selectedLiveOverlay.value?.errorText).toContain('thread-b failed')
+  })
+
+  it('waits for the in-flight restore before sending a turn on the same thread', async () => {
+    installTestWindow()
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-1')
+    let finishResume: (value: unknown) => void = () => {}
+    gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => { finishResume = resolve }))
+
+    const state = useDesktopState()
+    const loading = state.selectThread('thread-a')
+    await flushMicrotasks()
+    const sending = state.sendMessageToSelectedThread('Hello')
+    await flushMicrotasks()
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+
+    finishResume({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [], messages: [], hasMoreOlder: false, turnIndexByTurnId: {} })
+    await loading
+    await sending
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows loading when selecting a thread that was already loading silently', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValue({
+      messages: [{ id: 'preview', role: 'user', text: 'Recent', turnId: 'turn-1' }],
+      hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    let finishResume: (value: unknown) => void = () => {}
+    gatewayMocks.resumeThread.mockImplementation(() => new Promise((resolve) => { finishResume = resolve }))
+
+    const state = useDesktopState()
+    const silentLoad = state.loadMessages('thread-a', { silent: true })
+    const selection = state.selectThread('thread-a')
+    expect(state.isLoadingMessages.value).toBe(true)
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    await flushMicrotasks()
+    expect(state.messages.value.map((message) => message.id)).toEqual(['preview'])
+    expect(state.isLoadingMessages.value).toBe(false)
+
+    finishResume({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [], messages: [{ id: 'final', role: 'user', text: 'Recent', turnId: 'turn-1' }], hasMoreOlder: false, turnIndexByTurnId: {} })
+    await Promise.all([silentLoad, selection])
+    expect(state.isLoadingMessages.value).toBe(false)
+  })
+
   it('updates a live context compaction marker in place', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     emit({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'compact-1', type: 'contextCompaction' } } })

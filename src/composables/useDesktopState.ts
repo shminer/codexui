@@ -46,7 +46,6 @@ import {
   type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
-import { CodexApiError } from '../api/codexErrors'
 import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
 import type {
   CollaborationModeKind,
@@ -114,17 +113,10 @@ const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or
 const DEFAULT_ACCOUNT_STORAGE_ID = '__default__'
 const MAX_DISCARDED_SIDE_CONVERSATION_THREAD_IDS = 256
 const MAX_SAVED_TURN_SUMMARIES_PER_THREAD = 100
-type SelectThreadResult = 'ok' | 'not-found' | 'error'
 
 function isCodexCliMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '')
   return message.includes('Codex CLI is not available')
-}
-
-function isThreadNotFoundError(error: unknown): boolean {
-  if (error instanceof CodexApiError && error.status === 404) return true
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /\b404\b|thread.*not found|conversation.*not found|no such thread|no rollout found for thread id/i.test(message)
 }
 
 function loadReadStateMap(): Record<string, string> {
@@ -1685,7 +1677,11 @@ export function useDesktopState() {
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
 
   const isLoadingThreads = ref(false)
-  const isLoadingMessages = ref(false)
+  const loadingMessagesByThreadId = ref<Record<string, boolean>>({})
+  const isLoadingMessages = computed(() => (
+    loadingMessagesByThreadId.value[selectedThreadId.value] === true
+    && loadedMessagesByThreadId.value[selectedThreadId.value] !== true
+  ))
   const isThreadListFullyLoaded = ref(false)
   const isSendingMessage = ref(false)
   const isInterruptingTurn = ref(false)
@@ -5302,7 +5298,17 @@ export function useDesktopState() {
 
     const existingLoad = loadMessagePromiseByThreadId.get(threadId)
     if (existingLoad) {
-      await existingLoad
+      const showExistingLoading = options.silent !== true && loadedMessagesByThreadId.value[threadId] !== true
+      if (showExistingLoading) {
+        loadingMessagesByThreadId.value = { ...loadingMessagesByThreadId.value, [threadId]: true }
+      }
+      try {
+        await existingLoad
+      } finally {
+        if (showExistingLoading) {
+          loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
+        }
+      }
       if (force) {
         await loadMessages(threadId, { ...options, force: true })
       }
@@ -5312,7 +5318,7 @@ export function useDesktopState() {
     const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
     const shouldShowLoading = options.silent !== true && !alreadyLoaded
     if (shouldShowLoading) {
-      isLoadingMessages.value = true
+      loadingMessagesByThreadId.value = { ...loadingMessagesByThreadId.value, [threadId]: true }
     }
 
     const loadPromise = (async () => {
@@ -5353,7 +5359,7 @@ export function useDesktopState() {
             [threadId]: recent.hasMoreOlder,
           }
           loadedMessagesByThreadId.value = { ...loadedMessagesByThreadId.value, [threadId]: true }
-          if (shouldShowLoading) isLoadingMessages.value = false
+          if (shouldShowLoading) loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
         }
       }
       const resumeOutcome = resumePromise ? await resumePromise : null
@@ -5468,14 +5474,12 @@ export function useDesktopState() {
       pendingSubagentParentRefresh.delete(threadId)
       } catch (unknownError) {
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-        if (selectedThreadId.value === threadId) {
-          setTurnErrorForThread(threadId, message, { transient: true })
-        }
+        setTurnErrorForThread(threadId, message, { transient: true })
         lastMessageLoadFailureAtByThreadId.set(threadId, Date.now())
         throw unknownError
       } finally {
       if (shouldShowLoading) {
-        isLoadingMessages.value = false
+        loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
       }
       }
     })().finally(() => {
@@ -5542,6 +5546,9 @@ export function useDesktopState() {
     const skillsLoadKey = selectedCwd || '__global__'
     if (refreshSkillsPromise) {
       await refreshSkillsPromise
+      if ((selectedThread.value?.cwd?.trim() || '__global__') === skillsLoadKey) {
+        await refreshSkills(options)
+      }
       return
     }
     if (
@@ -5555,7 +5562,9 @@ export function useDesktopState() {
 
     refreshSkillsPromise = (async () => {
       try {
-        installedSkills.value = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+        const skills = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+        if ((selectedThread.value?.cwd?.trim() || '__global__') !== skillsLoadKey) return
+        installedSkills.value = skills
         hasLoadedSkills = true
         lastSkillsLoadAt = Date.now()
         lastSkillsLoadKey = skillsLoadKey
@@ -5611,10 +5620,13 @@ export function useDesktopState() {
       await loadThreads({ force: options.forceThreadRefresh === true })
       void loadThreadGoal(selectedThreadId.value)
       if (includeSelectedThreadMessages) {
+        const threadId = selectedThreadId.value
         try {
-          await loadMessages(selectedThreadId.value)
+          await loadMessages(threadId)
         } catch (unknownError) {
-          error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+          if (selectedThreadId.value === threadId) {
+            error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+          }
         }
       }
       if (awaitAncillaryRefreshes) {
@@ -5638,22 +5650,23 @@ export function useDesktopState() {
     }
   }
 
-  async function selectThread(threadId: string): Promise<SelectThreadResult> {
+  async function selectThread(threadId: string): Promise<void> {
     setSelectedThreadId(threadId)
+    const initialProviderId = readProviderIdForThread(threadId)
+    void refreshModelPreferences({ includeProviderModels: true })
+    void refreshSkills()
 
     try {
-      await Promise.all([loadMessages(threadId), loadThreadGoal(threadId)])
-      await refreshModelPreferences({ includeProviderModels: true })
-      void refreshSkills()
-      return 'ok'
+      await loadMessages(threadId)
+      if (selectedThreadId.value === threadId && readProviderIdForThread(threadId) !== initialProviderId) {
+        void refreshModelPreferences({ includeProviderModels: true })
+      }
     } catch (unknownError) {
       const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-      error.value = message
-      const result = isThreadNotFoundError(unknownError) ? 'not-found' : 'error'
+      if (selectedThreadId.value === threadId) error.value = message
       if (threadId.trim()) {
         setTurnErrorForThread(threadId, message, { transient: true })
       }
-      return result
     }
   }
 
@@ -6398,6 +6411,9 @@ export function useDesktopState() {
     })
 
     try {
+      if (resumedThreadById.value[threadId] !== true) {
+        await loadMessagePromiseByThreadId.get(threadId)?.catch(() => {})
+      }
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
         if (resumedThread.model) {
