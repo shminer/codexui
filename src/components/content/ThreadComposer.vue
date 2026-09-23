@@ -1,6 +1,6 @@
 <template>
   <form class="thread-composer" @submit.prevent="onSubmit(isTurnInProgress ? activeInProgressMode : 'steer')">
-    <div v-if="turnThroughputText" class="thread-composer-throughput" :title="t('Average output tokens per second for the full turn, including tools and waiting.')" role="status">
+    <div v-if="turnThroughputText" class="thread-composer-throughput" :title="t('Prefill is client-observed time to first text; decode measures text streaming; average covers the full turn.')" role="status">
       {{ turnThroughputText }}
     </div>
     <div
@@ -549,7 +549,17 @@ const props = defineProps<{
   selectedSpeedMode: SpeedMode
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
-  turnThroughput?: { outputTokens: number | null; startedAtMs: number; durationMs: number | null; durationText: string } | null
+  turnThroughput?: {
+    outputTokens: number | null
+    inputTokens: number | null
+    reasoningOutputTokens: number | null
+    prefillDurationMs: number | null
+    decodeDurationMs: number
+    decodeSegmentCount: number
+    startedAtMs: number
+    durationMs: number | null
+    durationText: string
+  } | null
   codexQuota?: UiRateLimitSnapshot | null
   isTurnInProgress?: boolean
   isStopPending?: boolean
@@ -874,7 +884,16 @@ const turnThroughputText = computed(() => {
   if (typeof tokens !== 'number' || tokens <= 0 || durationMs <= 0) {
     return throughput.durationMs === null ? t('Waiting for token data') : `${t('Worked for')} ${throughput.durationText}`
   }
-  return `${formatCompactTokenCount(tokens)} ${t('output tokens')} · ${(tokens / (durationMs / 1000)).toFixed(1)} TPS`
+  const rates: string[] = []
+  if (typeof throughput.inputTokens === 'number' && throughput.inputTokens > 0 && typeof throughput.prefillDurationMs === 'number' && throughput.prefillDurationMs > 0) {
+    rates.push(`${(throughput.inputTokens / (throughput.prefillDurationMs / 1000)).toFixed(1)} ${t('prefill TPS')}`)
+  }
+  const decodedTokens = tokens - (throughput.reasoningOutputTokens ?? 0) - throughput.decodeSegmentCount
+  if (decodedTokens > 0 && throughput.decodeDurationMs > 0) {
+    rates.push(`${(decodedTokens / (throughput.decodeDurationMs / 1000)).toFixed(1)} ${t('decode TPS')}`)
+  }
+  rates.push(`${(tokens / (durationMs / 1000)).toFixed(1)} ${t('avg TPS')}`)
+  return `${formatCompactTokenCount(tokens)} ${t('output tokens')} · ${rates.join(' · ')}`
 })
 
 function formatPlanType(planType: string | null | undefined): string {

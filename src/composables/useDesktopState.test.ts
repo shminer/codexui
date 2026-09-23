@@ -364,6 +364,32 @@ describe('recent thread preview', () => {
 })
 
 describe('turn token throughput', () => {
+  it('separates observed prefill, text decode, and full-turn timing', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+    now = 2_000
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'reply-1', delta: 'A' } })
+    now = 3_000
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'reply-1', delta: 'B' } })
+    emit(tokenUsageNotification('thread-1', 'turn-1', 1_100, 100))
+    emit({ method: 'turn/completed', params: { threadId: 'thread-1', durationMs: 10_000, turn: { id: 'turn-1', status: 'completed' } } })
+
+    expect(state.selectedTurnThroughput.value).toMatchObject({
+      outputTokens: 100,
+      inputTokens: 100,
+      reasoningOutputTokens: 0,
+      prefillDurationMs: 1_000,
+      decodeDurationMs: 1_000,
+      decodeSegmentCount: 1,
+      durationMs: 10_000,
+    })
+    nowSpy.mockRestore()
+  })
+
   it('exposes live usage and retains the latest completed turn above the composer', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))

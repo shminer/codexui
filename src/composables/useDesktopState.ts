@@ -896,6 +896,11 @@ type TurnSummaryState = {
   durationMs: number
   completedAtIso: string
   outputTokens?: number
+  inputTokens?: number
+  reasoningOutputTokens?: number
+  prefillDurationMs?: number
+  decodeDurationMs?: number
+  decodeSegmentCount?: number
 }
 
 type TurnTokenThroughputState = {
@@ -903,6 +908,13 @@ type TurnTokenThroughputState = {
   priorTurnId: string | null
   baselineOutputTokens: number | null
   outputTokens: number | null
+  inputTokens: number | null
+  reasoningOutputTokens: number | null
+  prefillDurationMs: number | null
+  decodeMessageId: string | null
+  decodeLastDeltaAtMs: number | null
+  decodeDurationMs: number
+  decodeSegmentCount: number
   phase: 'inferBaseline' | 'observeBaseline' | 'tracking' | 'invalid'
 }
 
@@ -951,7 +963,12 @@ function loadTurnSummaries(): Record<string, TurnSummaryState[]> {
         typeof entry.turnId === 'string' && entry.turnId.length > 0 &&
         typeof entry.completedAtIso === 'string' && !Number.isNaN(Date.parse(entry.completedAtIso)) &&
         typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 &&
-        (entry.outputTokens === undefined || (Number.isSafeInteger(entry.outputTokens) && entry.outputTokens > 0))
+        (entry.outputTokens === undefined || (Number.isSafeInteger(entry.outputTokens) && entry.outputTokens > 0)) &&
+        (entry.inputTokens === undefined || (Number.isSafeInteger(entry.inputTokens) && entry.inputTokens >= 0)) &&
+        (entry.reasoningOutputTokens === undefined || (Number.isSafeInteger(entry.reasoningOutputTokens) && entry.reasoningOutputTokens >= 0)) &&
+        (entry.prefillDurationMs === undefined || (Number.isFinite(entry.prefillDurationMs) && entry.prefillDurationMs >= 0)) &&
+        (entry.decodeDurationMs === undefined || (Number.isFinite(entry.decodeDurationMs) && entry.decodeDurationMs >= 0)) &&
+        (entry.decodeSegmentCount === undefined || (Number.isSafeInteger(entry.decodeSegmentCount) && entry.decodeSegmentCount >= 0))
       ))
       if (summaries.length) result[threadId] = summaries.slice(-MAX_SAVED_TURN_SUMMARIES_PER_THREAD)
     }
@@ -1006,7 +1023,12 @@ function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummarySta
     first.turnId === second.turnId &&
     first.durationMs === second.durationMs &&
     first.completedAtIso === second.completedAtIso &&
-    first.outputTokens === second.outputTokens
+    first.outputTokens === second.outputTokens &&
+    first.inputTokens === second.inputTokens &&
+    first.reasoningOutputTokens === second.reasoningOutputTokens &&
+    first.prefillDurationMs === second.prefillDurationMs &&
+    first.decodeDurationMs === second.decodeDurationMs &&
+    first.decodeSegmentCount === second.decodeSegmentCount
   )
 }
 
@@ -1767,7 +1789,35 @@ export function useDesktopState() {
       priorTurnId: existing?.turnId ?? null,
       baselineOutputTokens,
       outputTokens: null,
+      inputTokens: null,
+      reasoningOutputTokens: null,
+      prefillDurationMs: null,
+      decodeMessageId: null,
+      decodeLastDeltaAtMs: null,
+      decodeDurationMs: 0,
+      decodeSegmentCount: 0,
       phase: recovered ? 'observeBaseline' : baselineOutputTokens === null ? 'inferBaseline' : 'tracking',
+    })
+    turnTokenThroughputRevision.value += 1
+  }
+
+  function observeTurnTextDelta(threadId: string, turnId: string, messageId: string): void {
+    const tracker = turnTokenThroughputByThreadId.get(threadId)
+    if (!tracker || tracker.turnId !== turnId || !messageId) return
+    const observedAtMs = Date.now()
+    const isNewSegment = tracker.decodeMessageId !== messageId
+    const startedAtMs = pendingTurnStartsById.get(turnId)?.startedAtMs
+    turnTokenThroughputByThreadId.set(threadId, {
+      ...tracker,
+      prefillDurationMs: tracker.prefillDurationMs ?? (
+        typeof startedAtMs === 'number' ? Math.max(0, observedAtMs - startedAtMs) : null
+      ),
+      decodeMessageId: messageId,
+      decodeLastDeltaAtMs: observedAtMs,
+      decodeDurationMs: !isNewSegment && tracker.decodeLastDeltaAtMs !== null
+        ? tracker.decodeDurationMs + Math.max(0, observedAtMs - tracker.decodeLastDeltaAtMs)
+        : tracker.decodeDurationMs,
+      decodeSegmentCount: tracker.decodeSegmentCount + (isNewSegment ? 1 : 0),
     })
     turnTokenThroughputRevision.value += 1
   }
@@ -2022,11 +2072,33 @@ export function useDesktopState() {
     if (turnId) {
       const startedAtMs = pendingTurnStartsById.get(turnId)?.startedAtMs ?? 0
       const tracker = turnTokenThroughputByThreadId.get(threadId)
-      return { outputTokens: tracker?.turnId === turnId ? tracker.outputTokens : null, startedAtMs, durationMs: null, durationText: '' }
+      return tracker?.turnId === turnId
+        ? {
+            outputTokens: tracker.outputTokens,
+            inputTokens: tracker.inputTokens,
+            reasoningOutputTokens: tracker.reasoningOutputTokens,
+            prefillDurationMs: tracker.prefillDurationMs,
+            decodeDurationMs: tracker.decodeDurationMs,
+            decodeSegmentCount: tracker.decodeSegmentCount,
+            startedAtMs,
+            durationMs: null,
+            durationText: '',
+          }
+        : null
     }
     const summary = turnSummaryByThreadId.value[threadId]
       ?? savedTurnSummariesByThreadId.value[threadId]?.at(-1)
-    return summary ? { outputTokens: summary.outputTokens ?? null, startedAtMs: 0, durationMs: summary.durationMs, durationText: formatTurnDuration(summary.durationMs) } : null
+    return summary ? {
+      outputTokens: summary.outputTokens ?? null,
+      inputTokens: summary.inputTokens ?? null,
+      reasoningOutputTokens: summary.reasoningOutputTokens ?? null,
+      prefillDurationMs: summary.prefillDurationMs ?? null,
+      decodeDurationMs: summary.decodeDurationMs ?? 0,
+      decodeSegmentCount: summary.decodeSegmentCount ?? 0,
+      startedAtMs: 0,
+      durationMs: summary.durationMs,
+      durationText: formatTurnDuration(summary.durationMs),
+    } : null
   })
   function getMessagesForThread(threadId: string): UiMessage[] {
     if (!threadId) return []
@@ -2320,6 +2392,13 @@ export function useDesktopState() {
         priorTurnId: null,
         baselineOutputTokens: null,
         outputTokens: null,
+        inputTokens: null,
+        reasoningOutputTokens: null,
+        prefillDurationMs: null,
+        decodeMessageId: null,
+        decodeLastDeltaAtMs: null,
+        decodeDurationMs: 0,
+        decodeSegmentCount: 0,
         phase: 'inferBaseline',
       }
     }
@@ -2354,10 +2433,11 @@ export function useDesktopState() {
     const validOutputTokens = invalid ? null : outputTokens
 
     turnTokenThroughputByThreadId.set(update.threadId, {
-      turnId: update.turnId,
-      priorTurnId: throughput.priorTurnId,
+      ...throughput,
       baselineOutputTokens,
       outputTokens: validOutputTokens,
+      inputTokens: update.usage.last.inputTokens,
+      reasoningOutputTokens: update.usage.last.reasoningOutputTokens,
       phase: invalid ? 'invalid' : 'tracking',
     })
     turnTokenThroughputRevision.value += 1
@@ -2366,6 +2446,8 @@ export function useDesktopState() {
       setTurnSummaryForThread(update.threadId, {
         ...summary,
         outputTokens: validOutputTokens && validOutputTokens > 0 ? validOutputTokens : undefined,
+        inputTokens: update.usage.last.inputTokens,
+        reasoningOutputTokens: update.usage.last.reasoningOutputTokens,
       })
     }
   }
@@ -4678,6 +4760,11 @@ export function useDesktopState() {
         durationMs,
         completedAtIso: new Date(completedTurn.completedAtMs).toISOString(),
         outputTokens: outputTokens && outputTokens > 0 ? outputTokens : undefined,
+        inputTokens: throughput?.inputTokens ?? undefined,
+        reasoningOutputTokens: throughput?.reasoningOutputTokens ?? undefined,
+        prefillDurationMs: throughput?.prefillDurationMs ?? undefined,
+        decodeDurationMs: throughput?.decodeDurationMs,
+        decodeSegmentCount: throughput?.decodeSegmentCount,
       }, completedTurn.status === 'completed')
       if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
@@ -4788,6 +4875,7 @@ export function useDesktopState() {
 
     const liveAgentMessageDelta = readAgentMessageDelta(notification)
     if (liveAgentMessageDelta) {
+      observeTurnTextDelta(notificationThreadId, liveAgentTurnId, liveAgentMessageDelta.messageId)
       const existing = (liveAgentMessagesByThreadId.value[notificationThreadId] ?? [])
         .find((message) => message.id === liveAgentMessageDelta.messageId)
       const nextText = `${existing?.text ?? ''}${liveAgentMessageDelta.delta}`

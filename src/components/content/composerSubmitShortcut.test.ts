@@ -50,4 +50,13 @@ describe('ThreadComposer cumulative token usage wiring', () => {
     expect(source).toContain('role="status"')
     expect(source).toContain('aria-live="polite"')
   })
+
+  it('keeps prefill, decode, and average throughput in the existing status line', async () => {
+    const source = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
+
+    expect(source.match(/class="thread-composer-throughput"/gu)).toHaveLength(1)
+    expect(source).toContain("t('prefill TPS')")
+    expect(source).toContain("t('decode TPS')")
+    expect(source).toContain("t('avg TPS')")
+  })
 })
