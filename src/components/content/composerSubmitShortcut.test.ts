@@ -55,8 +55,10 @@ describe('ThreadComposer cumulative token usage wiring', () => {
     const source = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
 
     expect(source.match(/class="thread-composer-throughput"/gu)).toHaveLength(1)
-    expect(source).toContain("t('prefill TPS')")
-    expect(source).toContain("t('decode TPS')")
-    expect(source).toContain("t('avg TPS')")
+    expect(source).toContain('PF tps`')
+    expect(source).toContain('dec tps`')
+    expect(source).toContain('avg TPS`')
+    expect(source).toContain('otks · ${rates.join')
+    expect(source.match(/formatCompactTokenCount\(.+?\/ \(.+? \/ 1000\)\)/gu)).toHaveLength(3)
   })
 })

@@ -886,14 +886,14 @@ const turnThroughputText = computed(() => {
   }
   const rates: string[] = []
   if (typeof throughput.inputTokens === 'number' && throughput.inputTokens > 0 && typeof throughput.prefillDurationMs === 'number' && throughput.prefillDurationMs > 0) {
-    rates.push(`${(throughput.inputTokens / (throughput.prefillDurationMs / 1000)).toFixed(1)} ${t('prefill TPS')}`)
+    rates.push(`${formatCompactTokenCount(throughput.inputTokens / (throughput.prefillDurationMs / 1000))} PF tps`)
   }
   const decodedTokens = tokens - (throughput.reasoningOutputTokens ?? 0) - throughput.decodeSegmentCount
   if (decodedTokens > 0 && throughput.decodeDurationMs > 0) {
-    rates.push(`${(decodedTokens / (throughput.decodeDurationMs / 1000)).toFixed(1)} ${t('decode TPS')}`)
+    rates.push(`${formatCompactTokenCount(decodedTokens / (throughput.decodeDurationMs / 1000))} dec tps`)
   }
-  rates.push(`${(tokens / (durationMs / 1000)).toFixed(1)} ${t('avg TPS')}`)
-  return `${formatCompactTokenCount(tokens)} ${t('output tokens')} · ${rates.join(' · ')}`
+  rates.push(`${formatCompactTokenCount(tokens / (durationMs / 1000))} avg TPS`)
+  return `${formatCompactTokenCount(tokens)} otks · ${rates.join(' · ')}`
 })
 
 function formatPlanType(planType: string | null | undefined): string {

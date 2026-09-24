@@ -20,7 +20,7 @@
 11. Complete another turn, reload the same browser tab, and inspect both completed turns.
 
 #### Expected Results
-- A completed turn with valid usage displays `Worked for <duration>` before the response, an unadorned timestamp, and `<output tokens> output tokens · <TPS> TPS` above the composer.
+- A completed turn with valid usage displays `Worked for <duration>` before the response, an unadorned timestamp, and `<output tokens> otks · ... · <average rate> avg TPS` above the composer.
 - Output tokens below 1,000 show the full number; larger counts use compact units such as `1.2K` and `1M`. TPS uses exactly one decimal place above the composer.
 - TPS equals the turn's output-token delta divided by its full elapsed time, including reasoning, tool work, and waits.
 - Repeated usage notifications do not double-count tokens, and thread or turn changes do not leak prior values.
