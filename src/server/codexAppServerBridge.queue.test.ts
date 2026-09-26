@@ -41,3 +41,23 @@ describe('atomic message queue operations', () => {
     expect(claims.at(-1)?.data.main).toBeUndefined()
   })
 })
+
+describe('queued turn settings', () => {
+  it('uses the thread model for a queued turn instead of global defaults', async () => {
+    await writeFile(join(reviewHome, '.codex-global-state.json'), JSON.stringify({
+      'thread-queue-state': { main: [{ id: 'queued', text: 'continue', imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' }] },
+    }))
+    const rpc = vi.fn(async (method: string, _params?: any) => {
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' }, turns: [] } }
+      if (method === 'thread/resume') return { model: 'thread-model', reasoningEffort: 'high' }
+      if (method === 'config/read') return { config: { model: 'global-model', model_reasoning_effort: 'medium' } }
+      return {}
+    })
+    processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
+    await processor.processThreadQueue('main')
+    const start = rpc.mock.calls.find(([method]) => method === 'turn/start')
+    expect(start?.[1].collaborationMode.settings.model).toBe('thread-model')
+    expect(start?.[1].collaborationMode.settings.reasoning_effort).toBe('high')
+    expect(rpc.mock.calls.some(([method]) => method === 'config/read')).toBe(false)
+  })
+})

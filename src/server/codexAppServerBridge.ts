@@ -7020,7 +7020,13 @@ export class BackendQueueProcessor {
     })
   }
 
-  private async resolveCollaborationModeSettings(mode: CollaborationModeKind): Promise<ResolvedCollaborationModeSettings> {
+  private async resolveCollaborationModeSettings(mode: CollaborationModeKind, resumed: Record<string, unknown> | null): Promise<ResolvedCollaborationModeSettings> {
+    // Resume reports the target thread's current settings. Global defaults are
+    // only a compatibility fallback for older runtimes without these fields.
+    const threadModel = readNonEmptyString(resumed?.model)
+    if (threadModel) {
+      return { model: threadModel, reasoningEffort: normalizeCollaborationModeReasoningEffort(normalizeReasoningEffort(resumed?.reasoningEffort)) }
+    }
     let currentConfig: Record<string, unknown> | null = null
     try {
       const configPayload = asRecord(await this.appServer.rpc('config/read', {}))
@@ -7057,7 +7063,7 @@ export class BackendQueueProcessor {
     throw new Error(`${mode === 'plan' ? 'Plan' : 'Default'} mode requires an available model.`)
   }
 
-  private async buildQueuedTurnParams(turn: BackendQueuedTurn): Promise<Record<string, unknown>> {
+  private async buildQueuedTurnParams(turn: BackendQueuedTurn, resumed: Record<string, unknown> | null): Promise<Record<string, unknown>> {
     const localImageAttachments: StoredQueuedMessage['fileAttachments'] = []
     for (const imageUrl of turn.message.imageUrls) {
       const localImagePath = extractLocalImagePathFromUrl(imageUrl.trim())
@@ -7102,7 +7108,7 @@ export class BackendQueueProcessor {
     }
 
     try {
-      const settings = await this.resolveCollaborationModeSettings(turn.message.collaborationMode)
+      const settings = await this.resolveCollaborationModeSettings(turn.message.collaborationMode, resumed)
       params.collaborationMode = {
         mode: turn.message.collaborationMode,
         settings: {
@@ -7119,8 +7125,8 @@ export class BackendQueueProcessor {
   }
 
   private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
-    await this.appServer.rpc('thread/resume', { threadId: turn.threadId })
-    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn))
+    const resumed = asRecord(await this.appServer.rpc('thread/resume', { threadId: turn.threadId }))
+    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn, resumed))
   }
 }
 
