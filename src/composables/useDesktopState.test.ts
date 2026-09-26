@@ -38,7 +38,8 @@ const gatewayMocks = vi.hoisted(() => ({
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
   resumeThread: vi.fn(),
-  revertThreadFileChanges: vi.fn(),
+  rollbackThreadAndFiles: vi.fn(),
+  supportsThreadRollback: vi.fn(),
   rollbackThread: vi.fn(),
   normalizeThreadGoal: vi.fn((value: unknown) => value),
   setCodexSpeedMode: vi.fn(),
@@ -162,6 +163,7 @@ function tokenUsageNotification(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.supportsThreadRollback.mockResolvedValue(false)
   gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: false })
   gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
   gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-thread-default' })
@@ -3634,4 +3636,21 @@ describe('selected fork pagination', () => {
     expect(state.hasMoreOlderMessages.value).toBe(true)
   })
 
+})
+
+describe('history rollback capability', () => {
+  it('does not mutate files or history when rollback is unsupported', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    expect(await state.rollbackSelectedThread('turn-1')).toBe(false)
+    expect(gatewayMocks.rollbackThreadAndFiles).not.toHaveBeenCalled()
+    expect(state.error.value).toContain('does not support')
+  })
+  it('surfaces file errors after a successful history rollback', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.supportsThreadRollback.mockResolvedValue(true)
+    gatewayMocks.rollbackThreadAndFiles.mockResolvedValue({ messages: [], fileErrors: ['file changed externally'] })
+    expect(await state.rollbackSelectedThread('turn-1')).toBe(true)
+    expect(state.error.value).toContain('file changed externally')
+    expect(state.isRollingBack.value).toBe(false)
+  })
 })

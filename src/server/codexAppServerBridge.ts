@@ -3795,6 +3795,43 @@ async function applyTurnFileChanges(
   return { applied, errors, appliedPatchIds }
 }
 
+export async function rollbackThreadWithFiles(
+  appServer: RpcExecutor, threadId: string, turnId: string, cwd: string,
+  policy: ServerSecurityPolicy = PERMISSIVE_SECURITY_POLICY,
+): Promise<{ result: unknown; fileErrors: string[] }> {
+  const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
+  const thread = asRecord(response?.thread)
+  const turns = Array.isArray(thread?.turns) ? thread.turns : []
+  if (turns.some((turn) => ['inProgress', 'running', 'active'].includes(readNonEmptyString(asRecord(turn)?.status)))) {
+    throw new Error('Finish the current turn before editing history.')
+  }
+  const index = turns.findIndex((turn) => readNonEmptyString(asRecord(turn)?.id) === turnId)
+  if (index < 0) throw new Error('The selected turn no longer exists. Reload the conversation.')
+  const turnIds = new Set(turns.slice(index).map((turn) => readNonEmptyString(asRecord(turn)?.id)))
+  const sessionPath = readNonEmptyString(thread?.path)
+  // Capture patches while the selected turns still exist. A read or RPC failure
+  // must leave workspace files untouched.
+  const changes = sessionPath && cwd
+    ? collectFileChangesForTurns(await readFile(sessionPath, 'utf8'), turnIds, cwd)
+    : new Map<string, CollectedTurnFileInfo>()
+  if (policy !== PERMISSIVE_SECURITY_POLICY) {
+    for (const info of changes.values()) {
+      const paths = [...info.commandFilePaths, ...info.patchInputs.flatMap((patch) =>
+        parseApplyPatchInput(patch.input).flatMap((change) => [change.path, ...(change.movedToPath ? [change.movedToPath] : [])]))]
+      for (const path of paths) {
+        if (!await policy.resolveLocalPath(resolve(cwd, path))) throw new Error('A rollback file is outside the allowed roots or no longer exists.')
+      }
+    }
+  }
+  const result = await appServer.rpc('thread/rollback', { threadId, numTurns: turns.length - index })
+  try {
+    const files = await revertTurnFileChanges(cwd, changes)
+    return { result, fileErrors: files.errors }
+  } catch (error) {
+    return { result, fileErrors: [getErrorMessage(error, 'Failed to revert file changes')] }
+  }
+}
+
 async function revertTurnFileChanges(
   cwd: string,
   turnInfos: Map<string, CollectedTurnFileInfo>,
@@ -8206,6 +8243,28 @@ export function createCodexBridgeMiddleware(options: {
             })
           }
         }
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread/rollback') {
+        if (!securityPolicy.isRpcMethodAllowed('thread/rollback') || !(await methodCatalog.listMethods()).includes('thread/rollback')) {
+          setJson(res, 409, { error: 'This Codex runtime does not support editing conversation history.' })
+          return
+        }
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        const turnId = readNonEmptyString(body?.turnId)
+        const rawCwd = readNonEmptyString(body?.cwd)
+        if (!threadId || !turnId) {
+          setJson(res, 400, { error: 'Missing threadId or turnId' })
+          return
+        }
+        const cwd = rawCwd ? await authorizeGitDirectory(rawCwd, securityPolicy, res, true) : ''
+        if (cwd === null) return
+        const rollback = await rollbackThreadWithFiles(appServer, threadId, turnId, cwd, securityPolicy)
+        const trimmed = trimThreadTurnsInRpcResult('thread/rollback', rollback.result)
+        rollback.result = await sanitizeThreadTurnsInlinePayloads('thread/rollback', trimmed)
+        setJson(res, 200, rollback)
         return
       }
 

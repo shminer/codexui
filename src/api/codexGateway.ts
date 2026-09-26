@@ -1801,6 +1801,23 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
   return payload.cleared
 }
 
+export async function supportsThreadRollback(): Promise<boolean> {
+  return (await fetchRpcMethodCatalog()).includes('thread/rollback')
+}
+
+export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[] }> {
+  const response = await fetch('/codex-api/thread/rollback', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId, turnId, cwd }),
+  })
+  const payload = await response.json()
+  if (!response.ok) throw new Error(extractErrorMessage(payload, 'Failed to edit conversation history'))
+  return {
+    messages: normalizeThreadMessagesV2(payload.result, readThreadTurnStartIndex(payload.result)),
+    fileErrors: Array.isArray(payload.fileErrors) ? payload.fileErrors : [],
+  }
+}
+
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
   const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
   return normalizeThreadMessagesV2(payload, readThreadTurnStartIndex(payload))

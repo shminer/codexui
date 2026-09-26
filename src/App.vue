@@ -965,6 +965,7 @@
                     <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                       :is-turn-in-progress="isSelectedThreadInProgress"
                       :active-thread-id="composerThreadContextId" :cwd="composerCwd"
+                      :can-rollback="canRollbackThread"
                       :live-overlay="liveOverlay"
                       :pending-requests="selectedThreadServerRequests"
                       :has-more-persisted-above="hasMoreOlderMessages"
@@ -1459,6 +1460,7 @@ const {
   stopPolling,
   primeSelectedThread,
   rollbackSelectedThread,
+  canRollbackThread,
 } = useDesktopState()
 
 const route = useRoute()
@@ -4269,7 +4271,8 @@ function onInterruptTurn(): void {
   void interruptSelectedThreadTurn()
 }
 
-function onRollback(payload: { turnId: string }): void {
+async function onRollback(payload: { turnId: string }): Promise<void> {
+  const originalThreadId = selectedThreadId.value
   const targetTurnId = payload.turnId.trim()
   if (targetTurnId.length > 0) {
     const rollbackUserMessage = [...filteredMessages.value]
@@ -4279,11 +4282,11 @@ function onRollback(payload: { turnId: string }): void {
         && (message.turnId?.trim() ?? '') === targetTurnId
         && message.text.trim().length > 0
       ))
-    if (rollbackUserMessage?.text && threadComposerRef.value) {
+    const succeeded = await rollbackSelectedThread(targetTurnId)
+    if (succeeded && selectedThreadId.value === originalThreadId && rollbackUserMessage?.text && threadComposerRef.value) {
       threadComposerRef.value.appendTextToDraft(rollbackUserMessage.text)
     }
   }
-  void rollbackSelectedThread(payload.turnId)
 }
 
 function onImplementPlan(payload: { turnId: string }): void {

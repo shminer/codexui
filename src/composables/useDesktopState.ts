@@ -23,7 +23,8 @@ import {
   normalizeThreadGoal,
   pickCodexRateLimitSnapshot,
   replyToServerRequest,
-  revertThreadFileChanges,
+  rollbackThreadAndFiles,
+  supportsThreadRollback,
   rollbackThread,
   getThreadGroupsPage,
   getThreadQueueState,
@@ -1707,6 +1708,7 @@ export function useDesktopState() {
   const isInterruptingTurn = ref(false)
   const isUpdatingSpeedMode = ref(false)
   const isRollingBack = ref(false)
+  const canRollbackThread = ref(false)
 
   const error = ref('')
   const isPolling = ref(false)
@@ -6775,42 +6777,29 @@ export function useDesktopState() {
     }
   }
 
-  async function rollbackSelectedThread(turnId: string): Promise<void> {
+  async function rollbackSelectedThread(turnId: string): Promise<boolean> {
     const threadId = selectedThreadId.value
-    if (!threadId) return
-    if (isRollingBack.value) return
-    if (!turnId.trim()) return
-
-    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const matchedMessage = persisted.find((message) => message.turnId === turnId)
-    const turnIndex = typeof matchedMessage?.turnIndex === 'number' ? matchedMessage.turnIndex : -1
-    if (turnIndex < 0) return
-    const maxTurnIndex = persisted.reduce((max, m) => (typeof m.turnIndex === 'number' && m.turnIndex > max ? m.turnIndex : max), -1)
-    if (maxTurnIndex < 0 || turnIndex > maxTurnIndex) return
-    const numTurns = maxTurnIndex - turnIndex + 1
-    if (numTurns < 1) return
-
+    if (!threadId || isRollingBack.value || !turnId.trim() || inProgressById.value[threadId]) return false
     isRollingBack.value = true
     error.value = ''
     try {
-      const threadCwd = selectedThread.value?.cwd?.trim() ?? ''
-      if (threadCwd) {
-        await revertThreadFileChanges(threadId, turnId, threadCwd)
-      }
-      const nextMessages = await rollbackThread(threadId, numTurns)
+      canRollbackThread.value = await supportsThreadRollback()
+      if (!canRollbackThread.value) throw new Error('This Codex runtime does not support editing conversation history.')
+      const { messages: nextMessages, fileErrors } = await rollbackThreadAndFiles(threadId, turnId, selectedThread.value?.cwd?.trim() ?? '')
       setPersistedMessagesForThread(threadId, nextMessages)
       setLiveAgentMessagesForThread(threadId, [])
       clearLiveReasoningForThread(threadId)
-      if (liveCommandsByThreadId.value[threadId]) {
-        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-      }
+      if (liveCommandsByThreadId.value[threadId]) liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, null)
       setTurnErrorForThread(threadId, null)
       pendingThreadsRefresh = true
       await syncFromNotifications()
+      if (fileErrors.length) error.value = `Conversation history was rolled back, but some file changes could not be reverted: ${fileErrors.join('; ')}`
+      return true
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to rollback thread'
+      return false
     } finally {
       isRollingBack.value = false
     }
@@ -7096,6 +7085,7 @@ export function useDesktopState() {
   }
 
   function startPolling(): void {
+    void supportsThreadRollback().then((supported) => { canRollbackThread.value = supported }).catch(() => {})
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
@@ -7359,6 +7349,7 @@ export function useDesktopState() {
     isInterruptingTurn,
     isUpdatingSpeedMode,
     isRollingBack,
+    canRollbackThread,
 
     error,
     refreshAll,

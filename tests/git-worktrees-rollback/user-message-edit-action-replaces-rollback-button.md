@@ -29,3 +29,12 @@ The old rollback button is replaced with an `Edit message` action under each eli
 - Re-send the edited message if you want to recreate the conversation path
 
 ---
+
+### Capability and failure consistency
+
+- Setup: a runtime without `thread/rollback`, then a fixture/runtime supporting it. Use only a disposable project with a known apply_patch edit.
+- On the unsupported runtime, load the conversation: Edit is hidden. Calling the handler directly reports unsupported history editing without touching files or the draft.
+- On the supported runtime, make rollback RPC fail: files and history remain intact. On success, verify history trims at the selected user turn, the captured patch is undone, and only then is the user text added to the draft.
+- Simulate a file conflict after successful history rollback: the UI keeps the new history and explicitly lists file errors instead of reporting full success. Switching threads during the request must not append the old prompt to the new thread.
+- Cleanup: archive the test thread and delete the disposable project.
+- Performance: capability loads once per polling lifecycle, and is checked again only on explicit Edit. The server reads the session once before rollback, reuses that patch snapshot, and trims the returned history to the normal recent page. No retry loop or duplicated file undo.

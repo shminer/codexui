@@ -1367,6 +1367,7 @@ const props = defineProps<{
   activeThreadId: string
   cwd: string
   readonly?: boolean
+  canRollback?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -2441,11 +2442,11 @@ const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
 })
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return props.canRollback === true && !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
 }
 
 function editMessage(messageId: string): void {
-  if (props.readonly || props.isTurnInProgress) return
+  if (!props.canRollback || props.readonly || props.isTurnInProgress) return
   const turnId = editableTurnIdByMessageId.value[messageId]
   if (!turnId) return
   emit('rollback', { turnId })
