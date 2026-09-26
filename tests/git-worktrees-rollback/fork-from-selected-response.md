@@ -26,3 +26,10 @@ The Fork action beside an assistant response creates a new thread ending at that
 
 - Delete the test forks after confirming their content.
 - Keep the original source thread unchanged.
+
+### Long fork pagination
+
+- Setup: a completed source thread with more than 20 turns.
+- Fork from a response after turn 15. Open the resulting fork immediately and click Load earlier messages.
+- Expected: the fork ends at exactly the selected response, the initial recent page exposes the earlier-history control without a reload, and older pages retain turn indices and provider metadata.
+- Cleanup: archive the test fork. Pagination metadata is copied from the existing verification read, with no extra network request.

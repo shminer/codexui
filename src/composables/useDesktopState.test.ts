@@ -3618,3 +3618,20 @@ describe('turn completion ownership', () => {
   })
 
 })
+
+describe('selected fork pagination', () => {
+  it('keeps older history reachable after forking a long conversation', async () => {
+    installTestWindow()
+    const detail = { model: 'gpt-5.5', modelProvider: 'codex', messages: [{ id: 'reply', role: 'assistant', text: 'selected reply', turnId: 'selected-turn', turnIndex: 24 }], inProgress: false, activeTurnId: '', hasMoreOlder: true, turnIndexByTurnId: { 'selected-turn': 24 } }
+    gatewayMocks.resumeThread.mockResolvedValue(detail)
+    gatewayMocks.getThreadDetail.mockResolvedValue(detail)
+    gatewayMocks.forkThread.mockResolvedValue({ threadId: 'new-fork', cwd: '/tmp', model: 'gpt-5.5', messages: detail.messages })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.renameThread.mockResolvedValue(undefined)
+    const state = useDesktopState()
+    await state.loadMessages('source')
+    expect(await state.forkThreadFromTurn('source', 'selected-turn')).toBe('new-fork')
+    expect(state.hasMoreOlderMessages.value).toBe(true)
+  })
+
+})

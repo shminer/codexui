@@ -5943,6 +5943,13 @@ export function useDesktopState() {
       setThreadModelId(forkedThreadId, forked.model)
       setSelectedReasoningEffortForThread(forkedThreadId, selectedEffort)
       setPersistedMessagesForThread(forkedThreadId, verifiedFork.messages)
+      replaceTurnIndexLookupForThread(forkedThreadId, verifiedFork.turnIndexByTurnId)
+      hasMoreOlderMessagesByThreadId.value = {
+        ...hasMoreOlderMessagesByThreadId.value,
+        [forkedThreadId]: verifiedFork.hasMoreOlder,
+      }
+      if (verifiedFork.modelProvider) setThreadModelProviderId(forkedThreadId, verifiedFork.modelProvider)
+      subagentsByParentThreadId.value = { ...subagentsByParentThreadId.value, [forkedThreadId]: verifiedFork.subagents ?? [] }
       loadedMessagesByThreadId.value = {
         ...loadedMessagesByThreadId.value,
         [forkedThreadId]: true,
