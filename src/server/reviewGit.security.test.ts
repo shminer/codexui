@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { expect, it } from 'vitest'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -34,6 +35,16 @@ it.each([false, true])('enforces allowed roots with file editing %s', async (fil
       body: JSON.stringify({ cwd: outside, scope: 'workspace', action: 'revert', level: 'all' }),
     })
     expect(action.status).toBe(403)
+    if (fileEditing) {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: allowed, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'fixture')
+      git('worktree', 'add', '-b', 'occupied', outside)
+      const checkout = await fetch(`${base}/codex-api/git/checkout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd: allowed, branch: 'occupied' }),
+      })
+      expect(checkout.status, JSON.stringify(await checkout.json())).toBe(403)
+      expect(execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: outside, encoding: 'utf8' }).trim()).toBe('occupied')
+    }
   } finally {
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))

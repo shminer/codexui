@@ -185,3 +185,5 @@ The password file is intentionally retained; delete it only when the user explic
 - Connect directly from a Tailscale address without a session cookie: safe mode requires login. A valid login session works. The ordinary entry keeps its existing Tailscale behavior.
 - Cleanup: stop only the test server and remove its temporary directories/password file.
 - Performance: default ordinary mode adds no Git subprocess. Safe mode checks canonical cwd and Git root, and checks Git metadata for writes; each request has a fixed number of checks and no retry loop.
+
+- With file editing enabled, request checkout of a branch occupied by a worktree outside the allowed roots. Expected: 403 and the outside worktree keeps its branch; automatic detach recovery also enforces canonical allowed roots. This adds one path check only on the occupied-branch recovery path.

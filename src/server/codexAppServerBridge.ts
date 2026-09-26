@@ -4407,7 +4407,7 @@ async function withPreservedUntrackedFilesForGitTarget(repoRoot: string, targetR
   }
 }
 
-async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchName: string): Promise<void> {
+async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchName: string, policy: ServerSecurityPolicy): Promise<void> {
   await withPreservedUntrackedFilesForGitTarget(repoRoot, branchName, async () => {
     try {
       await runCommand('git', ['checkout', branchName], { cwd: repoRoot })
@@ -4416,7 +4416,9 @@ async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchNam
       if (!blockingWorktreePath) {
         throw checkoutError
       }
-      await runCommand('git', ['checkout', '--detach'], { cwd: blockingWorktreePath })
+      const allowedWorktree = await policy.resolveLocalPath(blockingWorktreePath)
+      if (!allowedWorktree) throw Object.assign(new Error('Blocking worktree is outside the allowed roots'), { statusCode: 403 })
+      await runCommand('git', ['checkout', '--detach'], { cwd: allowedWorktree })
       await runCommand('git', ['checkout', branchName], { cwd: repoRoot })
     }
   })
@@ -4481,7 +4483,7 @@ function extractBranchLockedWorktreePath(error: unknown, branchName: string): st
   const message = getErrorMessage(error, '')
   if (!message || !branchName) return ''
   const escapedBranch = branchName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  const pattern = new RegExp(`'${escapedBranch}' is already checked out at '([^']+)'`, 'u')
+  const pattern = new RegExp(`'${escapedBranch}' is already (?:checked out at|used by worktree at) '([^']+)'`, 'u')
   const match = pattern.exec(message)
   return match?.[1]?.trim() ?? ''
 }
@@ -8934,10 +8936,10 @@ export function createCodexBridgeMiddleware(options: {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await assertNoTrackedGitChanges(gitRoot)
           await assertLocalGitBranch(gitRoot, targetBranch)
-          await checkoutGitBranchWithWorktreeRecovery(gitRoot, targetBranch)
+          await checkoutGitBranchWithWorktreeRecovery(gitRoot, targetBranch, securityPolicy)
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to switch branch') })
+          setJson(res, asRecord(error)?.statusCode === 403 ? 403 : 500, { error: getErrorMessage(error, 'Failed to switch branch') })
         }
         return
       }
@@ -9111,9 +9113,9 @@ export function createCodexBridgeMiddleware(options: {
           await assertLocalGitBranch(gitRoot, branch)
           const currentBranch = (await runCommandCapture('git', ['branch', '--show-current'], { cwd: gitRoot })).trim()
           if (currentBranch && currentBranch !== branch) {
-            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch)
+            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch, securityPolicy)
           } else if (!currentBranch) {
-            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch)
+            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch, securityPolicy)
           }
           const previousTip = await runCommandCapture('git', ['rev-parse', 'HEAD'], { cwd: gitRoot })
           const targetSha = await runCommandCapture('git', ['rev-parse', '--verify', `${sha}^{commit}`], { cwd: gitRoot })
@@ -9124,7 +9126,7 @@ export function createCodexBridgeMiddleware(options: {
           })
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
+          setJson(res, asRecord(error)?.statusCode === 403 ? 403 : 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
         }
         return
       }
