@@ -3608,3 +3608,13 @@ describe('atomic queue edits', () => {
     expect(gatewayMocks.mutateThreadQueue).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('turn completion ownership', () => {
+  it('does not let an older main turn completion stop a newer active turn', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'new-turn' } } })
+    emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'old-turn', status: 'completed' } } })
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+  })
+
+})

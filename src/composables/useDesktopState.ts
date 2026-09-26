@@ -4768,11 +4768,11 @@ export function useDesktopState() {
       completedThreadModelId !== MODEL_FALLBACK_ID &&
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
     if (completedTurn) {
+      const activeTurnId = activeTurnIdByThreadId.value[completedTurn.threadId]
+      if (activeTurnId && activeTurnId !== completedTurn.turnId) return
       if (isKnownSideConversationThread(completedTurn.threadId)) {
         if (sideConversationCompletedTurnIds.has(completedTurn.turnId)) return
         sideConversationCompletedTurnIds.add(completedTurn.turnId)
-        const activeTurnId = activeTurnIdByThreadId.value[completedTurn.threadId]
-        if (activeTurnId && activeTurnId !== completedTurn.turnId) return
         sideConversationTurnIds.add(completedTurn.turnId)
       }
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
