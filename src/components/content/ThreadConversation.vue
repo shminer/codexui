@@ -978,7 +978,8 @@ import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerReques
 import { updateThreadFileChanges } from '../../api/codexGateway'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
-import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
+import { copyTextToClipboard } from '../../utils/clipboard'
+import { createMessageCopyController, isCopyableUserMessage } from './messageCopyController'
 import {
   clampThreadRenderWindowStart,
   earlierThreadRenderWindowStart,
@@ -1397,8 +1398,11 @@ const emit = defineEmits<{
 const conversationListRef = ref<HTMLElement | null>(null)
 const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
-const copiedResponseAnchorId = ref('')
-const expandedUserMessageId = ref('')
+const messageCopy = createMessageCopyController({
+  getThreadId: () => props.activeThreadId,
+  getResponseText: (messageId) => copyableResponseContentByAnchorId.value[messageId],
+})
+const { expandedUserMessageId, copiedMessageId: copiedResponseAnchorId, toggleUserMessageCopy, onUserMessageTextClick, showCopyMessageButton, copyMessage } = messageCopy
 const fileChangeActionState = ref<Record<string, 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone'>>({})
 const fileChangeActionError = ref<Record<string, string>>({})
 const fileChangeRedoPatchIds = ref<Record<string, string[]>>({})
@@ -1434,7 +1438,6 @@ type InlineSegment =
 let conversationScrollFrame = 0
 let bottomLockFrame = 0
 let bottomLockFramesLeft = 0
-let copiedMessageResetTimer: ReturnType<typeof setTimeout> | null = null
 let conversationScrollPromise: Promise<void> | null = null
 const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const highlightJsModule = ref<HighlightJsModule | null>(null)
@@ -1910,26 +1913,6 @@ const forkableTurnIdByAnchorId = computed<Record<string, string>>(() => {
   }
   return next
 })
-
-function isCopyableUserMessage(message: UiMessage): boolean {
-  return message.role === 'user' && message.text.trim().length > 0
-}
-
-function toggleUserMessageCopy(message: UiMessage): void {
-  if (!isCopyableUserMessage(message)) return
-  expandedUserMessageId.value = expandedUserMessageId.value === message.id ? '' : message.id
-}
-
-function onUserMessageTextClick(message: UiMessage, event: MouseEvent): void {
-  if (event.target instanceof Element && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
-  if (window.getSelection()?.isCollapsed === false) return
-  toggleUserMessageCopy(message)
-}
-
-function showCopyMessageButton(message: UiMessage): boolean {
-  if (message.role === 'user') return isCopyableUserMessage(message) && expandedUserMessageId.value === message.id
-  return typeof copyableResponseContentByAnchorId.value[message.id] === 'string'
-}
 
 function showForkResponseButton(message: UiMessage): boolean {
   return !props.readonly && typeof forkableTurnIdByAnchorId.value[message.id] === 'string'
@@ -2418,39 +2401,6 @@ function diffViewerMarker(line: DiffViewerLine): string {
   if (line.kind === 'remove') return '-'
   if (line.kind === 'hunk') return '@@'
   return ''
-}
-
-async function copyMessage(message: UiMessage): Promise<void> {
-  const anchorMessageId = message.id
-  const threadIdAtStart = props.activeThreadId
-  const content = message.role === 'user' ? message.text : copyableResponseContentByAnchorId.value[anchorMessageId] ?? ''
-  if (!content) return
-  if (message.role === 'user') copiedResponseAnchorId.value = ''
-
-  let copied = false
-  try {
-    await copyTextToClipboard(content)
-    copied = true
-  } catch {
-    copied = false
-  }
-
-  if (!copied) {
-    copied = copyTextWithSelectionFallback(content)
-  }
-
-  if (!copied || props.activeThreadId !== threadIdAtStart) return
-
-  copiedResponseAnchorId.value = anchorMessageId
-  if (copiedMessageResetTimer) {
-    clearTimeout(copiedMessageResetTimer)
-  }
-  copiedMessageResetTimer = setTimeout(() => {
-    if (copiedResponseAnchorId.value === anchorMessageId) {
-      copiedResponseAnchorId.value = ''
-    }
-    copiedMessageResetTimer = null
-  }, 1800)
 }
 
 function forkResponse(anchorMessageId: string): void {
@@ -4506,12 +4456,7 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
-    expandedUserMessageId.value = ''
-    copiedResponseAnchorId.value = ''
-    if (copiedMessageResetTimer) {
-      clearTimeout(copiedMessageResetTimer)
-      copiedMessageResetTimer = null
-    }
+    messageCopy.reset()
     autoFollowOutput.value = true
     modalImageUrl.value = ''
     isLoadingMore.value = false
@@ -4575,10 +4520,7 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(bottomLockFrame)
     bottomLockFrame = 0
   }
-  if (copiedMessageResetTimer) {
-    clearTimeout(copiedMessageResetTimer)
-    copiedMessageResetTimer = null
-  }
+  messageCopy.reset()
   window.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
   window.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
   window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
