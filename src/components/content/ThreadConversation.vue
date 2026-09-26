@@ -20,8 +20,23 @@
           {{ isLoadingMore || isLoadingPersistedAbove ? 'Loading…' : 'Load earlier messages' }}
         </button>
       </li>
-      <template v-for="message in visibleMessages" :key="message.id">
+      <template v-for="message in visibleTimeline" :key="message?.id ?? 'live-overlay'">
+      <li v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay">
+        <div class="message-row">
+          <div class="message-stack">
+            <article class="live-overlay-inline" aria-live="polite">
+              <p class="live-overlay-label">{{ liveOverlay.activityLabel }}</p>
+              <p v-if="liveOverlay.reasoningText" class="live-overlay-reasoning">{{ liveOverlay.reasoningText }}</p>
+              <div v-if="liveOverlay.errorText" class="live-overlay-error">
+                <span>{{ liveOverlay.errorText }}</span>
+                <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
+              </div>
+            </article>
+          </div>
+        </div>
+      </li>
       <li
+        v-else-if="message"
         class="conversation-item"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
@@ -776,20 +791,6 @@
         </div>
       </li>
       </template>
-      <li v-if="liveOverlay" class="conversation-item conversation-item-overlay">
-        <div class="message-row">
-          <div class="message-stack">
-            <article class="live-overlay-inline" aria-live="polite">
-              <p class="live-overlay-label">{{ liveOverlay.activityLabel }}</p>
-              <p v-if="liveOverlay.reasoningText" class="live-overlay-reasoning">{{ liveOverlay.reasoningText }}</p>
-              <div v-if="liveOverlay.errorText" class="live-overlay-error">
-                <span>{{ liveOverlay.errorText }}</span>
-                <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
-              </div>
-            </article>
-          </div>
-        </div>
-      </li>
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
     </ul>
 
@@ -2049,6 +2050,13 @@ const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderableMessages.value.length,
 ))
 const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value))
+const visibleTimeline = computed<Array<UiMessage | null>>(() => {
+  const rows: Array<UiMessage | null> = [...visibleMessages.value]
+  if (!props.liveOverlay) return rows
+  const steeringIndex = rows.findIndex((message) => message?.messageType === 'userMessage.optimistic.steer' || message?.messageType === 'userMessage.steer')
+  rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, null)
+  return rows
+})
 const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {

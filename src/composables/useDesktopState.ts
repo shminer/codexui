@@ -746,8 +746,17 @@ function areMessageArraysEqual(first: UiMessage[], second: UiMessage[]): boolean
 function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
-  options: { preserveMissing?: boolean } = {},
+  options: { preserveMissing?: boolean; preserveSteering?: boolean } = {},
 ): UiMessage[] {
+  if (options.preserveSteering) {
+    const steering = previous.filter((message) => message.messageType === 'userMessage.optimistic.steer' || message.messageType === 'userMessage.steer')
+    incoming = incoming.map((message) => steering.some((previousMessage) => (
+      previousMessage.id === message.id
+      || (isOptimisticUserMessage(previousMessage)
+        && (!previousMessage.turnId || previousMessage.turnId === message.turnId)
+        && hasEquivalentUserMessage(previousMessage, [message]))
+    )) ? { ...message, messageType: 'userMessage.steer' } : message)
+  }
   const previousById = new Map(previous.map((message) => [message.id, message]))
   const incomingById = new Map(incoming.map((message) => [message.id, message]))
 
@@ -809,7 +818,7 @@ function normalizeMessageText(value: string): string {
 }
 
 function isOptimisticUserMessage(message: UiMessage): boolean {
-  return message.messageType === 'userMessage.optimistic'
+  return message.messageType === 'userMessage.optimistic' || message.messageType === 'userMessage.optimistic.steer'
 }
 
 function hasOptimisticUserMessages(messages: UiMessage[]): boolean {
@@ -1666,17 +1675,19 @@ export function useDesktopState() {
   const activeAccountStorageId = ref(DEFAULT_ACCOUNT_STORAGE_ID)
   const sideConversationParentThreadId = ref('')
   const sideConversationThreadId = ref('')
+  const sideConversationQueuedMessages = ref<QueuedMessage[]>([])
   const isSideConversationVisible = ref(false)
-  const sideConversationDraft = ref('')
   const sideConversationError = ref('')
   const isSideConversationOpening = ref(false)
   const sideConversationModelId = ref('')
   const sideConversationReasoningEffort = ref<ReasoningEffort | ''>('')
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   let sideConversationTurnStartPromise: Promise<string> | null = null
+  const sideConversationPendingTurnStarts = new Set<Promise<string>>()
   let sideConversationEpoch = 0
   let sideConversationFirstTurnIndex = 0
   const sideConversationTurnIds = new Set<string>()
+  const sideConversationCompletedTurnIds = new Set<string>()
   const discardedSideConversationThreadIds = new Set<string>()
 
   const threadTitleById = ref<Record<string, string>>({})
@@ -2120,7 +2131,12 @@ export function useDesktopState() {
   }
   const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
   const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
-  const sideConversationMessages = computed<UiMessage[]>(() => getMessagesForThread(sideConversationThreadId.value))
+  const sideConversationMessages = computed<UiMessage[]>(() => {
+    const all = getMessagesForThread(sideConversationThreadId.value)
+    const isSteering = (message: UiMessage) => message.messageType === 'userMessage.optimistic.steer' || message.messageType === 'userMessage.steer'
+    const steering = all.filter(isSteering)
+    return steering.length ? [...all.filter((message) => !isSteering(message)), ...steering] : all
+  })
   const sideConversationLiveOverlay = computed<UiLiveOverlay | null>(() => (
     getLiveOverlayForThread(sideConversationThreadId.value)
   ))
@@ -2284,6 +2300,7 @@ export function useDesktopState() {
   function setThreadModelId(threadId: string, modelId: string, options: { force?: boolean } = {}): void {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
+    if (isKnownSideConversationThread(normalizedThreadId)) return
 
     const normalizedModelId = modelId.trim()
     const existingModelId = normalizeStoredModelId(selectedModelIdByContext.value[normalizedThreadId])
@@ -3083,7 +3100,7 @@ export function useDesktopState() {
       }
       const saved = savedTurnSummariesByThreadId.value[threadId] ?? []
       const index = saved.findIndex((entry) => entry.turnId === summary.turnId)
-      if (persist || index >= 0) {
+      if (!isKnownSideConversationThread(threadId) && (persist || index >= 0)) {
         const next = [...saved]
         if (index >= 0) next[index] = summary
         else next.push(summary)
@@ -3110,6 +3127,14 @@ export function useDesktopState() {
         [threadId]: true,
       }
     } else {
+      if (isKnownSideConversationThread(threadId)) {
+        const messages = persistedMessagesByThreadId.value[threadId] ?? []
+        setPersistedMessagesForThread(threadId, messages.map((message) => {
+          if (message.messageType === 'userMessage.optimistic.steer') return { ...message, messageType: 'userMessage.optimistic' }
+          if (message.messageType === 'userMessage.steer') return { ...message, messageType: 'userMessage' }
+          return message
+        }))
+      }
       inProgressById.value = omitKey(inProgressById.value, threadId)
       clearCompletedTurnLiveState(threadId)
       clearInterruptPersistenceGate(threadId)
@@ -3317,6 +3342,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    isSteer = false,
   ): void {
     const existing = persistedMessagesByThreadId.value[threadId] ?? []
     const nextMessage: UiMessage = {
@@ -3327,7 +3353,8 @@ export function useDesktopState() {
       skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
       fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
       createdAtIso: new Date().toISOString(),
-      messageType: 'userMessage.optimistic',
+      messageType: isSteer ? 'userMessage.optimistic.steer' : 'userMessage.optimistic',
+      turnId: isSteer ? activeTurnIdByThreadId.value[threadId] : undefined,
     }
     setPersistedMessagesForThread(threadId, [...existing, nextMessage])
   }
@@ -4734,6 +4761,10 @@ export function useDesktopState() {
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
     if (completedTurn) {
       if (isKnownSideConversationThread(completedTurn.threadId)) {
+        if (sideConversationCompletedTurnIds.has(completedTurn.turnId)) return
+        sideConversationCompletedTurnIds.add(completedTurn.turnId)
+        const activeTurnId = activeTurnIdByThreadId.value[completedTurn.threadId]
+        if (activeTurnId && activeTurnId !== completedTurn.turnId) return
         sideConversationTurnIds.add(completedTurn.turnId)
       }
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
@@ -4788,7 +4819,14 @@ export function useDesktopState() {
       }
       if (!shouldRetryWithFallback) {
         clearPendingTurnRequest(completedTurn.threadId)
-        if (!isSideConversationTurn) {
+        if (isSideConversationTurn) {
+          const [next, ...remaining] = sideConversationQueuedMessages.value
+          if (next && completedTurn.status === 'completed') {
+            sideConversationQueuedMessages.value = remaining
+            sideConversationCollaborationMode.value = next.collaborationMode
+            void sendSideConversationMessage(next.text, next.imageUrls, next.skills, 'steer', next.fileAttachments)
+          }
+        } else {
           scheduleQueueStateRefresh(completedTurn.threadId)
         }
       }
@@ -5185,6 +5223,7 @@ export function useDesktopState() {
       mergedWithInProgress,
     )
     const activeThreadIds = new Set(flattenThreads(sourceGroups.value).map((thread) => thread.id))
+    if (sideConversationThreadId.value) activeThreadIds.add(sideConversationThreadId.value)
     syncNonSuccessCompletionReadWatermarks(orderedGroups, activeThreadIds)
     inProgressById.value = pruneThreadStateMap(
       inProgressById.value,
@@ -5521,6 +5560,7 @@ export function useDesktopState() {
         : previousPersisted
       const mergedMessages = mergeMessages(previousToMerge, nextMessages, {
         preserveMissing: olderLoadedDuringResume || options.silent === true || hasOptimisticUserMessages(previousPersisted),
+        preserveSteering: isSideConversation && serverInProgress,
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
 
@@ -6039,8 +6079,16 @@ export function useDesktopState() {
     removePendingServerRequestById(request.id)
   }
 
-  function setSideConversationDraft(value: string): void {
-    sideConversationDraft.value = value
+  function setSideConversationModel(modelId: string): void {
+    sideConversationModelId.value = modelId
+  }
+
+  function setSideConversationReasoningEffort(effort: ReasoningEffort | ''): void {
+    sideConversationReasoningEffort.value = effort
+  }
+
+  function setSideConversationCollaborationMode(mode: CollaborationModeKind): void {
+    sideConversationCollaborationMode.value = mode
   }
 
   function hideSideConversation(): void {
@@ -6056,15 +6104,17 @@ export function useDesktopState() {
     }
     sideConversationParentThreadId.value = ''
     sideConversationThreadId.value = ''
+    sideConversationQueuedMessages.value = []
     isSideConversationVisible.value = false
-    sideConversationDraft.value = ''
     sideConversationError.value = ''
     sideConversationModelId.value = ''
     sideConversationReasoningEffort.value = ''
     sideConversationCollaborationMode.value = 'default'
     sideConversationTurnStartPromise = null
+    sideConversationPendingTurnStarts.clear()
     sideConversationFirstTurnIndex = 0
     sideConversationTurnIds.clear()
+    sideConversationCompletedTurnIds.clear()
     isSideConversationOpening.value = false
   }
 
@@ -6155,32 +6205,61 @@ export function useDesktopState() {
     }
   }
 
-  async function sendSideConversationMessage(text: string): Promise<void> {
+  async function sendSideConversationMessage(
+    text: string,
+    imageUrls: string[] = [],
+    skills: Array<{ name: string; path: string }> = [],
+    mode: 'steer' | 'queue' = 'steer',
+    fileAttachments: FileAttachment[] = [],
+    queueInsertIndex?: number,
+  ): Promise<void> {
     const threadId = sideConversationThreadId.value
+    const sendEpoch = sideConversationEpoch
     const nextText = text.trim()
-    if (!threadId || !nextText) return
+    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
 
-    appendOptimisticUserMessage(threadId, nextText)
+    if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) return
+    if (sendEpoch !== sideConversationEpoch || sideConversationThreadId.value !== threadId) return
+    const isInProgress = inProgressById.value[threadId] === true
+    if (isInProgress && mode === 'queue') {
+      const queue = sideConversationQueuedMessages.value
+      const nextQueue = [...queue]
+      nextQueue.splice(queueInsertIndex === undefined ? queue.length : Math.max(0, Math.min(queueInsertIndex, queue.length)), 0, {
+        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: nextText,
+        imageUrls,
+        skills,
+        fileAttachments,
+        collaborationMode: sideConversationCollaborationMode.value,
+      })
+      sideConversationQueuedMessages.value = nextQueue
+      return
+    }
+
+    appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, isInProgress)
     sideConversationError.value = ''
-    setTurnSummaryForThread(threadId, null)
-    setTurnActivityForThread(threadId, { label: 'Thinking', details: [] })
-    setTurnErrorForThread(threadId, null)
-    setThreadInProgress(threadId, true)
+    if (!isInProgress) {
+      setTurnSummaryForThread(threadId, null)
+      setTurnActivityForThread(threadId, { label: 'Thinking', details: [] })
+      setTurnErrorForThread(threadId, null)
+      setThreadInProgress(threadId, true)
+    }
 
     const turnStartPromise = startThreadTurn(
       threadId,
       nextText,
-      [],
+      imageUrls,
       sideConversationModelId.value || undefined,
       sideConversationReasoningEffort.value || undefined,
-      undefined,
-      [],
+      skills.length > 0 ? skills : undefined,
+      fileAttachments,
       sideConversationCollaborationMode.value,
     )
     sideConversationTurnStartPromise = turnStartPromise
+    sideConversationPendingTurnStarts.add(turnStartPromise)
     try {
       const turnId = await turnStartPromise
-      if (turnId && sideConversationThreadId.value === threadId) {
+      if (turnId && sideConversationThreadId.value === threadId && sideConversationTurnStartPromise === turnStartPromise && !sideConversationCompletedTurnIds.has(turnId)) {
         sideConversationTurnIds.add(turnId)
         rememberObservedTurnStart(threadId, turnId)
         activeTurnIdByThreadId.value = {
@@ -6189,30 +6268,49 @@ export function useDesktopState() {
         }
       }
     } catch (unknownError) {
-      if (sideConversationThreadId.value === threadId) {
-        setThreadInProgress(threadId, false)
-        setTurnActivityForThread(threadId, null)
+      if (sideConversationThreadId.value === threadId && sideConversationTurnStartPromise === turnStartPromise) {
+        if (!isInProgress) {
+          setThreadInProgress(threadId, false)
+          setTurnActivityForThread(threadId, null)
+        }
         sideConversationError.value = unknownError instanceof Error
           ? unknownError.message
           : 'Failed to send side conversation message'
       }
     } finally {
+      sideConversationPendingTurnStarts.delete(turnStartPromise)
       if (sideConversationTurnStartPromise === turnStartPromise) {
         sideConversationTurnStartPromise = null
       }
     }
   }
 
+  function removeSideConversationQueuedMessage(messageId: string): void {
+    sideConversationQueuedMessages.value = sideConversationQueuedMessages.value.filter((item) => item.id !== messageId)
+  }
+
+  function reorderSideConversationQueuedMessage(draggedId: string, targetId: string): void {
+    const queue = [...sideConversationQueuedMessages.value]
+    const from = queue.findIndex((item) => item.id === draggedId)
+    const to = queue.findIndex((item) => item.id === targetId)
+    if (from < 0 || to < 0 || from === to) return
+    queue.splice(to, 0, queue.splice(from, 1)[0])
+    sideConversationQueuedMessages.value = queue
+  }
+
+  function steerSideConversationQueuedMessage(messageId: string): void {
+    const message = sideConversationQueuedMessages.value.find((item) => item.id === messageId)
+    if (!message) return
+    removeSideConversationQueuedMessage(messageId)
+    sideConversationCollaborationMode.value = message.collaborationMode
+    void sendSideConversationMessage(message.text, message.imageUrls, message.skills, 'steer', message.fileAttachments)
+  }
+
   async function interruptSideConversationTurn(): Promise<void> {
     const threadId = sideConversationThreadId.value
     if (!threadId || !isSideConversationInProgress.value) return
-    if (sideConversationTurnStartPromise) {
-      try {
-        await sideConversationTurnStartPromise
-      } catch {
-        return
-      }
-    }
+    await Promise.allSettled([...sideConversationPendingTurnStarts])
+    if (sideConversationThreadId.value !== threadId) return
     const turnId = activeTurnIdByThreadId.value[threadId]
     if (!turnId) return
     try {
@@ -6231,7 +6329,7 @@ export function useDesktopState() {
 
     sideConversationEpoch += 1
     const threadId = sideConversationThreadId.value
-    const turnStartPromise = sideConversationTurnStartPromise
+    const turnStartPromises = [...sideConversationPendingTurnStarts]
     let turnId = isSideConversationInProgress.value
       ? activeTurnIdByThreadId.value[threadId]
       : ''
@@ -6241,12 +6339,9 @@ export function useDesktopState() {
 
     void (async () => {
       await Promise.allSettled(pendingRequests.map(rejectSideConversationServerRequest))
-      if (turnStartPromise) {
-        try {
-          turnId = (await turnStartPromise) || turnId
-        } catch {
-          // The failed turn start has no running turn to interrupt.
-        }
+      const starts = await Promise.allSettled(turnStartPromises)
+      for (const start of starts) {
+        if (start.status === 'fulfilled' && start.value) turnId = start.value
       }
       await discardSideConversationThreadInBackground(threadId, turnId)
     })()
@@ -7194,6 +7289,7 @@ export function useDesktopState() {
     sideConversationParentThreadId,
     sideConversationThreadId,
     sideConversationMessages,
+    sideConversationQueuedMessages,
     sideConversationLiveOverlay,
     sideConversationServerRequests,
     sideConversationError,
@@ -7201,7 +7297,9 @@ export function useDesktopState() {
     isSideConversationVisible,
     isSideConversationOpening,
     isSideConversationInProgress,
-    sideConversationDraft,
+    sideConversationModelId,
+    sideConversationReasoningEffort,
+    sideConversationCollaborationMode,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,
@@ -7246,8 +7344,13 @@ export function useDesktopState() {
     openSideConversation,
     hideSideConversation,
     endSideConversation,
-    setSideConversationDraft,
+    setSideConversationModel,
+    setSideConversationReasoningEffort,
+    setSideConversationCollaborationMode,
     sendSideConversationMessage,
+    removeSideConversationQueuedMessage,
+    reorderSideConversationQueuedMessage,
+    steerSideConversationQueuedMessage,
     interruptSideConversationTurn,
     discardSideConversationInBackground,
     discardSideConversationOnPageHide,

@@ -329,24 +329,31 @@
   @apply text-zinc-400;
 }
 
-:root.dark .side-conversation-input {
-  @apply border-zinc-700 bg-zinc-800 text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-500 disabled:bg-zinc-800;
-}
-
-:root.dark .side-conversation-action--send {
-  @apply bg-zinc-100 text-zinc-900 hover:bg-white disabled:bg-zinc-700 disabled:text-zinc-500;
-}
-
-:root.dark .side-conversation-action--stop {
-  @apply bg-zinc-700 text-zinc-200 hover:bg-zinc-600;
-}
-
 :root.dark .side-conversation-error {
   @apply border-amber-900/70 bg-amber-950/50 text-amber-200;
 }
 
 :root.dark .side-conversation-handle {
   @apply bg-zinc-600;
+}
+
+:root.dark .queued-messages-inner {
+  @apply border-zinc-700 bg-zinc-800;
+}
+
+:root.dark .queued-row-text {
+  @apply text-zinc-200;
+}
+
+:root.dark .queued-row.is-drop-target,
+:root.dark .queued-row-drag:hover,
+:root.dark .queued-row-delete:hover {
+  @apply bg-zinc-700;
+}
+
+:root.dark .queued-row-steer,
+:root.dark .queued-row-edit {
+  @apply border-zinc-600 bg-zinc-900 text-zinc-200 hover:bg-zinc-700;
 }
 
 :root.dark .thread-composer-stop {

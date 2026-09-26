@@ -383,6 +383,7 @@
         </div>
 
         <ComposerDropdown
+            :owner-document="ownerDocument"
             class="thread-composer-control"
             :model-value="selectedModel"
             :options="modelOptions"
@@ -396,6 +397,7 @@
         />
 
         <ComposerSearchDropdown
+          :owner-document="ownerDocument"
             class="thread-composer-control"
             :options="skillDropdownOptions"
             :selected-values="selectedSkillPaths"
@@ -412,6 +414,7 @@
         />
 
         <ComposerDropdown
+            :owner-document="ownerDocument"
             class="thread-composer-control"
             :model-value="selectedReasoningEffort"
             :options="reasoningOptions"
@@ -423,6 +426,7 @@
 
         <div class="thread-composer-actions">
           <button
+            v-if="allowSideConversation !== false"
             class="thread-composer-side"
             :class="{ 'thread-composer-side--active': sideConversationOpen }"
             type="button"
@@ -539,6 +543,10 @@ type SkillItem = { name: string; displayName?: string; description: string; path
 
 const props = defineProps<{
   activeThreadId: string
+  ownerDocument?: Document
+  persistDraft?: boolean
+  allowGoal?: boolean
+  allowSideConversation?: boolean
   cwd?: string
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
@@ -780,7 +788,7 @@ const speedModeDescription = computed(() => {
     : t('Default speed with normal credit usage')
 })
 const goalAvailable = computed(() => (
-  Boolean(props.activeThreadId.trim()) && props.activeThreadId !== '__new-thread__'
+  props.allowGoal !== false && Boolean(props.activeThreadId.trim()) && props.activeThreadId !== '__new-thread__'
 ))
 const goalCanResume = computed(() => (
   props.goal?.status === 'paused' || props.goal?.status === 'blocked' || props.goal?.status === 'usageLimited'
@@ -1135,7 +1143,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
     mode,
   })
-  clearPersistedDraftForThread(props.activeThreadId)
+  if (props.persistDraft !== false) clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
   isComposerExpanded.value = false
   folderUploadGroups.value = []
@@ -1984,10 +1992,6 @@ function onDocumentClick(event: MouseEvent): void {
 }
 
 onMounted(() => {
-  document.addEventListener('click', onDocumentClick)
-  window.addEventListener('drop', onWindowDragCleanup)
-  window.addEventListener('dragend', onWindowDragCleanup)
-  window.addEventListener('blur', onWindowDragCleanup)
   void reloadPrompts()
   queueComposerOverflowMeasurement()
 })
@@ -1999,24 +2003,34 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', onDocumentClick)
-  window.removeEventListener('drop', onWindowDragCleanup)
-  window.removeEventListener('dragend', onWindowDragCleanup)
-  window.removeEventListener('blur', onWindowDragCleanup)
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
   stopGoalClock()
 })
 
+watch(() => props.ownerDocument ?? document, (owner, _previous, onCleanup) => {
+  const ownerWindow = owner.defaultView
+  owner.addEventListener('click', onDocumentClick)
+  ownerWindow?.addEventListener('drop', onWindowDragCleanup)
+  ownerWindow?.addEventListener('dragend', onWindowDragCleanup)
+  ownerWindow?.addEventListener('blur', onWindowDragCleanup)
+  onCleanup(() => {
+    owner.removeEventListener('click', onDocumentClick)
+    ownerWindow?.removeEventListener('drop', onWindowDragCleanup)
+    ownerWindow?.removeEventListener('dragend', onWindowDragCleanup)
+    ownerWindow?.removeEventListener('blur', onWindowDragCleanup)
+  })
+}, { immediate: true })
+
 watch(
   () => props.activeThreadId,
   (nextThreadId) => {
-    if (lastActiveThreadId) {
+    if (lastActiveThreadId && props.persistDraft !== false) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }
     clearDraftState()
-    const restored = loadPersistedDraftForThread(nextThreadId)
+    const restored = props.persistDraft === false ? null : loadPersistedDraftForThread(nextThreadId)
     if (restored) {
       replaceDraftState(restored)
       onInputChange()
@@ -2031,7 +2045,7 @@ watch(
 )
 
 watch([draft, selectedImages, fileAttachments, selectedSkills], () => {
-  if (!lastActiveThreadId) return
+  if (!lastActiveThreadId || props.persistDraft === false) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
 

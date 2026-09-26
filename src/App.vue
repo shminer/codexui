@@ -1061,6 +1061,7 @@
   </DesktopLayout>
   <ThreadSideConversation
     v-if="isSideConversationOpen"
+    ref="sideConversationRef"
     :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
     :cwd="composerCwd"
@@ -1070,13 +1071,29 @@
     :error="sideConversationError"
     :is-opening="isSideConversationOpening"
     :is-turn-in-progress="isSideConversationInProgress"
+    :collaboration-modes="availableCollaborationModes"
+    :selected-collaboration-mode="sideConversationCollaborationMode"
+    :models="availableModelIds"
+    :selected-model="sideConversationModelId"
+    :supported-reasoning-efforts="availableModelReasoningEfforts[sideConversationModelId] ?? []"
+    :selected-reasoning-effort="sideConversationReasoningEffort"
+    :selected-speed-mode="selectedSpeedMode"
+    :skills="installedSkills"
+    :queued-messages="sideConversationQueuedMessages"
+    :in-progress-submit-mode="inProgressSendMode"
     :send-with-enter="sendWithEnter"
-    :draft="sideConversationDraft"
     @minimize="hideSideConversation"
     @end="endSideConversation"
-    @update:draft="setSideConversationDraft"
-    @send="sendSideConversationMessage"
+    @update:selected-collaboration-mode="setSideConversationCollaborationMode"
+    @update:selected-model="setSideConversationModel"
+    @update:selected-reasoning-effort="setSideConversationReasoningEffort"
+    @update:selected-speed-mode="onSelectSpeedMode"
+    @send="onSubmitSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
+    @edit-queued-message="onEditSideConversationQueuedMessage"
+    @steer-queued-message="steerSideConversationQueuedMessage"
+    @remove-queued-message="removeSideConversationQueuedMessage"
+    @reorder-queued-message="onReorderSideConversationQueuedMessage"
     @respond-server-request="onRespondSideConversationServerRequest"
   />
   <div v-if="projectZipExportStatus.phase !== 'idle'" class="project-zip-modal-backdrop" role="presentation">
@@ -1345,6 +1362,7 @@ const {
   selectedLiveOverlay,
   sideConversationThreadId,
   sideConversationMessages,
+  sideConversationQueuedMessages,
   sideConversationLiveOverlay,
   sideConversationServerRequests,
   sideConversationError,
@@ -1352,7 +1370,9 @@ const {
   isSideConversationVisible,
   isSideConversationOpening,
   isSideConversationInProgress,
-  sideConversationDraft,
+  sideConversationModelId,
+  sideConversationReasoningEffort,
+  sideConversationCollaborationMode,
   getLiveOverlayForThread,
   codexQuota,
   selectedThreadId,
@@ -1393,8 +1413,13 @@ const {
   openSideConversation,
   hideSideConversation,
   endSideConversation,
-  setSideConversationDraft,
+  setSideConversationModel,
+  setSideConversationReasoningEffort,
+  setSideConversationCollaborationMode,
   sendSideConversationMessage,
+  removeSideConversationQueuedMessage,
+  reorderSideConversationQueuedMessage,
+  steerSideConversationQueuedMessage,
   interruptSideConversationTurn,
   discardSideConversationInBackground,
   discardSideConversationOnPageHide,
@@ -1459,6 +1484,8 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
+const editingSideConversationQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
 const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -3048,6 +3075,35 @@ function onRespondSideConversationServerRequest(payload: UiServerRequestReply): 
       void sendSideConversationMessage(followUpMessageText)
     }
   })
+}
+
+function onSubmitSideConversationMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
+  const editing = editingSideConversationQueuedMessageState.value
+  editingSideConversationQueuedMessageState.value = null
+  const queueIndex = payload.mode === 'queue' && editing?.threadId === sideConversationThreadId.value
+    ? editing.queueIndex
+    : undefined
+  void sendSideConversationMessage(payload.text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueIndex)
+}
+
+function onEditSideConversationQueuedMessage(messageId: string): void {
+  const queueIndex = sideConversationQueuedMessages.value.findIndex((item) => item.id === messageId)
+  const message = sideConversationQueuedMessages.value[queueIndex]
+  const composer = sideConversationRef.value
+  if (!message || !composer) return
+  if (composer.hasUnsavedDraft() && !window.confirm('Replace the current draft with this queued message for editing?')) return
+  editingSideConversationQueuedMessageState.value = { threadId: sideConversationThreadId.value, queueIndex }
+  composer.hydrateDraft({
+    text: message.text,
+    imageUrls: [...message.imageUrls],
+    fileAttachments: message.fileAttachments.map((file) => ({ ...file })),
+    skills: message.skills.map((skill) => ({ ...skill })),
+  })
+  removeSideConversationQueuedMessage(messageId)
+}
+
+function onReorderSideConversationQueuedMessage(payload: { draggedId: string; targetId: string }): void {
+  reorderSideConversationQueuedMessage(payload.draggedId, payload.targetId)
 }
 
 async function handleServerRequestResponse(payload: UiServerRequestReply): Promise<void> {

@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 
 type DropdownOption = {
@@ -67,6 +67,7 @@ type DropdownOption = {
 
 const props = defineProps<{
   modelValue: string
+  ownerDocument?: Document
   options: DropdownOption[]
   placeholder?: string
   disabled?: boolean
@@ -128,8 +129,9 @@ function updateMenuPosition(): void {
   if (!root || typeof window === 'undefined') return
 
   const rect = root.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
+  const ownerWindow = root.ownerDocument.defaultView ?? window
+  const viewportWidth = ownerWindow.innerWidth
+  const viewportHeight = ownerWindow.innerHeight
   const viewportPadding = 8
   const gap = 8
   const maxMenuWidth = Math.max(0, viewportWidth - viewportPadding * 2)
@@ -160,15 +162,17 @@ function updateMenuPosition(): void {
 
 function addLayoutListeners(): void {
   if (isLayoutListenerAttached || typeof window === 'undefined') return
-  window.addEventListener('resize', updateMenuPosition)
-  window.addEventListener('scroll', updateMenuPosition, true)
+  layoutWindow = props.ownerDocument?.defaultView ?? window
+  layoutWindow.addEventListener('resize', updateMenuPosition)
+  layoutWindow.addEventListener('scroll', updateMenuPosition, true)
   isLayoutListenerAttached = true
 }
 
 function removeLayoutListeners(): void {
   if (!isLayoutListenerAttached || typeof window === 'undefined') return
-  window.removeEventListener('resize', updateMenuPosition)
-  window.removeEventListener('scroll', updateMenuPosition, true)
+  layoutWindow?.removeEventListener('resize', updateMenuPosition)
+  layoutWindow?.removeEventListener('scroll', updateMenuPosition, true)
+  layoutWindow = null
   isLayoutListenerAttached = false
 }
 
@@ -192,8 +196,8 @@ function onDocumentPointerDown(event: PointerEvent): void {
   if (!root) return
 
   const target = event.target
-  if (!(target instanceof Node)) return
-  if (root.contains(target)) return
+  if (!target) return
+  if (root.contains(target as Node)) return
   isOpen.value = false
   searchQuery.value = ''
 }
@@ -207,17 +211,20 @@ watch(isOpen, (open) => {
   addLayoutListeners()
   nextTick(() => {
     updateMenuPosition()
-    window.requestAnimationFrame(updateMenuPosition)
+    ;(props.ownerDocument?.defaultView ?? window).requestAnimationFrame(updateMenuPosition)
     if (enableSearch.value) searchInputRef.value?.focus()
   })
 })
 
-onMounted(() => {
-  window.addEventListener('pointerdown', onDocumentPointerDown)
-})
+let layoutWindow: Window | null = null
+watch(() => props.ownerDocument?.defaultView ?? window, (ownerWindow, _previous, onCleanup) => {
+  isOpen.value = false
+  removeLayoutListeners()
+  ownerWindow.addEventListener('pointerdown', onDocumentPointerDown)
+  onCleanup(() => ownerWindow.removeEventListener('pointerdown', onDocumentPointerDown))
+}, { immediate: true })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', onDocumentPointerDown)
   removeLayoutListeners()
 })
 </script>
