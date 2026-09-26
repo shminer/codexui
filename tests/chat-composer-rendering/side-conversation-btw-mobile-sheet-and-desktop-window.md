@@ -78,3 +78,5 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - Performance: one metadata read per coalesced sync; no history payload and no polling for threads without queued messages. No live long-duration throughput measurement was performed.
 
 - Reorder fixture delivery so idle metadata precedes the final assistant item, and so running metadata arrives after turn completion. Expected: one final reply, no restored Thinking state. Replay of a final item updates the same in-memory ID. Each render deduplicates side rows in linear time; no extra request is needed.
+
+- Reload while `turn/start` is pending: teardown waits for the server-side start to settle and uses its active turn ID before unsubscribing. This adds no history read and does not rely on the departing browser receiving the start response.

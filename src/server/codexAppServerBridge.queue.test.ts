@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BackendQueueProcessor, mutateThreadQueue } from './codexAppServerBridge'
+import { AppServerProcess, BackendQueueProcessor, mutateThreadQueue } from './codexAppServerBridge'
 
 let reviewHome: string
 let processor: BackendQueueProcessor | undefined
@@ -60,4 +60,42 @@ describe('queued turn settings', () => {
     expect(start?.[1].collaborationMode.settings.reasoning_effort).toBe('high')
     expect(rpc.mock.calls.some(([method]) => method === 'config/read')).toBe(false)
   })
+})
+
+it('waits for a pending start before pagehide resolves its active turn', async () => {
+  const server = new AppServerProcess()
+  vi.spyOn(server as any, 'disposeIfConfigChanged').mockImplementation(() => {})
+  vi.spyOn(server as any, 'ensureInitialized').mockResolvedValue(undefined)
+  let finish: (value: unknown) => void = () => {}
+  vi.spyOn(server as any, 'call').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  const start = server.rpc('turn/start', { threadId: 'side' })
+  await Promise.resolve()
+  let resolved = false
+  const active = server.getActiveTurnAfterPendingStarts('side').then(id => { resolved = true; return id })
+  await Promise.resolve()
+  expect(resolved).toBe(false)
+  ;(server as any).emitNotification({ method: 'turn/started', params: { threadId: 'side', turn: { id: 'new-turn' } } })
+  ;(server as any).emitNotification({ method: 'turn/completed', params: { threadId: 'side', turn: { id: 'old-turn' } } })
+  finish({ turn: { id: 'new-turn' } })
+  await start
+  expect(await active).toBe('new-turn')
+  ;(server as any).emitNotification({ method: 'turn/completed', params: { threadId: 'side', turn: { id: 'new-turn' } } })
+  expect(await server.getActiveTurnAfterPendingStarts('side')).toBe('')
+})
+
+it('does not start or reschedule a queue after disposal during a metadata read', async () => {
+  await mutateThreadQueue('main', { type: 'add', message: { id: 'a', text: 'task' } })
+  let finish: (value: unknown) => void = () => {}
+  let startedRead: () => void = () => {}
+  const reading = new Promise<void>(resolve => { startedRead = resolve })
+  const rpc = vi.fn(() => new Promise(resolve => { finish = resolve; startedRead() }))
+  processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
+  const drain = processor.processThreadQueue('main')
+  await reading
+  processor.dispose()
+  finish({ thread: { status: { type: 'idle' }, turns: [] } })
+  await drain
+  expect(rpc).toHaveBeenCalledTimes(1)
+  const current = await mutateThreadQueue('main', { type: 'move', id: 'missing', targetId: 'a' })
+  expect(current.data.main?.map(message => message.id)).toEqual(['a'])
 })

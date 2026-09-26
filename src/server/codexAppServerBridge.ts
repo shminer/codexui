@@ -6303,7 +6303,7 @@ const MERGEABLE_ITEM_TYPES = new Set([
   'fileChange',
 ])
 
-class AppServerProcess {
+export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
   private initializePromise: Promise<void> | null = null
@@ -6313,6 +6313,8 @@ class AppServerProcess {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
+  private readonly activeTurnIds = new Map<string, string>()
+  private readonly pendingTurnStarts = new Map<string, Set<Promise<unknown>>>()
   private readonly streamEventsByThreadId = new Map<string, StreamEventFrame[]>()
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
   private readonly threadTurnPageReadCacheByThreadId = new Map<string, { result: unknown; expiresAt: number }>()
@@ -6418,6 +6420,8 @@ class AppServerProcess {
 
       this.pending.clear()
       this.pendingServerRequests.clear()
+      this.activeTurnIds.clear()
+      this.pendingTurnStarts.clear()
       this.process = null
       this.initialized = false
       this.initializePromise = null
@@ -6474,6 +6478,9 @@ class AppServerProcess {
     this.captureItemFromNotification(notification)
     const nThreadId = this.extractThreadIdFromParams(notification.params)
     if (nThreadId) {
+      const turnId = readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.id)
+      if (notification.method === 'turn/started' && turnId) this.activeTurnIds.set(nThreadId, turnId)
+      if (notification.method === 'turn/completed' && this.activeTurnIds.get(nThreadId) === turnId) this.activeTurnIds.delete(nThreadId)
       this.invalidateLiveStateCache(nThreadId)
       this.threadTurnPageReadCacheByThreadId.delete(nThreadId)
     }
@@ -6823,7 +6830,23 @@ class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    return this.call(method, params)
+    const request = this.call(method, params)
+    const threadId = readNonEmptyString(asRecord(params)?.threadId)
+    if (method !== 'turn/start' || !threadId) return request
+    const pending = this.pendingTurnStarts.get(threadId) ?? new Set<Promise<unknown>>()
+    pending.add(request)
+    this.pendingTurnStarts.set(threadId, pending)
+    try {
+      return await request
+    } finally {
+      pending.delete(request)
+      if (!pending.size) this.pendingTurnStarts.delete(threadId)
+    }
+  }
+
+  async getActiveTurnAfterPendingStarts(threadId: string): Promise<string> {
+    await Promise.allSettled([...(this.pendingTurnStarts.get(threadId) ?? [])])
+    return this.activeTurnIds.get(threadId) ?? ''
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
@@ -6886,6 +6909,8 @@ class AppServerProcess {
     }
     this.pending.clear()
     this.pendingServerRequests.clear()
+    this.activeTurnIds.clear()
+    this.pendingTurnStarts.clear()
 
     try {
       proc.stdin.end()
@@ -6988,6 +7013,10 @@ export class BackendQueueProcessor {
       }
       const next = await this.popNextQueuedTurn(threadId)
       if (!next) return
+      if (this.disposed) {
+        await this.restoreQueuedTurn(next)
+        return
+      }
       try {
         await this.startQueuedTurn(next)
         if (await this.hasQueuedTurns(threadId)) {
@@ -7917,7 +7946,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing threadId' })
           return
         }
-        await discardSideConversationThread(appServer, threadId, readNonEmptyString(body?.turnId))
+        const activeTurnId = await appServer.getActiveTurnAfterPendingStarts(threadId)
+        await discardSideConversationThread(appServer, threadId, activeTurnId || readNonEmptyString(body?.turnId))
         setJson(res, 200, { ok: true })
         return
       }
