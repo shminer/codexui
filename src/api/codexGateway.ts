@@ -2086,14 +2086,14 @@ export async function discardSideConversationThreadInBackground(threadId: string
   }
 }
 
-export function discardSideConversationThreadOnPageHide(threadId: string): void {
+export function discardSideConversationThreadOnPageHide(threadId: string, turnId?: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
   void fetch('/codex-api/side-conversation/discard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threadId: normalizedThreadId }),
+    body: JSON.stringify({ threadId: normalizedThreadId, turnId }),
     keepalive: true,
   }).catch(() => {})
 }

@@ -166,10 +166,9 @@ describe('discardSideConversationThread', () => {
       },
     }
 
-    await discardSideConversationThread(appServer, 'side-thread')
+    await discardSideConversationThread(appServer, 'side-thread', 'turn-1')
 
     expect(calls).toEqual([
-      { method: 'thread/read', params: { threadId: 'side-thread', includeTurns: true } },
       { method: 'turn/interrupt', params: { threadId: 'side-thread', turnId: 'turn-1' } },
       { method: 'thread/unsubscribe', params: { threadId: 'side-thread' } },
     ])
@@ -188,10 +187,10 @@ describe('discardSideConversationThread', () => {
 
     await discardSideConversationThread(appServer, 'side-thread')
 
-    expect(calls).toEqual(['thread/read', 'thread/unsubscribe'])
+    expect(calls).toEqual(['thread/unsubscribe'])
   })
 
-  it.each(['thread/read', 'turn/interrupt'])('still unsubscribes when %s fails', async (failedMethod) => {
+  it.each(['turn/interrupt'])('still unsubscribes when %s fails', async (failedMethod) => {
     const calls: string[] = []
     const appServer = {
       async rpc(method: string): Promise<unknown> {
@@ -203,7 +202,7 @@ describe('discardSideConversationThread', () => {
       },
     }
 
-    await discardSideConversationThread(appServer, 'side-thread')
+    await discardSideConversationThread(appServer, 'side-thread', 'turn-1')
 
     expect(calls.at(-1)).toBe('thread/unsubscribe')
   })

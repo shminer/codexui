@@ -2554,22 +2554,11 @@ export async function callRpcWithArchiveRecovery(
 export async function discardSideConversationThread(
   appServer: RpcExecutor,
   threadId: string,
+  turnId?: string,
 ): Promise<void> {
   try {
-    const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
-    const thread = asRecord(response?.thread)
-    const turns = Array.isArray(thread?.turns) ? thread.turns : []
-    let activeTurnId = ''
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = asRecord(turns[index])
-      const status = readNonEmptyString(turn?.status)
-      if (status === 'inProgress' || status === 'running' || status === 'active') {
-        activeTurnId = readNonEmptyString(turn?.id)
-        break
-      }
-    }
-    if (activeTurnId) {
-      await appServer.rpc('turn/interrupt', { threadId, turnId: activeTurnId })
+    if (turnId) {
+      await appServer.rpc('turn/interrupt', { threadId, turnId })
     }
   } catch {
     // Page teardown cleanup still unsubscribes when the read or interrupt races with completion.
@@ -6866,6 +6855,7 @@ class AppServerProcess {
 }
 
 export class BackendQueueProcessor {
+  private disposed = false
   private readonly processingThreadIds = new Set<string>()
   private readonly queueDrainTimersByThreadId = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly queueDrainDueAtByThreadId = new Map<string, number>()
@@ -6882,6 +6872,7 @@ export class BackendQueueProcessor {
   }
 
   dispose(): void {
+    this.disposed = true
     this.unsubscribe()
     for (const timer of this.queueDrainTimersByThreadId.values()) {
       clearTimeout(timer)
@@ -6903,7 +6894,7 @@ export class BackendQueueProcessor {
   }
 
   scheduleThreadQueueDrain(threadId: string, delayMs = 5000): void {
-    if (!threadId) return
+    if (!threadId || this.disposed) return
     const normalizedDelayMs = Math.max(0, delayMs)
     const nextDueAt = Date.now() + normalizedDelayMs
     const existingDueAt = this.queueDrainDueAtByThreadId.get(threadId)
@@ -6925,10 +6916,12 @@ export class BackendQueueProcessor {
   }
 
   async processThreadQueue(threadId: string): Promise<void> {
-    if (this.processingThreadIds.has(threadId)) return
+    if (this.disposed || this.processingThreadIds.has(threadId)) return
     this.processingThreadIds.add(threadId)
     try {
+      if (!await this.hasQueuedTurns(threadId) || this.disposed) return
       const canStart = await this.canStartQueuedTurn(threadId)
+      if (this.disposed) return
       if (!canStart) {
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
@@ -6942,13 +6935,15 @@ export class BackendQueueProcessor {
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
-      } catch {
+      } catch (error) {
         await this.restoreQueuedTurn(next)
+        throw error
+      }
+    } catch (error) {
+      // Missing/ephemeral threads cannot recover by polling persisted history.
+      if (!/ephemeral|thread.*not found|no rollout found/i.test(String(error)) && await this.hasQueuedTurns(threadId).catch(() => false)) {
         this.scheduleThreadQueueDrain(threadId)
       }
-    } catch {
-      // Queue processing is best-effort. Keep the bridge alive if app-server is unavailable.
-      this.scheduleThreadQueueDrain(threadId)
     } finally {
       this.processingThreadIds.delete(threadId)
     }
@@ -7858,7 +7853,7 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing threadId' })
           return
         }
-        await discardSideConversationThread(appServer, threadId)
+        await discardSideConversationThread(appServer, threadId, readNonEmptyString(body?.turnId))
         setJson(res, 200, { ok: true })
         return
       }

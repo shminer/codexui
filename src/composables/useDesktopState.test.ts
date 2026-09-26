@@ -25,6 +25,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getSkillsList: vi.fn(),
   getThreadGoal: vi.fn(),
   getThreadDetail: vi.fn(),
+  getThreadSummary: vi.fn(),
   getRecentThreadDetail: vi.fn(),
   getOlderThreadMessages: vi.fn(),
   getThreadGroupsPage: vi.fn(),
@@ -161,6 +162,7 @@ function tokenUsageNotification(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: false })
   gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
   gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-thread-default' })
   gatewayMocks.replyToServerRequest.mockResolvedValue(undefined)
@@ -1987,26 +1989,19 @@ describe('side conversation lifecycle', () => {
     }))
   })
 
-  it('keeps a confirmed steer after live output and stops moving it after completion', async () => {
-    installTestWindow()
-    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-5.5', modelProvider: 'codex', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+  it('keeps a steer after live output and stops moving it after completion', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
-    const state = useDesktopState()
-    await state.openSideConversation('parent-thread')
+    await state.openSideConversation('thread-1')
     await state.sendSideConversationMessage('first')
     await state.sendSideConversationMessage('steer')
-    const detail = { model: 'gpt-5.5', modelProvider: 'codex', messages: [
-      { id: 'first-user', role: 'user', text: 'first', turnId: 'side-turn', turnIndex: 0 },
-      { id: 'steer-user', role: 'user', text: 'steer', turnId: 'side-turn', turnIndex: 0 },
-      { id: 'reply', role: 'assistant', text: 'live output', turnId: 'side-turn', turnIndex: 0 },
-    ], inProgress: true, activeTurnId: 'side-turn', hasMoreOlder: false, turnIndexByTurnId: { 'side-turn': 0 } }
-    gatewayMocks.resumeThread.mockResolvedValue(detail)
-    gatewayMocks.getThreadDetail.mockResolvedValue(detail)
+    emit({ method: 'item/completed', params: { threadId: 'side-thread-default', turnId: 'side-turn', item: { id: 'reply', type: 'agentMessage', text: 'live output' } } })
+    gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: true })
     await state.loadMessages('side-thread-default', { silent: true, force: true })
-    expect(state.sideConversationMessages.value.at(-1)).toMatchObject({ id: 'steer-user', messageType: 'userMessage.steer' })
-    gatewayMocks.getThreadDetail.mockResolvedValue({ ...detail, inProgress: false, activeTurnId: '' })
+    expect(state.sideConversationMessages.value.at(-1)).toMatchObject({ text: 'steer', messageType: 'userMessage.optimistic.steer' })
+    gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: false })
     await state.loadMessages('side-thread-default', { silent: true, force: true })
-    expect(state.sideConversationMessages.value.at(-1)?.id).toBe('reply')
+    expect(state.sideConversationMessages.value.at(-1)?.text).toBe('live output')
     expect(state.sideConversationMessages.value.some((message) => message.messageType?.endsWith('.steer'))).toBe(false)
   })
 
@@ -2304,79 +2299,24 @@ describe('side conversation lifecycle', () => {
     await openPromise
   })
 
-  it('keeps inherited parent turns out of the side transcript', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-filtered' })
-    gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
-    gatewayMocks.resumeThread
-      .mockResolvedValueOnce({
-        model: 'gpt-5.6', modelProvider: 'codex',
-        messages: [
-          { id: 'parent-history', role: 'assistant', text: 'old reply', turnId: 'parent-turn', turnIndex: 0 },
-        ],
-        inProgress: false, activeTurnId: '', hasMoreOlder: false,
-        turnIndexByTurnId: { 'parent-turn': 0 }, subagents: [],
-      })
-      .mockResolvedValueOnce({
-        model: 'gpt-5.6',
-        modelProvider: 'codex',
-        messages: [
-          { id: 'parent-history', role: 'assistant', text: 'old reply', turnId: 'parent-turn', turnIndex: 0, createdAtIso: '2026-08-01T00:00:00.000Z' },
-          { id: 'side-user', role: 'user', text: 'question', turnId: 'side-turn', turnIndex: 1, createdAtIso: '2026-08-13T00:00:00.000Z' },
-          { id: 'side-reply', role: 'assistant', text: 'answer', turnId: 'side-turn', turnIndex: 1, createdAtIso: '2026-08-13T00:00:01.000Z' },
-        ],
-        inProgress: false,
-        activeTurnId: '',
-        hasMoreOlder: true,
-        turnIndexByTurnId: { 'parent-turn': 0, 'side-turn': 1 },
-        subagents: [],
-      })
-
-    const state = useDesktopState()
-    state.primeSelectedThread('parent-thread')
-    await state.loadMessages('parent-thread')
-    await state.openSideConversation('parent-thread', 'gpt-5.6', 'high')
-    await state.sendSideConversationMessage('question')
-    await state.loadMessages('side-filtered', { force: true })
-
-    expect(state.sideConversationMessages.value.map((message) => message.id)).not.toContain('parent-history')
+  it('keeps side events in memory across metadata sync and subsequent turns', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-memory' })
+    await state.openSideConversation('thread-1')
+    gatewayMocks.resumeThread.mockClear()
+    gatewayMocks.getThreadDetail.mockClear()
+    emit({ method: 'turn/started', params: { threadId: 'side-memory', turn: { id: 'turn-1' } } })
+    emit({ method: 'item/completed', params: { threadId: 'side-memory', turnId: 'turn-1', item: { id: 'reply-1', type: 'agentMessage', text: 'answer kept in memory' } } })
+    emit({ method: 'turn/completed', params: { threadId: 'side-memory', turn: { id: 'turn-1', status: 'completed' } } })
+    await state.loadMessages('side-memory', { force: true })
+    emit({ method: 'turn/started', params: { threadId: 'side-memory', turn: { id: 'turn-2' } } })
     expect(state.sideConversationMessages.value).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'side-user', turnId: 'side-turn' }),
-      expect.objectContaining({ id: 'side-reply', turnId: 'side-turn' }),
+      expect.objectContaining({ text: 'answer kept in memory' }),
     ]))
-  })
-
-  it('restores a completed side turn by its absolute index after notifications are lost', async () => {
-    installTestWindow()
-    gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-reconnected' })
-    gatewayMocks.resumeThread
-      .mockResolvedValueOnce({
-        model: 'gpt-5.6', modelProvider: 'codex',
-        messages: [{ id: 'parent', role: 'user', text: 'parent', turnId: 'parent-turn', turnIndex: 4 }],
-        inProgress: false, activeTurnId: '', hasMoreOlder: true,
-        turnIndexByTurnId: { 'parent-turn': 4 }, subagents: [],
-      })
-      .mockResolvedValueOnce({
-        model: 'gpt-5.6', modelProvider: 'codex',
-        messages: [
-          { id: 'parent', role: 'user', text: 'parent', turnId: 'parent-turn', turnIndex: 4 },
-          { id: 'side-user', role: 'user', text: 'question', turnId: 'side-turn', turnIndex: 5 },
-          { id: 'side-reply', role: 'assistant', text: 'answer', turnId: 'side-turn', turnIndex: 5 },
-        ],
-        inProgress: false, activeTurnId: '', hasMoreOlder: true,
-        turnIndexByTurnId: { 'parent-turn': 4, 'side-turn': 5 }, subagents: [],
-      })
-
-    const state = useDesktopState()
-    state.primeSelectedThread('parent-thread')
-    await state.loadMessages('parent-thread')
-    await state.openSideConversation('parent-thread')
-    await state.loadMessages('side-reconnected', { force: true })
-
-    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual([
-      'side-user',
-      'side-reply',
-    ])
+    expect(gatewayMocks.getThreadSummary).toHaveBeenCalledWith('side-memory')
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadDetail).not.toHaveBeenCalled()
+    expect(vi.mocked(window.localStorage.setItem).mock.calls.flat().join(' ')).not.toContain('answer kept in memory')
   })
 
   it('ignores a side-thread restore that finishes after the side conversation closes', async () => {
@@ -2393,7 +2333,7 @@ describe('side conversation lifecycle', () => {
     await state.openSideConversation('parent-thread')
 
     let finishSideRestore: (value: unknown) => void = () => {}
-    gatewayMocks.resumeThread.mockImplementationOnce(() => new Promise((resolve) => {
+    gatewayMocks.getThreadSummary.mockImplementationOnce(() => new Promise((resolve) => {
       finishSideRestore = resolve
     }))
     const loadPromise = state.loadMessages('side-closed-during-load', { force: true })
@@ -2526,7 +2466,7 @@ describe('side conversation lifecycle', () => {
     notificationHandler({ method: 'ready' })
     await flushMicrotasks()
 
-    expect(gatewayMocks.resumeThread).toHaveBeenLastCalledWith('side-thread-default')
+    expect(gatewayMocks.getThreadSummary).toHaveBeenLastCalledWith('side-thread-default')
     expect(state.isSideConversationInProgress.value).toBe(false)
     state.stopPolling()
   })
@@ -2873,6 +2813,7 @@ describe('side conversation lifecycle', () => {
     expect(state.sideConversationThreadId.value).toBe('')
     expect(gatewayMocks.discardSideConversationThreadOnPageHide).toHaveBeenCalledWith(
       'side-pagehide',
+      undefined,
     )
     resolveTurnStart('side-pagehide-turn')
     await sendPromise

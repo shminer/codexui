@@ -67,3 +67,12 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - Close any side window created during the check.
 - Confirm no temporary side child is visible in the thread list after cleanup completes.
 - Return the viewport and app theme to their previous settings.
+
+### Ephemeral synchronization regression
+
+- Setup: current CLI with ephemeral forks; open a parent conversation and the browser network inspector.
+- Send two side turns, steer during the first, and reconnect the notification stream. Finish or stop the turn, then start another.
+- Expected: earlier side messages and tool output stay in memory; synchronization uses only `thread/read` with `includeTurns:false`, never `thread/resume` or full history. No `no rollout found` or `ephemeral threads do not support includeTurns` error. A lost runtime thread asks to reopen the temporary conversation.
+- Close the side window or reload the parent. Expected: the active turn is interrupted when its ID is known, then the child is unsubscribed. No transcript or side queue is saved. Empty side queues trigger no background history reads/retry timers.
+- Cleanup: close the temporary child; no persistent test session is needed.
+- Performance: one metadata read per coalesced sync; no history payload and no polling for threads without queued messages. No live long-duration throughput measurement was performed.

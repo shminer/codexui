@@ -15,6 +15,7 @@ import {
   getSkillsList,
   getThreadGoal,
   getThreadDetail,
+  getThreadSummary,
   getRecentThreadDetail,
   getOlderThreadMessages,
   getBackgroundThreadListLimit,
@@ -3128,7 +3129,15 @@ export function useDesktopState() {
       }
     } else {
       if (isKnownSideConversationThread(threadId)) {
-        const messages = persistedMessagesByThreadId.value[threadId] ?? []
+        const messages = [
+          ...(persistedMessagesByThreadId.value[threadId] ?? []),
+          ...(livePlanMessagesByThreadId.value[threadId] ?? []),
+          ...(liveCommandsByThreadId.value[threadId] ?? []),
+          ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
+          ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
+        ]
+        clearLiveAgentMessagesForThread(threadId)
+        clearLiveFileChangesForThread(threadId)
         setPersistedMessagesForThread(threadId, messages.map((message) => {
           if (message.messageType === 'userMessage.optimistic.steer') return { ...message, messageType: 'userMessage.optimistic' }
           if (message.messageType === 'userMessage.steer') return { ...message, messageType: 'userMessage' }
@@ -5473,6 +5482,26 @@ export function useDesktopState() {
         return
       }
 
+      // Ephemeral threads have no rollout to resume or history to read. Their
+      // transcript belongs to this page and is populated only by live events.
+      if (isKnownSideConversationThread(threadId)) {
+        const observedTurnId = activeTurnIdByThreadId.value[threadId]
+        const summary = await getThreadSummary(threadId)
+        if (discardedSideConversationThreadIds.has(threadId)) return
+        if (observedTurnId === activeTurnIdByThreadId.value[threadId] && !sideConversationPendingTurnStarts.size) {
+          setThreadInProgress(threadId, summary.inProgress)
+          if (!summary.inProgress) {
+            activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+            setTurnActivityForThread(threadId, null)
+          }
+        }
+        loadedMessagesByThreadId.value = { ...loadedMessagesByThreadId.value, [threadId]: true }
+        lastMessageLoadAtByThreadId.set(threadId, Date.now())
+        lastMessageLoadFailureAtByThreadId.delete(threadId)
+        clearTransientTurnErrorForThread(threadId)
+        return
+      }
+
       const needsResume = resumedThreadById.value[threadId] !== true
       const resumePromise = needsResume
         ? resumeThread(threadId).then(result => ({ result, failure: null }), failure => ({ result: null, failure }))
@@ -5604,7 +5633,12 @@ export function useDesktopState() {
       markThreadAsRead(threadId)
       pendingSubagentParentRefresh.delete(threadId)
       } catch (unknownError) {
+        if (discardedSideConversationThreadIds.has(threadId)) return
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+        if (isKnownSideConversationThread(threadId) && /thread.*not found|no rollout found|thread.*not loaded/i.test(message)) {
+          setThreadInProgress(threadId, false)
+          sideConversationError.value = 'This temporary conversation is no longer available. Close it and open a new side conversation.'
+        }
         setTurnErrorForThread(threadId, message, { transient: true })
         lastMessageLoadFailureAtByThreadId.set(threadId, Date.now())
         throw unknownError
@@ -6353,9 +6387,10 @@ export function useDesktopState() {
 
   function discardSideConversationOnPageHide(): void {
     const threadId = sideConversationThreadId.value
+    const turnId = activeTurnIdByThreadId.value[threadId]
     sideConversationEpoch += 1
     resetSideConversationState()
-    if (threadId) discardSideConversationThreadOnPageHide(threadId)
+    if (threadId) discardSideConversationThreadOnPageHide(threadId, turnId)
   }
 
   async function sendMessageToSelectedThread(
