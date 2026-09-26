@@ -381,7 +381,13 @@
                 <div
                   v-else
                   class="message-text-flow"
-                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
+                  :tabindex="isCopyableUserMessage(message) ? 0 : undefined"
+                  :role="isCopyableUserMessage(message) ? 'group' : undefined"
+                  :aria-label="isCopyableUserMessage(message) ? 'User message copy actions' : undefined"
+                  :aria-expanded="isCopyableUserMessage(message) ? expandedUserMessageId === message.id : undefined"
+                  @click="toggleUserMessageCopy(message, $event)"
+                  @keydown="toggleUserMessageCopy(message, $event)"
+                  v-memo="[message.id, message.text, message.role, expandedUserMessageId === message.id, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -742,9 +748,10 @@
               </section>
 
               <div
-                v-if="showCopyResponseButton(message) || showEditMessageButton(message)"
+                v-if="showCopyMessageButton(message) || showEditMessageButton(message)"
                 class="message-toolbar"
                 :data-role="message.role"
+                :data-copy-expanded="expandedUserMessageId === message.id"
               >
                 <button
                   v-if="showEditMessageButton(message)"
@@ -769,13 +776,13 @@
                   <span class="message-fork-label">Fork</span>
                 </button>
                 <button
-                  v-if="showCopyResponseButton(message)"
+                  v-if="showCopyMessageButton(message)"
                   type="button"
                   class="message-copy-button"
                   :data-copied="copiedResponseAnchorId === message.id"
-                  :aria-label="copiedResponseAnchorId === message.id ? 'Response copied' : 'Copy response'"
-                  :title="copiedResponseAnchorId === message.id ? 'Response copied' : 'Copy response'"
-                  @click="copyResponse(message.id)"
+                  :aria-label="copiedResponseAnchorId === message.id ? (message.role === 'user' ? 'Message copied' : 'Response copied') : (message.role === 'user' ? 'Copy message' : 'Copy response')"
+                  :title="copiedResponseAnchorId === message.id ? (message.role === 'user' ? 'Message copied' : 'Response copied') : (message.role === 'user' ? 'Copy message' : 'Copy response')"
+                  @click="copyMessage(message)"
                 >
                   <IconTablerCopy class="icon-svg message-copy-icon" />
                   <span class="message-copy-label">{{ copiedResponseAnchorId === message.id ? 'Copied' : 'Copy' }}</span>
@@ -1384,6 +1391,7 @@ const conversationListRef = ref<HTMLElement | null>(null)
 const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const copiedResponseAnchorId = ref('')
+const expandedUserMessageId = ref('')
 const fileChangeActionState = ref<Record<string, 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone'>>({})
 const fileChangeActionError = ref<Record<string, string>>({})
 const fileChangeRedoPatchIds = ref<Record<string, string[]>>({})
@@ -1896,7 +1904,24 @@ const forkableTurnIdByAnchorId = computed<Record<string, string>>(() => {
   return next
 })
 
-function showCopyResponseButton(message: UiMessage): boolean {
+function isCopyableUserMessage(message: UiMessage): boolean {
+  return message.role === 'user' && message.text.trim().length > 0
+}
+
+function toggleUserMessageCopy(message: UiMessage, event: MouseEvent | KeyboardEvent): void {
+  if (!isCopyableUserMessage(message)) return
+  if (event instanceof KeyboardEvent) {
+    if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return
+    event.preventDefault()
+  } else {
+    if (event.target instanceof Element && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
+    if (window.getSelection()?.isCollapsed === false) return
+  }
+  expandedUserMessageId.value = expandedUserMessageId.value === message.id ? '' : message.id
+}
+
+function showCopyMessageButton(message: UiMessage): boolean {
+  if (message.role === 'user') return isCopyableUserMessage(message) && expandedUserMessageId.value === message.id
   return typeof copyableResponseContentByAnchorId.value[message.id] === 'string'
 }
 
@@ -2389,9 +2414,12 @@ function diffViewerMarker(line: DiffViewerLine): string {
   return ''
 }
 
-async function copyResponse(anchorMessageId: string): Promise<void> {
-  const content = copyableResponseContentByAnchorId.value[anchorMessageId] ?? ''
+async function copyMessage(message: UiMessage): Promise<void> {
+  const anchorMessageId = message.id
+  const threadIdAtStart = props.activeThreadId
+  const content = message.role === 'user' ? message.text : copyableResponseContentByAnchorId.value[anchorMessageId] ?? ''
   if (!content) return
+  if (message.role === 'user') copiedResponseAnchorId.value = ''
 
   let copied = false
   try {
@@ -2405,7 +2433,7 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
     copied = copyTextWithSelectionFallback(content)
   }
 
-  if (!copied) return
+  if (!copied || props.activeThreadId !== threadIdAtStart) return
 
   copiedResponseAnchorId.value = anchorMessageId
   if (copiedMessageResetTimer) {
@@ -4472,6 +4500,12 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    expandedUserMessageId.value = ''
+    copiedResponseAnchorId.value = ''
+    if (copiedMessageResetTimer) {
+      clearTimeout(copiedMessageResetTimer)
+      copiedMessageResetTimer = null
+    }
     autoFollowOutput.value = true
     modalImageUrl.value = ''
     isLoadingMore.value = false
@@ -4748,7 +4782,9 @@ onBeforeUnmount(() => {
   @apply mt-1 self-start flex items-center gap-1 opacity-[0.01] transition-opacity duration-200;
 }
 
-.message-row:hover .message-toolbar {
+.message-row:hover .message-toolbar,
+.message-toolbar:focus-within,
+.message-toolbar[data-copy-expanded='true'] {
   @apply opacity-100;
 }
 
@@ -4763,6 +4799,16 @@ onBeforeUnmount(() => {
 
 .message-copy-button[data-copied='true'] {
   @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+}
+
+.message-toolbar[data-role='user'] .message-copy-button {
+  min-width: 60px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .message-toolbar[data-role='user'] .message-copy-button {
+    min-height: 32px;
+  }
 }
 
 .message-edit-button {

@@ -37,6 +37,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: Lazy message rendering (windowed conversation)](lazy-message-rendering-windowed-conversation.md) |
 | [Feature: Mobile thread single tap and terminal status](mobile-thread-single-tap-and-terminal-status.md) |
 | [Feature: Mobile output block copy controls](mobile-output-block-copy-controls.md) |
+| [User message click-to-copy](user-message-click-copy.md) |
 | [Assistant generated image rendering](assistant-generated-image-rendering.md) |
 | [Stop button activates promptly for new threads](stop-button-activates-promptly-for-new-threads.md) |
 | [New-thread plan mode persists and toggles correctly](new-thread-plan-mode-persists-and-toggles-correctly.md) |
