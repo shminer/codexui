@@ -43,7 +43,7 @@ const gatewayMocks = vi.hoisted(() => ({
   normalizeThreadGoal: vi.fn((value: unknown) => value),
   setCodexSpeedMode: vi.fn(),
   setThreadGoal: vi.fn(),
-  setThreadQueueState: vi.fn(),
+  mutateThreadQueue: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
   startThread: vi.fn(),
   startSideConversation: vi.fn(),
@@ -167,7 +167,7 @@ beforeEach(() => {
   gatewayMocks.startSideConversation.mockResolvedValue({ threadId: 'side-thread-default' })
   gatewayMocks.replyToServerRequest.mockResolvedValue(undefined)
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
-  gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
+  gatewayMocks.mutateThreadQueue.mockResolvedValue({ data: {} })
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getThreadGoal.mockResolvedValue(null)
   gatewayMocks.getRecentThreadDetail.mockResolvedValue(null)
@@ -1946,7 +1946,7 @@ describe('side conversation lifecycle', () => {
     await flushMicrotasks()
     expect(state.sideConversationQueuedMessages.value.map((item) => item.text)).toEqual(['next', 'last'])
     state.removeQueuedMessage('main-q')
-    expect(gatewayMocks.setThreadQueueState).toHaveBeenLastCalledWith({})
+    expect(gatewayMocks.mutateThreadQueue).not.toHaveBeenCalled()
     expect(state.sideConversationQueuedMessages.value).toHaveLength(2)
     const completed = { method: 'turn/completed', params: { threadId: 'side-thread-default', turn: { id: 'side-first', status: 'completed' } } }
     emit(completed)
@@ -3582,5 +3582,29 @@ describe('findAdjacentThreadId', () => {
 
   it('returns no fallback when there is no adjacent thread', () => {
     expect(findAdjacentThreadId([thread('selected-thread', '/tmp/project')], 'selected-thread')).toBe('')
+  })
+})
+
+describe('atomic queue edits', () => {
+  it('sends only a removal by ID from stale clients and keeps persisted queues on teardown', async () => {
+    const message = (id: string) => ({ id, text: id, imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' })
+    let stored: any = { 'thread-1': [message('a'), message('b')] }
+    gatewayMocks.getThreadQueueState.mockImplementation(async () => structuredClone(stored))
+    gatewayMocks.mutateThreadQueue.mockImplementation(async (id, op) => {
+      stored[id] = stored[id].filter((message: any) => message.id !== op.id)
+      return { data: structuredClone(stored) }
+    })
+    const first = await setupTurnLifecycleNotificationState('thread-1')
+    const second = await setupTurnLifecycleNotificationState('thread-1')
+    first.state.removeQueuedMessage('a')
+    await flushMicrotasks()
+    second.state.removeQueuedMessage('b')
+    await flushMicrotasks()
+    expect(stored['thread-1']).toEqual([])
+    expect(gatewayMocks.mutateThreadQueue.mock.calls).toEqual([
+      ['thread-1', { type: 'remove', id: 'a' }], ['thread-1', { type: 'remove', id: 'b' }],
+    ])
+    first.state.stopPolling()
+    expect(gatewayMocks.mutateThreadQueue).toHaveBeenCalledTimes(2)
   })
 })

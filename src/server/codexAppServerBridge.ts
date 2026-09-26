@@ -5657,11 +5657,32 @@ async function withThreadQueueStateUpdate<T>(
   })
 }
 
-async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
-  await withThreadQueueStateUpdate(() => ({
-    nextState: normalizeThreadQueueState(nextState),
-    result: undefined,
-  }))
+export async function mutateThreadQueue(threadId: string, operation: unknown): Promise<{ data: ThreadQueueState; removed?: StoredQueuedMessage }> {
+  const op = asRecord(operation)
+  if (!threadId.trim() || !op || !['add', 'remove', 'move'].includes(String(op.type))) throw new Error('Invalid queue operation')
+  const message = op.type === 'add' ? normalizeStoredQueuedMessage(op.message) : null
+  if (op.type === 'add' && !message) throw new Error('Invalid queued message')
+  return withThreadQueueStateUpdate((state) => {
+    const queue = [...(state[threadId] ?? [])]
+    let removed: StoredQueuedMessage | undefined
+    if (message) {
+      if (!queue.some((item) => item.id === message.id)) {
+        const before = queue.findIndex((item) => item.id === op.beforeId)
+        queue.splice(before < 0 ? queue.length : before, 0, message)
+      }
+    } else {
+      const index = queue.findIndex((item) => item.id === op.id)
+      if (index >= 0 && op.type === 'remove') [removed] = queue.splice(index, 1)
+      if (index >= 0 && op.type === 'move') {
+        const target = queue.findIndex((item) => item.id === op.targetId)
+        if (target >= 0) queue.splice(target, 0, queue.splice(index, 1)[0]!)
+      }
+    }
+    const nextState = { ...state }
+    if (queue.length) nextState[threadId] = queue
+    else delete nextState[threadId]
+    return { nextState, result: { data: nextState, removed } }
+  })
 }
 
 async function appendThreadQueuedMessage(threadId: string, message: StoredQueuedMessage): Promise<void> {
@@ -9033,16 +9054,16 @@ export function createCodexBridgeMiddleware(options: {
         return
       }
 
-      if (req.method === 'PUT' && url.pathname === '/codex-api/thread-queue-state') {
-        const payload = await readJsonBody(req)
-        const record = asRecord(payload)
-        if (!record) {
-          setJson(res, 400, { error: 'Invalid body: expected object' })
+      if (url.pathname === '/codex-api/thread-queue-state' && (req.method === 'PATCH' || req.method === 'PUT')) {
+        if (req.method === 'PUT') {
+          setJson(res, 409, { error: 'Queue snapshots are no longer accepted. Refresh the page.' })
           return
         }
-        await writeThreadQueueState(normalizeThreadQueueState(record))
-        void backendQueueProcessor.scheduleAllQueuedThreads()
-        setJson(res, 200, { ok: true })
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        const result = await mutateThreadQueue(threadId, body?.operation)
+        if (asRecord(body?.operation)?.type === 'add') backendQueueProcessor.scheduleThreadQueueDrain(threadId, 0)
+        setJson(res, 200, result)
         return
       }
 

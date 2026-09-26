@@ -30,7 +30,7 @@ import {
   getWorkspaceRootsState,
   setCodexSpeedMode,
   setThreadGoal,
-  setThreadQueueState,
+  mutateThreadQueue,
   setWorkspaceRootsState,
   getThreadTitleCache,
   persistThreadTitle,
@@ -43,7 +43,7 @@ import {
   startThreadTurn,
   type RpcNotification,
   type SkillInfo,
-  type ThreadQueueState,
+  type ThreadQueueOperation,
   type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
@@ -3006,7 +3006,6 @@ export function useDesktopState() {
     const nextQueuedMessages = pruneThreadStateMap(queuedMessagesByThreadId.value, activeThreadIds)
     if (nextQueuedMessages !== queuedMessagesByThreadId.value) {
       queuedMessagesByThreadId.value = nextQueuedMessages
-      persistQueueState()
     }
     threadTokenUsageByThreadId.value = pruneThreadStateMap(threadTokenUsageByThreadId.value, activeThreadIds)
     eventUnreadByThreadId.value = pruneThreadStateMap(eventUnreadByThreadId.value, activeThreadIds)
@@ -5241,38 +5240,31 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function normalizeQueueStateForPersistence(state: Record<string, QueuedMessage[]>): ThreadQueueState {
-    const next: ThreadQueueState = {}
-    for (const [threadId, queue] of Object.entries(state)) {
-      const normalizedThreadId = threadId.trim()
-      if (!normalizedThreadId || queue.length === 0) continue
-      next[normalizedThreadId] = queue.map((message) => ({
-        id: message.id,
-        text: message.text,
-        imageUrls: [...message.imageUrls],
-        skills: message.skills.map((skill) => ({ name: skill.name, path: skill.path })),
-        fileAttachments: message.fileAttachments.map((attachment) => ({
-          label: attachment.label,
-          path: attachment.path,
-          fsPath: attachment.fsPath,
-        })),
-        collaborationMode: message.collaborationMode,
-      }))
-    }
-    return next
-  }
+  let queueMutationRevision = 0
+  let pendingQueueMutations = 0
+  let queueMutationChain: Promise<unknown> = Promise.resolve()
 
-  function persistQueueState(): void {
-    void setThreadQueueState(normalizeQueueStateForPersistence(queuedMessagesByThreadId.value)).catch(() => {
-      // Queue persistence is best-effort; keep the current in-memory queue usable.
-    })
+  function persistQueueOperation(threadId: string, operation: ThreadQueueOperation) {
+    const revision = ++queueMutationRevision
+    pendingQueueMutations += 1
+    const request = queueMutationChain.then(() => mutateThreadQueue(threadId, operation))
+    queueMutationChain = request.catch(() => {})
+    return request.then((result) => {
+      if (revision === queueMutationRevision) queuedMessagesByThreadId.value = result.data
+      return result
+    }).catch((failure) => {
+      error.value = failure instanceof Error ? failure.message : 'Failed to update the message queue'
+      throw failure
+    }).finally(() => { pendingQueueMutations -= 1 })
   }
 
   async function loadPersistedQueueStateIfNeeded(): Promise<void> {
     if (hasLoadedPersistedQueueState) return
     hasLoadedPersistedQueueState = true
     try {
-      queuedMessagesByThreadId.value = await getThreadQueueState()
+      const revision = queueMutationRevision
+      const state = await getThreadQueueState()
+      if (!pendingQueueMutations && revision === queueMutationRevision) queuedMessagesByThreadId.value = state
     } catch {
       // Backend queue state is optional during startup.
     }
@@ -6437,7 +6429,7 @@ export function useDesktopState() {
         ...queuedMessagesByThreadId.value,
         [threadId]: nextQueue,
       }
-      persistQueueState()
+      await persistQueueOperation(threadId, { type: 'add', message: nextQueue[insertIndex]!, beforeId: nextQueue[insertIndex + 1]?.id })
       return
     }
 
@@ -6715,7 +6707,9 @@ export function useDesktopState() {
       [threadId]: true,
     }
     try {
-      queuedMessagesByThreadId.value = await getThreadQueueState()
+      const revision = queueMutationRevision
+      const state = await getThreadQueueState()
+      if (!pendingQueueMutations && revision === queueMutationRevision) queuedMessagesByThreadId.value = state
     } catch {
       // Backend queue state is optional during transient bridge failures.
     } finally {
@@ -7237,7 +7231,7 @@ export function useDesktopState() {
     persistedUserMessageByThreadId.value = {}
     queuedMessagesByThreadId.value = {}
     queueProcessingByThreadId.value = {}
-    persistQueueState()
+    queueMutationRevision += 1
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
     threadGoalByThreadId.value = {}
@@ -7264,7 +7258,7 @@ export function useDesktopState() {
     queuedMessagesByThreadId.value = next.length > 0
       ? { ...queuedMessagesByThreadId.value, [threadId]: next }
       : omitKey(queuedMessagesByThreadId.value, threadId)
-    persistQueueState()
+    void persistQueueOperation(threadId, { type: 'remove', id: messageId }).catch(() => {})
   }
 
   function reorderQueuedMessage(draggedId: string, targetId: string): void {
@@ -7284,19 +7278,20 @@ export function useDesktopState() {
       ...queuedMessagesByThreadId.value,
       [threadId]: next,
     }
-    persistQueueState()
+    void persistQueueOperation(threadId, { type: 'move', id: draggedId, targetId }).catch(() => {})
   }
 
-  function steerQueuedMessage(messageId: string): void {
+  async function steerQueuedMessage(messageId: string): Promise<void> {
     const threadId = selectedThreadId.value
     if (!threadId) return
-    const queue = queuedMessagesByThreadId.value[threadId]
-    if (!queue) return
-    const msg = queue.find((m) => m.id === messageId)
-    if (!msg) return
-    removeQueuedMessage(messageId)
-    setSelectedCollaborationMode(msg.collaborationMode)
-    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments)
+    try {
+      const { removed: msg } = await persistQueueOperation(threadId, { type: 'remove', id: messageId })
+      if (!msg) return // Another client or the backend already claimed this message.
+      setSelectedCollaborationMode(msg.collaborationMode)
+      await startTurnForThread(threadId, msg.text, msg.imageUrls, msg.skills, msg.fileAttachments, msg.collaborationMode)
+    } catch (failure) {
+      error.value = failure instanceof Error ? failure.message : 'Failed to steer queued message'
+    }
   }
 
   function primeSelectedThread(threadId: string, options: { persist?: boolean } = {}): void {

@@ -3014,15 +3014,20 @@ export async function getThreadQueueState(): Promise<ThreadQueueState> {
   return normalizeThreadQueueState(envelope.data)
 }
 
-export async function setThreadQueueState(nextState: ThreadQueueState): Promise<void> {
+export type ThreadQueueOperation =
+  | { type: 'add'; message: StoredQueuedMessage; beforeId?: string }
+  | { type: 'remove'; id: string }
+  | { type: 'move'; id: string; targetId: string }
+
+export async function mutateThreadQueue(threadId: string, operation: ThreadQueueOperation): Promise<{ data: ThreadQueueState; removed?: StoredQueuedMessage }> {
   const response = await fetch('/codex-api/thread-queue-state', {
-    method: 'PUT',
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(normalizeThreadQueueState(nextState)),
+    body: JSON.stringify({ threadId, operation }),
   })
-  if (!response.ok) {
-    throw new Error('Failed to save thread queue state')
-  }
+  if (!response.ok) throw new Error('Failed to update the message queue. Refresh and try again.')
+  const payload = await response.json()
+  return { data: normalizeThreadQueueState(payload.data), removed: normalizeStoredQueuedMessage(payload.removed) ?? undefined }
 }
 
 export async function createWorktree(sourceCwd: string, baseBranch?: string): Promise<WorktreeCreateResult> {

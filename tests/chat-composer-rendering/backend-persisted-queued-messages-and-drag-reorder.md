@@ -31,3 +31,12 @@ Queued messages are saved through the backend, survive page refresh, and can be 
 - Delete any queued test messages that should not be sent
 
 ---
+
+### Concurrent browser queue edits
+
+- Setup: open the same running thread in two browser tabs. Queue A and B, and wait for both tabs to show them.
+- Delete A in the first tab, then B from the stale second tab. Add C in one tab while adding D in the other. Reorder a stale removed message and try to steer the same queued message from both tabs.
+- Expected: deleted messages never reappear; C and D both survive. A missing drag target is a no-op. Only the client that atomically removes a message may steer it. Backend dequeues cannot be restored by a stale browser snapshot. Mutation errors are visible; refresh shows authoritative state.
+- Close/reload a tab. Expected: persisted main queue remains available. Temporary side queues remain memory-only.
+- Cleanup: remove the test queue messages from the current server state.
+- Performance: each change sends one small ID operation, with serialized existing state-file updates. Only adds schedule a drain; removing/reordering does not scan or wake every queued thread. Pending reads cannot overwrite newer local edits.

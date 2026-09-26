@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BackendQueueProcessor } from './codexAppServerBridge'
+import { BackendQueueProcessor, mutateThreadQueue } from './codexAppServerBridge'
 
 let reviewHome: string
 let processor: BackendQueueProcessor | undefined
@@ -27,4 +27,17 @@ describe('backend review reproductions', () => {
     expect(rpc).not.toHaveBeenCalled()
   })
 
+})
+
+describe('atomic message queue operations', () => {
+  const message = (id: string) => ({ id, text: id, imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' })
+  it('preserves concurrent adds and removes without resurrecting stale messages', async () => {
+    await Promise.all(['a', 'b', 'c'].map(id => mutateThreadQueue('main', { type: 'add', message: message(id) })))
+    await Promise.all(['a', 'b'].map(id => mutateThreadQueue('main', { type: 'remove', id })))
+    const moved = await mutateThreadQueue('main', { type: 'move', id: 'a', targetId: 'c' })
+    expect(moved.data.main?.map(item => item.id)).toEqual(['c'])
+    const claims = await Promise.all([1, 2].map(() => mutateThreadQueue('main', { type: 'remove', id: 'c' })))
+    expect(claims.filter(result => result.removed)).toHaveLength(1)
+    expect(claims.at(-1)?.data.main).toBeUndefined()
+  })
 })
