@@ -6552,6 +6552,7 @@ export class AppServerProcess {
   storeThreadReadSnapshot(threadId: string, snapshot: unknown): void {
     this.lastThreadReadSnapshotByThreadId.set(threadId, snapshot)
     this.threadTurnPageReadCacheByThreadId.delete(threadId)
+    this.threadTurnPageReadPromiseByThreadId.delete(threadId)
   }
 
   getLastThreadReadSnapshot(threadId: string): unknown | null {
@@ -6590,13 +6591,17 @@ export class AppServerProcess {
       threadId,
       includeTurns: true,
     }).then((result) => {
+      if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
       this.threadTurnPageReadCacheByThreadId.set(threadId, {
         result,
         expiresAt: Date.now() + THREAD_TURN_PAGE_READ_CACHE_TTL_MS,
       })
       return result
+    }, (error) => {
+      if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
+      throw error
     }).finally(() => {
-      this.threadTurnPageReadPromiseByThreadId.delete(threadId)
+      if (this.threadTurnPageReadPromiseByThreadId.get(threadId) === promise) this.threadTurnPageReadPromiseByThreadId.delete(threadId)
     })
 
     this.threadTurnPageReadPromiseByThreadId.set(threadId, promise)
@@ -6850,6 +6855,7 @@ export class AppServerProcess {
       const result = await request
       this.lastThreadReadSnapshotByThreadId.delete(threadId)
       this.threadTurnPageReadCacheByThreadId.delete(threadId)
+      this.threadTurnPageReadPromiseByThreadId.delete(threadId)
       this.liveStateCache.delete(threadId)
       return result
     }

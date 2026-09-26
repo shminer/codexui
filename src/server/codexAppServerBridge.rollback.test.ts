@@ -128,3 +128,67 @@ it('invalidates only the reverted thread caches after native success', async () 
   expect(await server.readThreadForTurnPage('thread')).toEqual({ thread: { id: 'thread', turns: [] } })
   expect(call).toHaveBeenCalledTimes(4)
 })
+
+it.each([
+  { staleFails: false, currentFails: false },
+  { staleFails: true, currentFails: false },
+  { staleFails: false, currentFails: true },
+  { staleFails: true, currentFails: true },
+])('follows the current page read after revert (staleFails=$staleFails, currentFails=$currentFails)', async ({ staleFails, currentFails }) => {
+  const server = new AppServerProcess()
+  vi.spyOn(server as any, 'disposeIfConfigChanged').mockImplementation(() => {})
+  vi.spyOn(server as any, 'ensureInitialized').mockResolvedValue(undefined)
+  let resolveOld!: (value: unknown) => void
+  let rejectOld!: (error: Error) => void
+  let resolveCurrent!: (value: unknown) => void
+  let rejectCurrent!: (error: Error) => void
+  const oldRequest = new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject })
+  const currentRequest = new Promise((resolve, reject) => { resolveCurrent = resolve; rejectCurrent = reject })
+  const call = vi.spyOn(server as any, 'call')
+    .mockReturnValueOnce(oldRequest)
+    .mockResolvedValueOnce({ thread: { turns: [] } })
+    .mockReturnValueOnce(currentRequest)
+
+  const oldRead = server.readThreadForTurnPage('thread')
+  await server.rpc('thread/revert', { threadId: 'thread', beforeTurnId: 'selected' })
+  const currentRead = server.readThreadForTurnPage('thread')
+  const results = Promise.allSettled([oldRead, currentRead])
+  const pending = (server as any).threadTurnPageReadPromiseByThreadId.get('thread')
+  if (staleFails) rejectOld(new Error('stale read failed'))
+  else resolveOld({ thread: { turns: [{ id: 'selected' }] } })
+  for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  expect((server as any).threadTurnPageReadPromiseByThreadId.get('thread')).toBe(pending)
+  expect((server as any).threadTurnPageReadCacheByThreadId.has('thread')).toBe(false)
+  expect(call).toHaveBeenCalledTimes(3)
+
+  const retained = { thread: { turns: [{ id: 'earlier' }] } }
+  const failure = new Error('current read failed')
+  if (currentFails) rejectCurrent(failure)
+  else resolveCurrent(retained)
+  expect(await results).toEqual(currentFails
+    ? [{ status: 'rejected', reason: failure }, { status: 'rejected', reason: failure }]
+    : [{ status: 'fulfilled', value: retained }, { status: 'fulfilled', value: retained }])
+  if (!currentFails) expect(await server.readThreadForTurnPage('thread')).toEqual(retained)
+  expect(call).toHaveBeenCalledTimes(3)
+  expect((server as any).threadTurnPageReadPromiseByThreadId.has('thread')).toBe(false)
+})
+
+it('keeps a late pre-snapshot read from replacing the new page cache', async () => {
+  const server = new AppServerProcess()
+  vi.spyOn(server as any, 'disposeIfConfigChanged').mockImplementation(() => {})
+  vi.spyOn(server as any, 'ensureInitialized').mockResolvedValue(undefined)
+  let resolveOld!: (value: unknown) => void
+  const retained = { thread: { turns: [{ id: 'earlier' }] } }
+  const call = vi.spyOn(server as any, 'call')
+    .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+    .mockResolvedValueOnce(retained)
+  const oldRead = server.readThreadForTurnPage('thread')
+  await Promise.resolve()
+  server.storeThreadReadSnapshot('thread', retained)
+  expect(await server.readThreadForTurnPage('thread')).toEqual(retained)
+  resolveOld({ thread: { turns: [{ id: 'selected' }] } })
+  expect(await oldRead).toEqual(retained)
+  expect(await server.readThreadForTurnPage('thread')).toEqual(retained)
+  expect(server.getLastThreadReadSnapshot('thread')).toEqual(retained)
+  expect(call).toHaveBeenCalledTimes(2)
+})
