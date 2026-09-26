@@ -224,11 +224,16 @@ function popOut(): void {
     popupWindow.focus()
     return
   }
-  const opened = window.open('', '_blank', 'popup,width=760,height=900')
+  const opened = window.open('', '_blank', isMobile.value ? undefined : 'popup,width=760,height=900')
   if (!opened) return
   stopSideConversationWindowGesture()
   const popupDocument = opened.document
   popupDocument.title = t('Side conversation')
+  const viewport = popupDocument.createElement('meta')
+  viewport.name = 'viewport'
+  viewport.content = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content
+    ?? 'width=device-width, initial-scale=1.0'
+  popupDocument.head.appendChild(viewport)
   const base = popupDocument.createElement('base')
   base.href = document.baseURI
   popupDocument.head.appendChild(base)

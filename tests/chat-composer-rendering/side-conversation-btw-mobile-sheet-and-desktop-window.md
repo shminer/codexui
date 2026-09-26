@@ -38,6 +38,7 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 | 2 | Enter a multiline question with `Shift+Enter`, then send it. | The input grows only within its bound, the sheet does not shift width, and the message is sent once. |
 | 3 | Open the mobile keyboard and receive a long response. | The message list remains scrollable, the input and action button remain reachable, and content does not overlap the minimize or X controls. |
 | 4 | Verify both light and dark themes. | The bottom sheet and backdrop preserve contrast and all controls remain visible. |
+| 5 | In a mobile browser at `375x812`, type a draft and queue a message, then open the side chat in a new window. Inspect model, skills and Thinking menus, send, then close the new tab. Repeat in dark theme. | The new tab uses the device-width viewport and fills the screen without desktop-page shrinking or horizontal scrolling. Menus fit the mobile viewport; selections and sending work, and closing returns the same draft and queue to the original page. |
 
 ## Minimize And Cleanup
 

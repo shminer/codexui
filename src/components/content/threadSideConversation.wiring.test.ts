@@ -2,6 +2,14 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
+  it('keeps popup pages responsive and avoids desktop window dimensions on mobile', async () => {
+    const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    expect(source).toContain("isMobile.value ? undefined : 'popup,width=760,height=900'")
+    expect(source).toContain("viewport.name = 'viewport'")
+    expect(source).toContain("'width=device-width, initial-scale=1.0'")
+    expect(source).toContain('popupDocument.head.appendChild(viewport)')
+  })
+
   it('enables main composer capabilities by default and disables them explicitly in side chats', async () => {
     const composer = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
     const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
