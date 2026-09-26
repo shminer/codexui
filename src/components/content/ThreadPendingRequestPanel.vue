@@ -985,14 +985,14 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 @reference "tailwindcss";
 
 .thread-pending-request {
-  @apply w-full max-w-[min(var(--chat-column-max,45rem),100%)] mx-auto;
+  @apply w-full max-w-[min(var(--chat-column-max,72rem),100%)] mx-auto;
 }
 
 .thread-pending-request-shell {
   @apply w-full rounded-[1.75rem] border border-zinc-700 bg-zinc-900 px-4 py-4 sm:px-5 sm:py-4 text-zinc-100 shadow-xl;
 }
 
-.thread-pending-request-shell--no-top-radius {
+.thread-pending-request-shell.thread-pending-request-shell--no-top-radius {
   @apply rounded-t-none border-t-0;
 }
 

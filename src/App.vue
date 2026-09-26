@@ -987,13 +987,6 @@
                     <span>{{ t(codexCliMissingError) }}</span>
                     <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
                   </div>
-                  <QueuedMessages
-                    :messages="selectedThreadQueuedMessages"
-                    @edit="onEditQueuedMessage"
-                    @steer="steerQueuedMessage"
-                    @delete="removeQueuedMessage"
-                    @reorder="onReorderQueuedMessage"
-                  />
                   <ThreadTerminalPanel
                     v-if="selectedThreadTerminalOpen && selectedThreadId && composerCwd"
                     ref="threadTerminalPanelRef"
@@ -1002,6 +995,14 @@
                     :cwd="composerCwd"
                     @hide="onHideSelectedThreadTerminal"
                     @terminal-focus-change="onTerminalFocusChange"
+                  />
+                  <QueuedMessages
+                    v-if="selectedThreadPendingRequest"
+                    :messages="selectedThreadQueuedMessages"
+                    @edit="onEditQueuedMessage"
+                    @steer="steerQueuedMessage"
+                    @delete="removeQueuedMessage"
+                    @reorder="onReorderQueuedMessage"
                   />
                   <ThreadPendingRequestPanel
                     v-if="selectedThreadPendingRequest"
@@ -1050,7 +1051,18 @@
                     @reload-goal="onReloadGoal"
                     @clear-goal="onClearGoal"
                     @open-side-conversation="onOpenSideConversation"
-                    @interrupt="onInterruptTurn" />
+                    @interrupt="onInterruptTurn"
+                  >
+                    <template #queue>
+                      <QueuedMessages
+                        :messages="selectedThreadQueuedMessages"
+                        @edit="onEditQueuedMessage"
+                        @steer="steerQueuedMessage"
+                        @delete="removeQueuedMessage"
+                        @reorder="onReorderQueuedMessage"
+                      />
+                    </template>
+                  </ThreadComposer>
                 </div>
               </template>
             </div>

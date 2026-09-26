@@ -3,10 +3,11 @@
     <div v-if="turnThroughputText" class="thread-composer-throughput" :title="t('Prefill is client-observed time to first text; decode measures text streaming; average covers the full turn.')" role="status">
       {{ turnThroughputText }}
     </div>
+    <slot v-if="!isComposerExpanded" name="queue" />
     <div
       class="thread-composer-shell"
       :class="{
-        'thread-composer-shell--no-top-radius': hasQueueAbove,
+        'thread-composer-shell--no-top-radius': hasQueueAbove && !isComposerExpanded,
         'thread-composer-shell--drag-active': isDragActive,
       }"
     >
@@ -2110,11 +2111,11 @@ watch(
 }
 
 .thread-composer-throughput {
-  @apply px-2 pb-1 text-right text-[11px] leading-4 text-zinc-500 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis;
+  @apply px-2 pb-1 text-right text-[11px] leading-4 text-zinc-500 tabular-nums whitespace-normal break-words;
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-x-0 bottom-0 top-12 sm:top-14 z-50 max-w-none bg-white/95 p-3 sm:p-6;
+  @apply fixed inset-x-0 bottom-0 top-12 sm:top-14 z-50 flex max-w-none flex-col bg-white/95 p-3 sm:p-6;
 }
 
 .thread-composer-shell {
@@ -2122,7 +2123,7 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-shell {
-  @apply mx-auto flex h-full w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-col shadow-2xl;
+  @apply mx-auto flex min-h-0 w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-1 flex-col shadow-2xl;
 }
 
 .thread-composer-shell--drag-active {

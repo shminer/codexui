@@ -68,13 +68,6 @@
           @respond-server-request="emit('respond-server-request', $event)"
         />
         <div v-show="!pendingRequests[0]" class="side-conversation-composer">
-          <QueuedMessages
-            :messages="queuedMessages"
-            @edit="emit('edit-queued-message', $event)"
-            @steer="emit('steer-queued-message', $event)"
-            @delete="emit('remove-queued-message', $event)"
-            @reorder="emit('reorder-queued-message', $event)"
-          />
           <ThreadComposer
             ref="composerRef"
             :active-thread-id="threadId"
@@ -102,7 +95,17 @@
             @update:selected-model="emit('update:selected-model', $event)"
             @update:selected-reasoning-effort="emit('update:selected-reasoning-effort', $event)"
             @update:selected-speed-mode="emit('update:selected-speed-mode', $event)"
-          />
+          >
+            <template #queue>
+              <QueuedMessages
+                :messages="queuedMessages"
+                @edit="emit('edit-queued-message', $event)"
+                @steer="emit('steer-queued-message', $event)"
+                @delete="emit('remove-queued-message', $event)"
+                @reorder="emit('reorder-queued-message', $event)"
+              />
+            </template>
+          </ThreadComposer>
         </div>
         <div
           v-if="!isMobile && !popupTarget"
@@ -500,6 +503,14 @@ watch(isMobile, (mobile) => {
 
 .side-conversation-composer :deep(.thread-composer-shell) {
   @apply rounded-lg;
+}
+
+.side-conversation-composer :deep(.queued-messages-inner) {
+  @apply rounded-t-lg;
+}
+
+.side-conversation-composer :deep(.thread-composer-shell--no-top-radius) {
+  @apply rounded-t-none;
 }
 
 .side-conversation-resize-handle {
