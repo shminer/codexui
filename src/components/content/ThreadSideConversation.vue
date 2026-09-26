@@ -1,6 +1,6 @@
 <template>
   <Teleport :to="popupTarget ?? 'body'">
-    <div v-show="visible" class="side-conversation-host" :class="{ 'side-conversation-host--popup': popupTarget }" @click.self="emit('minimize')">
+    <div v-show="visible" class="side-conversation-host" :class="{ 'side-conversation-host--popup': popupTarget }" @click.self="minimize">
       <section
         class="side-conversation-panel"
         role="dialog"
@@ -27,7 +27,7 @@
             type="button"
             :aria-label="t('Minimize side conversation')"
             :title="t('Minimize side conversation')"
-            @click="emit('minimize')"
+            @click="minimize"
           >
             <IconTablerMinimize />
           </button>
@@ -217,6 +217,11 @@ function closePopup(): void {
   const opened = popupWindow
   returnFromPopup()
   opened?.close()
+}
+
+function minimize(): void {
+  closePopup()
+  emit('minimize')
 }
 
 function popOut(): void {

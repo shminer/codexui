@@ -1733,7 +1733,7 @@ function onInputPaste(event: ClipboardEvent): void {
   const imageFiles = items
     .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
     .map((item) => item.getAsFile())
-    .filter((file): file is File => file instanceof File)
+    .filter((file): file is File => file !== null)
   if (imageFiles.length === 0) return
   if (!hasPlainText) {
     event.preventDefault()
