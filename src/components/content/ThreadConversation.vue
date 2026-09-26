@@ -293,6 +293,18 @@
                 </a>
               </div>
 
+              <button
+                v-if="isCopyableUserMessage(message)"
+                type="button"
+                class="message-copy-button user-message-copy-toggle"
+                :aria-expanded="expandedUserMessageId === message.id"
+                :aria-label="expandedUserMessageId === message.id ? 'Hide message copy action' : 'Show message copy action'"
+                @click="toggleUserMessageCopy(message)"
+              >
+                <IconTablerCopy class="icon-svg message-copy-icon" />
+                <span class="message-copy-label">Copy</span>
+              </button>
+
               <article v-if="message.text.length > 0" class="message-card" :data-role="message.role">
                 <div v-if="message.isAutomationRun" class="automation-message-label">
                   <span>Sent via automation</span>
@@ -381,13 +393,8 @@
                 <div
                   v-else
                   class="message-text-flow"
-                  :tabindex="isCopyableUserMessage(message) ? 0 : undefined"
-                  :role="isCopyableUserMessage(message) ? 'group' : undefined"
-                  :aria-label="isCopyableUserMessage(message) ? 'User message copy actions' : undefined"
-                  :aria-expanded="isCopyableUserMessage(message) ? expandedUserMessageId === message.id : undefined"
-                  @click="toggleUserMessageCopy(message, $event)"
-                  @keydown="toggleUserMessageCopy(message, $event)"
-                  v-memo="[message.id, message.text, message.role, expandedUserMessageId === message.id, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
+                  @click="onUserMessageTextClick(message, $event)"
+                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -1908,16 +1915,15 @@ function isCopyableUserMessage(message: UiMessage): boolean {
   return message.role === 'user' && message.text.trim().length > 0
 }
 
-function toggleUserMessageCopy(message: UiMessage, event: MouseEvent | KeyboardEvent): void {
+function toggleUserMessageCopy(message: UiMessage): void {
   if (!isCopyableUserMessage(message)) return
-  if (event instanceof KeyboardEvent) {
-    if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return
-    event.preventDefault()
-  } else {
-    if (event.target instanceof Element && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
-    if (window.getSelection()?.isCollapsed === false) return
-  }
   expandedUserMessageId.value = expandedUserMessageId.value === message.id ? '' : message.id
+}
+
+function onUserMessageTextClick(message: UiMessage, event: MouseEvent): void {
+  if (event.target instanceof Element && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
+  if (window.getSelection()?.isCollapsed === false) return
+  toggleUserMessageCopy(message)
 }
 
 function showCopyMessageButton(message: UiMessage): boolean {
@@ -4803,6 +4809,16 @@ onBeforeUnmount(() => {
 
 .message-toolbar[data-role='user'] .message-copy-button {
   min-width: 60px;
+}
+
+.user-message-copy-toggle {
+  @apply sr-only;
+}
+
+.user-message-copy-toggle:focus {
+  @apply not-sr-only;
+  min-width: 60px;
+  min-height: 32px;
 }
 
 @media (hover: none), (pointer: coarse) {
