@@ -3645,6 +3645,16 @@ describe('history rollback capability', () => {
     expect(gatewayMocks.rollbackThreadAndFiles).not.toHaveBeenCalled()
     expect(state.error.value).toContain('does not support')
   })
+  it('reports a rejected revert without replacing the displayed messages', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.supportsThreadRollback.mockResolvedValue(true)
+    gatewayMocks.rollbackThreadAndFiles.mockRejectedValue(new Error('revert rejected'))
+    const previous = state.messages.value
+    expect(await state.rollbackSelectedThread('turn-1')).toBe(false)
+    expect(state.messages.value).toEqual(previous)
+    expect(state.error.value).toBe('revert rejected')
+    expect(state.isRollingBack.value).toBe(false)
+  })
   it('surfaces file errors after a successful history rollback', async () => {
     const { state } = await setupTurnLifecycleNotificationState('thread-1')
     gatewayMocks.supportsThreadRollback.mockResolvedValue(true)

@@ -5,6 +5,7 @@ describe('safe feature gate', () => {
   it('allows the thread RPC methods needed by the mobile client', () => {
     expect(isAllowedRpcMethod('thread/read')).toBe(true)
     expect(isAllowedRpcMethod('thread/resume')).toBe(true)
+    expect(isAllowedRpcMethod('thread/revert')).toBe(true)
     expect(isAllowedRpcMethod('thread/inject_items')).toBe(true)
     expect(isAllowedRpcMethod('thread/unsubscribe')).toBe(true)
     expect(isAllowedRpcMethod('thread/section/move')).toBe(true)
@@ -17,6 +18,7 @@ describe('safe feature gate', () => {
 
   it('rejects raw or integration RPC methods outside the allowlist', () => {
     expect(isAllowedRpcMethod('command/exec')).toBe(false)
+    expect(isAllowedRpcMethod('thread/rollback')).toBe(false)
     expect(isAllowedRpcMethod('composio/connect')).toBe(false)
   })
 

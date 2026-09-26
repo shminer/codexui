@@ -32,11 +32,14 @@ The old rollback button is replaced with an `Edit message` action under each eli
 
 ### Capability and failure consistency
 
-- Setup: a runtime without `thread/rollback`, then a fixture/runtime supporting it. Use only a disposable project with a known apply_patch edit.
+- Setup: a runtime without `thread/revert`, then Codex CLI 0.157.1 or a fixture/runtime supporting it. Use only a disposable project with a known apply_patch edit. A catalog containing only the removed `thread/rollback` method does not count as edit support.
 - On the unsupported runtime, load the conversation: Edit is hidden. Calling the handler directly reports unsupported history editing without touching files or the draft.
-- On the supported runtime, make rollback RPC fail: files and history remain intact. On success, verify history trims at the selected user turn, the captured patch is undone, and only then is the user text added to the draft.
+- On the supported runtime, make `thread/revert` fail: files and history remain intact. On success, verify the request uses `{ threadId, beforeTurnId }`, history trims before the selected user turn, the captured patch is undone, and only then is the user text added to the draft.
+- Revert a later turn in a multi-turn conversation: despite the native revert response containing empty `thread.turns`, the earlier messages remain visible after the follow-up `thread/read` and after refresh. Edit the first turn separately and confirm the empty history is handled normally.
+- After an edit, load earlier messages and simulate a live-state read failure: removed turns must not return from cached history snapshots or pages.
+- Make the retained-history read fail after a successful revert: the error explicitly states that history was already reverted; it must not claim that the operation left history and files unchanged.
 - Simulate a file conflict after successful history rollback: the UI keeps the new history and explicitly lists file errors instead of reporting full success. Switching threads during the request must not append the old prompt to the new thread.
 - Cleanup: archive the test thread and delete the disposable project.
-- Performance: capability loads once per polling lifecycle, and is checked again only on explicit Edit. The server reads the session once before rollback, reuses that patch snapshot, and trims the returned history to the normal recent page. No retry loop or duplicated file undo.
+- Performance: capability loads once per polling lifecycle, and is checked again only on explicit Edit. The edit endpoint makes exactly three sequential native calls (`thread/read`, `thread/revert`, `thread/read`), reads the session once before revert, reuses that patch snapshot, and trims the returned history to the normal recent page. The existing post-edit UI refresh is unchanged. No per-turn request fanout, retry loop, or duplicated file undo.
 
 - Concurrent startup consumers share the in-flight method-catalog request. A later explicit Edit checks capabilities again, so a failed or stale startup read cannot authorize file changes.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getMethodCatalog, supportsThreadRollback, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, rollbackThread, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 describe('fork through selected response', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -928,14 +928,54 @@ describe('resumeThread', () => {
 describe('shared method capability lookup', () => {
   afterEach(() => vi.unstubAllGlobals())
   it('shares concurrent startup reads but refreshes a later explicit check', async () => {
-    const fetch = vi.fn(async () => Response.json({ data: ['thread/rollback'] }))
+    const fetch = vi.fn(async () => Response.json({ data: ['thread/revert'] }))
     vi.stubGlobal('fetch', fetch)
     const [catalog, supported] = await Promise.all([getMethodCatalog(), supportsThreadRollback()])
-    expect(catalog).toEqual(['thread/rollback'])
+    expect(catalog).toEqual(['thread/revert'])
     expect(supported).toBe(true)
     expect(fetch).toHaveBeenCalledTimes(1)
     fetch.mockResolvedValue(Response.json({ data: [] }))
     expect(await supportsThreadRollback()).toBe(false)
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not treat the removed rollback method as edit support', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: ['thread/rollback'] })))
+    expect(await supportsThreadRollback()).toBe(false)
+  })
+})
+
+describe('native history revert', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('converts a turn count to beforeTurnId and reads retained messages after the empty revert response', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    let reverted = false
+    const earlier = { id: 'earlier', status: 'completed', items: [{ id: 'earlier-message', type: 'userMessage', content: [{ type: 'text', text: 'Keep this message' }] }] }
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body))
+      requests.push(request)
+      if (request.method === 'thread/revert') {
+        reverted = true
+        return Response.json({ result: { thread: { id: 'thread', turns: [] } } })
+      }
+      return Response.json({ result: { thread: { id: 'thread', turns: reverted ? [earlier] : [earlier, { id: 'failed', status: 'failed', items: [] }] } } })
+    }))
+    const messages = await rollbackThread('thread', 1)
+    expect(messages).toEqual([expect.objectContaining({ text: 'Keep this message', turnId: 'earlier' })])
+    expect(requests).toEqual([
+      { method: 'thread/read', params: { threadId: 'thread', includeTurns: true } },
+      { method: 'thread/revert', params: { threadId: 'thread', beforeTurnId: 'failed' } },
+      { method: 'thread/read', params: { threadId: 'thread', includeTurns: true } },
+    ])
+  })
+
+  it('does not call revert if the requested turn count is invalid or missing', async () => {
+    const fetch = vi.fn(async () => Response.json({ result: { thread: { turns: [] } } }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(rollbackThread('thread', 0)).rejects.toThrow('positive turn count')
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(rollbackThread('thread', 1)).rejects.toThrow('no longer exists')
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

@@ -1807,7 +1807,7 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
 }
 
 export async function supportsThreadRollback(): Promise<boolean> {
-  return (await getMethodCatalog()).includes('thread/rollback')
+  return (await getMethodCatalog()).includes('thread/revert')
 }
 
 export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[] }> {
@@ -1824,7 +1824,13 @@ export async function rollbackThreadAndFiles(threadId: string, turnId: string, c
 }
 
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
-  const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
+  if (!Number.isInteger(numTurns) || numTurns <= 0) throw new Error('History revert requires a positive turn count')
+  const current = await callRpc<ThreadReadResponse>('thread/read', { threadId, includeTurns: true })
+  const turns = current.thread?.turns ?? []
+  const beforeTurnId = turns[turns.length - numTurns]?.id
+  if (!beforeTurnId) throw new Error('The selected turn no longer exists. Reload the conversation.')
+  await callRpc('thread/revert', { threadId, beforeTurnId })
+  const payload = await callRpc<ThreadReadResponse>('thread/read', { threadId, includeTurns: true })
   return normalizeThreadMessagesV2(payload, readThreadTurnStartIndex(payload))
 }
 

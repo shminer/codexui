@@ -232,7 +232,7 @@ const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
 
 const THREAD_RESPONSE_TURN_LIMIT = 10
 const THREAD_TURN_PAGE_READ_CACHE_TTL_MS = 30_000
-const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
+const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/revert'])
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
 const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
 const PROJECTLESS_THREAD_DIRECTORY_MAX_ATTEMPTS = 100
@@ -3823,12 +3823,20 @@ export async function rollbackThreadWithFiles(
       }
     }
   }
-  const result = await appServer.rpc('thread/rollback', { threadId, numTurns: turns.length - index })
+  await appServer.rpc('thread/revert', { threadId, beforeTurnId: turnId })
+  let fileErrors: string[]
   try {
     const files = await revertTurnFileChanges(cwd, changes)
-    return { result, fileErrors: files.errors }
+    fileErrors = files.errors
   } catch (error) {
-    return { result, fileErrors: [getErrorMessage(error, 'Failed to revert file changes')] }
+    fileErrors = [getErrorMessage(error, 'Failed to revert file changes')]
+  }
+  // thread/revert returns metadata with empty turns, not the retained history.
+  try {
+    const result = await appServer.rpc('thread/read', { threadId, includeTurns: true })
+    return { result, fileErrors }
+  } catch (error) {
+    throw new Error(`Conversation history was reverted, but retained history could not be reloaded: ${getErrorMessage(error, 'thread/read failed')}${fileErrors.length ? `; file errors: ${fileErrors.join('; ')}` : ''}`)
   }
 }
 
@@ -6834,6 +6842,13 @@ export class AppServerProcess {
     await this.ensureInitialized()
     const request = this.call(method, params)
     const threadId = readNonEmptyString(asRecord(params)?.threadId)
+    if (method === 'thread/revert' && threadId) {
+      const result = await request
+      this.lastThreadReadSnapshotByThreadId.delete(threadId)
+      this.threadTurnPageReadCacheByThreadId.delete(threadId)
+      this.liveStateCache.delete(threadId)
+      return result
+    }
     if (method !== 'turn/start' || !threadId) return request
     const pending = this.pendingTurnStarts.get(threadId) ?? new Set<Promise<unknown>>()
     pending.add(request)
@@ -8281,7 +8296,7 @@ export function createCodexBridgeMiddleware(options: {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/thread/rollback') {
-        if (!securityPolicy.isRpcMethodAllowed('thread/rollback') || !(await methodCatalog.listMethods()).includes('thread/rollback')) {
+        if (!securityPolicy.isRpcMethodAllowed('thread/revert') || !(await methodCatalog.listMethods()).includes('thread/revert')) {
           setJson(res, 409, { error: 'This Codex runtime does not support editing conversation history.' })
           return
         }
@@ -8296,8 +8311,9 @@ export function createCodexBridgeMiddleware(options: {
         const cwd = rawCwd ? await authorizeGitDirectory(rawCwd, securityPolicy, res, true) : ''
         if (cwd === null) return
         const rollback = await rollbackThreadWithFiles(appServer, threadId, turnId, cwd, securityPolicy)
-        const trimmed = trimThreadTurnsInRpcResult('thread/rollback', rollback.result)
-        rollback.result = await sanitizeThreadTurnsInlinePayloads('thread/rollback', trimmed)
+        const trimmed = trimThreadTurnsInRpcResult('thread/read', rollback.result)
+        rollback.result = await sanitizeThreadTurnsInlinePayloads('thread/read', trimmed)
+        appServer.storeThreadReadSnapshot(threadId, rollback.result)
         setJson(res, 200, rollback)
         return
       }
