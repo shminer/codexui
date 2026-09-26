@@ -11,6 +11,7 @@
 4. Run the tool-using prompt and observe the line during a tool wait. Complete a turn with no usage, then reload the page.
 5. Repeat in light and dark themes at desktop, `375x812`, and `768x1024` viewports.
 6. While a turn runs, queue one message and then several messages. Inspect the TPS line, queue and input together; edit, steer, delete and reorder queued messages. Expand the terminal and trigger an approval request. Repeat the queue checks in a side conversation and its popped-out window.
+7. In an existing main thread, click the side-conversation icon next to Send/Stop. Minimize and reopen the side chat. Confirm that its own input has no nested side-chat icon. Open the main input's add menu and inspect Goal; type a draft, switch threads and return, then reload.
 
 #### Expected Results
 - The existing line above the composer says `Waiting for token data` before valid usage, then shows `<output tokens> otks · <prefill rate> PF tps · <decode rate> dec tps · <average rate> avg TPS` when all measurements are available. No additional UI row or panel is introduced.
@@ -19,6 +20,7 @@
 - Completion keeps the final result above the input until the next turn starts. A turn without valid usage shows only `Worked for <duration>`, never `0 TPS` or `Infinity`.
 - Switching threads displays that thread's own latest result; reload restores completed results from existing local summaries. The line stays readable without clipping or overlap in both themes and all viewports.
 - With queued messages, the order is TPS, queue, input. TPS stays outside the continuous queue/input border and wraps on narrow screens. Queue and input have matching left/right edges, no gap and no rounded input corners at their shared boundary. Without a queue, the input has its full rounded outline. The terminal sits above the input area; approvals retain a queue directly attached to the request panel. Queue actions never submit the input form.
+- Main composers enable the side-conversation icon, Goal and draft persistence by default. Side composers explicitly disable these capabilities; their drafts remain in memory only. Main drafts survive thread switching and reload.
 
 #### Rollback/Cleanup
 - No cleanup is needed. Test turns remain in their threads; disposable local summaries can be cleared by removing `codex-web-local.turn-summaries.v1` from browser storage.

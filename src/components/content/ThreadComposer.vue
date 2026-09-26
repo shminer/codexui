@@ -542,7 +542,7 @@ type SkillSourceBadge = {
 
 type SkillItem = { name: string; displayName?: string; description: string; path: string; scope?: string; enabled?: boolean }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   activeThreadId: string
   ownerDocument?: Document
   persistDraft?: boolean
@@ -586,7 +586,11 @@ const props = defineProps<{
   isGoalLoading?: boolean
   isGoalUpdating?: boolean
   goalError?: string
-}>()
+}>(), {
+  persistDraft: true,
+  allowGoal: true,
+  allowSideConversation: true,
+})
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
 

@@ -2,6 +2,18 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
+  it('enables main composer capabilities by default and disables them explicitly in side chats', async () => {
+    const composer = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
+    const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    expect(composer).toContain('withDefaults(defineProps<')
+    for (const capability of ['persistDraft', 'allowGoal', 'allowSideConversation']) {
+      expect(composer).toContain(`${capability}: true`)
+    }
+    for (const capability of ['persist-draft', 'allow-goal', 'allow-side-conversation']) {
+      expect(side).toContain(`:${capability}="false"`)
+    }
+  })
+
   it('minimizes without ending and keeps desktop drag and accessible resize wiring', async () => {
     const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
