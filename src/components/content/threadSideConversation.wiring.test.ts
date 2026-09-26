@@ -38,7 +38,7 @@ describe('ThreadSideConversation wiring', () => {
     expect(source).toContain("t('End side conversation')")
     expect(source).toContain('v-show="visible"')
     expect(source).not.toContain(':disabled="isOpening"')
-    expect(source).toContain("@click.self=\"emit('minimize')\"")
+    expect(source).toContain('@click.self="minimize"')
     expect(source).toContain("@click=\"emit('end')\"")
     expect(source).toContain("interrupt: []")
     expect(source).toContain('@interrupt="emit(\'interrupt\')"')
