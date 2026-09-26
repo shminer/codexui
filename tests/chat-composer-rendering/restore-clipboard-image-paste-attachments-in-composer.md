@@ -24,3 +24,12 @@
 
 #### Rollback/Cleanup
 - Remove the attached image chip from composer if not needed.
+
+### Popup clipboard realm
+
+- Setup: open a side conversation and pop it into a new window, using light/dark themes and desktop/mobile viewports.
+- Paste an image from the clipboard into the popup composer.
+- Expected: one upload and one attachment appear; the popup File object is accepted even though it belongs to a different window. Minimize closes the popup and leaves the existing side conversation available from the parent page.
+- Cleanup: remove the test attachment and close the side conversation. The null check adds no allocation or additional upload request.
+
+- Popup media regression: verify that the pasted thumbnail finishes loading (`naturalWidth > 0`), not only that an attachment row appears. The popup loads `/side-conversation.html` before the existing component is teleported into it; image requests can then use the app origin normally. This page contains no chat state or script and bypasses the PWA shell cache so it cannot replace the offline home page. Cost: one tiny static HTML request per new popup, no new session or synchronization channel.

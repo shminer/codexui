@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
-import { handleReviewRoutes } from './reviewGit.js'
+import { authorizeGitDirectory, handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { readRecentThreadTurns } from './recentThreadTurns.js'
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
@@ -2554,22 +2554,11 @@ export async function callRpcWithArchiveRecovery(
 export async function discardSideConversationThread(
   appServer: RpcExecutor,
   threadId: string,
+  turnId?: string,
 ): Promise<void> {
   try {
-    const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
-    const thread = asRecord(response?.thread)
-    const turns = Array.isArray(thread?.turns) ? thread.turns : []
-    let activeTurnId = ''
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = asRecord(turns[index])
-      const status = readNonEmptyString(turn?.status)
-      if (status === 'inProgress' || status === 'running' || status === 'active') {
-        activeTurnId = readNonEmptyString(turn?.id)
-        break
-      }
-    }
-    if (activeTurnId) {
-      await appServer.rpc('turn/interrupt', { threadId, turnId: activeTurnId })
+    if (turnId) {
+      await appServer.rpc('turn/interrupt', { threadId, turnId })
     }
   } catch {
     // Page teardown cleanup still unsubscribes when the read or interrupt races with completion.
@@ -3806,6 +3795,43 @@ async function applyTurnFileChanges(
   return { applied, errors, appliedPatchIds }
 }
 
+export async function rollbackThreadWithFiles(
+  appServer: RpcExecutor, threadId: string, turnId: string, cwd: string,
+  policy: ServerSecurityPolicy = PERMISSIVE_SECURITY_POLICY,
+): Promise<{ result: unknown; fileErrors: string[] }> {
+  const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
+  const thread = asRecord(response?.thread)
+  const turns = Array.isArray(thread?.turns) ? thread.turns : []
+  if (turns.some((turn) => ['inProgress', 'running', 'active'].includes(readNonEmptyString(asRecord(turn)?.status)))) {
+    throw new Error('Finish the current turn before editing history.')
+  }
+  const index = turns.findIndex((turn) => readNonEmptyString(asRecord(turn)?.id) === turnId)
+  if (index < 0) throw new Error('The selected turn no longer exists. Reload the conversation.')
+  const turnIds = new Set(turns.slice(index).map((turn) => readNonEmptyString(asRecord(turn)?.id)))
+  const sessionPath = readNonEmptyString(thread?.path)
+  // Capture patches while the selected turns still exist. A read or RPC failure
+  // must leave workspace files untouched.
+  const changes = sessionPath && cwd
+    ? collectFileChangesForTurns(await readFile(sessionPath, 'utf8'), turnIds, cwd)
+    : new Map<string, CollectedTurnFileInfo>()
+  if (policy !== PERMISSIVE_SECURITY_POLICY) {
+    for (const info of changes.values()) {
+      const paths = [...info.commandFilePaths, ...info.patchInputs.flatMap((patch) =>
+        parseApplyPatchInput(patch.input).flatMap((change) => [change.path, ...(change.movedToPath ? [change.movedToPath] : [])]))]
+      for (const path of paths) {
+        if (!await policy.resolveLocalPath(resolve(cwd, path))) throw new Error('A rollback file is outside the allowed roots or no longer exists.')
+      }
+    }
+  }
+  const result = await appServer.rpc('thread/rollback', { threadId, numTurns: turns.length - index })
+  try {
+    const files = await revertTurnFileChanges(cwd, changes)
+    return { result, fileErrors: files.errors }
+  } catch (error) {
+    return { result, fileErrors: [getErrorMessage(error, 'Failed to revert file changes')] }
+  }
+}
+
 async function revertTurnFileChanges(
   cwd: string,
   turnInfos: Map<string, CollectedTurnFileInfo>,
@@ -4381,7 +4407,7 @@ async function withPreservedUntrackedFilesForGitTarget(repoRoot: string, targetR
   }
 }
 
-async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchName: string): Promise<void> {
+async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchName: string, policy: ServerSecurityPolicy): Promise<void> {
   await withPreservedUntrackedFilesForGitTarget(repoRoot, branchName, async () => {
     try {
       await runCommand('git', ['checkout', branchName], { cwd: repoRoot })
@@ -4390,7 +4416,9 @@ async function checkoutGitBranchWithWorktreeRecovery(repoRoot: string, branchNam
       if (!blockingWorktreePath) {
         throw checkoutError
       }
-      await runCommand('git', ['checkout', '--detach'], { cwd: blockingWorktreePath })
+      const allowedWorktree = await policy.resolveLocalPath(blockingWorktreePath)
+      if (!allowedWorktree) throw Object.assign(new Error('Blocking worktree is outside the allowed roots'), { statusCode: 403 })
+      await runCommand('git', ['checkout', '--detach'], { cwd: allowedWorktree })
       await runCommand('git', ['checkout', branchName], { cwd: repoRoot })
     }
   })
@@ -4455,7 +4483,7 @@ function extractBranchLockedWorktreePath(error: unknown, branchName: string): st
   const message = getErrorMessage(error, '')
   if (!message || !branchName) return ''
   const escapedBranch = branchName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  const pattern = new RegExp(`'${escapedBranch}' is already checked out at '([^']+)'`, 'u')
+  const pattern = new RegExp(`'${escapedBranch}' is already (?:checked out at|used by worktree at) '([^']+)'`, 'u')
   const match = pattern.exec(message)
   return match?.[1]?.trim() ?? ''
 }
@@ -5668,11 +5696,32 @@ async function withThreadQueueStateUpdate<T>(
   })
 }
 
-async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
-  await withThreadQueueStateUpdate(() => ({
-    nextState: normalizeThreadQueueState(nextState),
-    result: undefined,
-  }))
+export async function mutateThreadQueue(threadId: string, operation: unknown): Promise<{ data: ThreadQueueState; removed?: StoredQueuedMessage }> {
+  const op = asRecord(operation)
+  if (!threadId.trim() || !op || !['add', 'remove', 'move'].includes(String(op.type))) throw new Error('Invalid queue operation')
+  const message = op.type === 'add' ? normalizeStoredQueuedMessage(op.message) : null
+  if (op.type === 'add' && !message) throw new Error('Invalid queued message')
+  return withThreadQueueStateUpdate((state) => {
+    const queue = [...(state[threadId] ?? [])]
+    let removed: StoredQueuedMessage | undefined
+    if (message) {
+      if (!queue.some((item) => item.id === message.id)) {
+        const before = queue.findIndex((item) => item.id === op.beforeId)
+        queue.splice(before < 0 ? queue.length : before, 0, message)
+      }
+    } else {
+      const index = queue.findIndex((item) => item.id === op.id)
+      if (index >= 0 && op.type === 'remove') [removed] = queue.splice(index, 1)
+      if (index >= 0 && op.type === 'move') {
+        const target = queue.findIndex((item) => item.id === op.targetId)
+        if (target >= 0) queue.splice(target, 0, queue.splice(index, 1)[0]!)
+      }
+    }
+    const nextState = { ...state }
+    if (queue.length) nextState[threadId] = queue
+    else delete nextState[threadId]
+    return { nextState, result: { data: nextState, removed } }
+  })
 }
 
 async function appendThreadQueuedMessage(threadId: string, message: StoredQueuedMessage): Promise<void> {
@@ -6256,7 +6305,7 @@ const MERGEABLE_ITEM_TYPES = new Set([
   'fileChange',
 ])
 
-class AppServerProcess {
+export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
   private initializePromise: Promise<void> | null = null
@@ -6266,6 +6315,8 @@ class AppServerProcess {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
+  private readonly activeTurnIds = new Map<string, string>()
+  private readonly pendingTurnStarts = new Map<string, Set<Promise<unknown>>>()
   private readonly streamEventsByThreadId = new Map<string, StreamEventFrame[]>()
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
   private readonly threadTurnPageReadCacheByThreadId = new Map<string, { result: unknown; expiresAt: number }>()
@@ -6371,6 +6422,8 @@ class AppServerProcess {
 
       this.pending.clear()
       this.pendingServerRequests.clear()
+      this.activeTurnIds.clear()
+      this.pendingTurnStarts.clear()
       this.process = null
       this.initialized = false
       this.initializePromise = null
@@ -6427,6 +6480,9 @@ class AppServerProcess {
     this.captureItemFromNotification(notification)
     const nThreadId = this.extractThreadIdFromParams(notification.params)
     if (nThreadId) {
+      const turnId = readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.id)
+      if (notification.method === 'turn/started' && turnId) this.activeTurnIds.set(nThreadId, turnId)
+      if (notification.method === 'turn/completed' && this.activeTurnIds.get(nThreadId) === turnId) this.activeTurnIds.delete(nThreadId)
       this.invalidateLiveStateCache(nThreadId)
       this.threadTurnPageReadCacheByThreadId.delete(nThreadId)
     }
@@ -6776,7 +6832,23 @@ class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    return this.call(method, params)
+    const request = this.call(method, params)
+    const threadId = readNonEmptyString(asRecord(params)?.threadId)
+    if (method !== 'turn/start' || !threadId) return request
+    const pending = this.pendingTurnStarts.get(threadId) ?? new Set<Promise<unknown>>()
+    pending.add(request)
+    this.pendingTurnStarts.set(threadId, pending)
+    try {
+      return await request
+    } finally {
+      pending.delete(request)
+      if (!pending.size) this.pendingTurnStarts.delete(threadId)
+    }
+  }
+
+  async getActiveTurnAfterPendingStarts(threadId: string): Promise<string> {
+    await Promise.allSettled([...(this.pendingTurnStarts.get(threadId) ?? [])])
+    return this.activeTurnIds.get(threadId) ?? ''
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
@@ -6839,6 +6911,8 @@ class AppServerProcess {
     }
     this.pending.clear()
     this.pendingServerRequests.clear()
+    this.activeTurnIds.clear()
+    this.pendingTurnStarts.clear()
 
     try {
       proc.stdin.end()
@@ -6866,6 +6940,7 @@ class AppServerProcess {
 }
 
 export class BackendQueueProcessor {
+  private disposed = false
   private readonly processingThreadIds = new Set<string>()
   private readonly queueDrainTimersByThreadId = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly queueDrainDueAtByThreadId = new Map<string, number>()
@@ -6882,6 +6957,7 @@ export class BackendQueueProcessor {
   }
 
   dispose(): void {
+    this.disposed = true
     this.unsubscribe()
     for (const timer of this.queueDrainTimersByThreadId.values()) {
       clearTimeout(timer)
@@ -6903,7 +6979,7 @@ export class BackendQueueProcessor {
   }
 
   scheduleThreadQueueDrain(threadId: string, delayMs = 5000): void {
-    if (!threadId) return
+    if (!threadId || this.disposed) return
     const normalizedDelayMs = Math.max(0, delayMs)
     const nextDueAt = Date.now() + normalizedDelayMs
     const existingDueAt = this.queueDrainDueAtByThreadId.get(threadId)
@@ -6925,30 +7001,38 @@ export class BackendQueueProcessor {
   }
 
   async processThreadQueue(threadId: string): Promise<void> {
-    if (this.processingThreadIds.has(threadId)) return
+    if (this.disposed || this.processingThreadIds.has(threadId)) return
     this.processingThreadIds.add(threadId)
     try {
+      if (!await this.hasQueuedTurns(threadId) || this.disposed) return
       const canStart = await this.canStartQueuedTurn(threadId)
-      if (!canStart) {
-        if (await this.hasQueuedTurns(threadId)) {
+      if (this.disposed) return
+      if (canStart !== true) {
+        if (canStart === false && await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
         return
       }
       const next = await this.popNextQueuedTurn(threadId)
       if (!next) return
+      if (this.disposed) {
+        await this.restoreQueuedTurn(next)
+        return
+      }
       try {
         await this.startQueuedTurn(next)
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
-      } catch {
+      } catch (error) {
         await this.restoreQueuedTurn(next)
+        throw error
+      }
+    } catch (error) {
+      // Missing/ephemeral threads cannot recover by polling persisted history.
+      if (!/ephemeral|thread.*not found|no rollout found/i.test(String(error)) && await this.hasQueuedTurns(threadId).catch(() => false)) {
         this.scheduleThreadQueueDrain(threadId)
       }
-    } catch {
-      // Queue processing is best-effort. Keep the bridge alive if app-server is unavailable.
-      this.scheduleThreadQueueDrain(threadId)
     } finally {
       this.processingThreadIds.delete(threadId)
     }
@@ -6960,7 +7044,7 @@ export class BackendQueueProcessor {
     return Array.isArray(queue) && queue.length > 0
   }
 
-  private async canStartQueuedTurn(threadId: string): Promise<boolean> {
+  private async canStartQueuedTurn(threadId: string): Promise<boolean | 'paused'> {
     const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: true }))
     const thread = asRecord(response?.thread)
     if (!thread) return false
@@ -6970,6 +7054,8 @@ export class BackendQueueProcessor {
     if (statusType === 'inProgress' || statusType === 'running' || statusType === 'active') return false
 
     const turns = Array.isArray(thread.turns) ? thread.turns : []
+    const lastStatus = readNonEmptyString(asRecord(turns.at(-1))?.status)
+    if (lastStatus === 'interrupted' || lastStatus === 'failed') return 'paused'
     return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status) === 'inProgress')
   }
 
@@ -7004,7 +7090,13 @@ export class BackendQueueProcessor {
     })
   }
 
-  private async resolveCollaborationModeSettings(mode: CollaborationModeKind): Promise<ResolvedCollaborationModeSettings> {
+  private async resolveCollaborationModeSettings(mode: CollaborationModeKind, resumed: Record<string, unknown> | null): Promise<ResolvedCollaborationModeSettings> {
+    // Resume reports the target thread's current settings. Global defaults are
+    // only a compatibility fallback for older runtimes without these fields.
+    const threadModel = readNonEmptyString(resumed?.model)
+    if (threadModel) {
+      return { model: threadModel, reasoningEffort: normalizeCollaborationModeReasoningEffort(normalizeReasoningEffort(resumed?.reasoningEffort)) }
+    }
     let currentConfig: Record<string, unknown> | null = null
     try {
       const configPayload = asRecord(await this.appServer.rpc('config/read', {}))
@@ -7041,7 +7133,7 @@ export class BackendQueueProcessor {
     throw new Error(`${mode === 'plan' ? 'Plan' : 'Default'} mode requires an available model.`)
   }
 
-  private async buildQueuedTurnParams(turn: BackendQueuedTurn): Promise<Record<string, unknown>> {
+  private async buildQueuedTurnParams(turn: BackendQueuedTurn, resumed: Record<string, unknown> | null): Promise<Record<string, unknown>> {
     const localImageAttachments: StoredQueuedMessage['fileAttachments'] = []
     for (const imageUrl of turn.message.imageUrls) {
       const localImagePath = extractLocalImagePathFromUrl(imageUrl.trim())
@@ -7086,7 +7178,7 @@ export class BackendQueueProcessor {
     }
 
     try {
-      const settings = await this.resolveCollaborationModeSettings(turn.message.collaborationMode)
+      const settings = await this.resolveCollaborationModeSettings(turn.message.collaborationMode, resumed)
       params.collaborationMode = {
         mode: turn.message.collaborationMode,
         settings: {
@@ -7103,8 +7195,8 @@ export class BackendQueueProcessor {
   }
 
   private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
-    await this.appServer.rpc('thread/resume', { threadId: turn.threadId })
-    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn))
+    const resumed = asRecord(await this.appServer.rpc('thread/resume', { threadId: turn.threadId }))
+    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn, resumed))
   }
 }
 
@@ -7732,7 +7824,7 @@ export function createCodexBridgeMiddleware(options: {
         return
       }
 
-      if (await handleReviewRoutes(req, res, url, { readJsonBody })) {
+      if (await handleReviewRoutes(req, res, url, { readJsonBody, securityPolicy })) {
         return
       }
 
@@ -7858,7 +7950,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing threadId' })
           return
         }
-        await discardSideConversationThread(appServer, threadId)
+        const activeTurnId = await appServer.getActiveTurnAfterPendingStarts(threadId)
+        await discardSideConversationThread(appServer, threadId, activeTurnId || readNonEmptyString(body?.turnId))
         setJson(res, 200, { ok: true })
         return
       }
@@ -8184,6 +8277,28 @@ export function createCodexBridgeMiddleware(options: {
             })
           }
         }
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread/rollback') {
+        if (!securityPolicy.isRpcMethodAllowed('thread/rollback') || !(await methodCatalog.listMethods()).includes('thread/rollback')) {
+          setJson(res, 409, { error: 'This Codex runtime does not support editing conversation history.' })
+          return
+        }
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        const turnId = readNonEmptyString(body?.turnId)
+        const rawCwd = readNonEmptyString(body?.cwd)
+        if (!threadId || !turnId) {
+          setJson(res, 400, { error: 'Missing threadId or turnId' })
+          return
+        }
+        const cwd = rawCwd ? await authorizeGitDirectory(rawCwd, securityPolicy, res, true) : ''
+        if (cwd === null) return
+        const rollback = await rollbackThreadWithFiles(appServer, threadId, turnId, cwd, securityPolicy)
+        const trimmed = trimThreadTurnsInRpcResult('thread/rollback', rollback.result)
+        rollback.result = await sanitizeThreadTurnsInlinePayloads('thread/rollback', trimmed)
+        setJson(res, 200, rollback)
         return
       }
 
@@ -8670,7 +8785,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing cwd' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8751,7 +8867,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing cwd' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8803,7 +8920,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing branch' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, true)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8818,10 +8936,10 @@ export function createCodexBridgeMiddleware(options: {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await assertNoTrackedGitChanges(gitRoot)
           await assertLocalGitBranch(gitRoot, targetBranch)
-          await checkoutGitBranchWithWorktreeRecovery(gitRoot, targetBranch)
+          await checkoutGitBranchWithWorktreeRecovery(gitRoot, targetBranch, securityPolicy)
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to switch branch') })
+          setJson(res, asRecord(error)?.statusCode === 403 ? 403 : 500, { error: getErrorMessage(error, 'Failed to switch branch') })
         }
         return
       }
@@ -8838,7 +8956,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing branch' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await runCommandCapture('git', ['rev-parse', '--verify', `${branch}^{commit}`], { cwd: gitRoot })
@@ -8886,7 +9005,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing sha' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await runCommandCapture('git', ['rev-parse', '--verify', `${sha}^{commit}`], { cwd: gitRoot })
@@ -8985,16 +9105,17 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing commit' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, true)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await assertNoTrackedGitChanges(gitRoot)
           await assertLocalGitBranch(gitRoot, branch)
           const currentBranch = (await runCommandCapture('git', ['branch', '--show-current'], { cwd: gitRoot })).trim()
           if (currentBranch && currentBranch !== branch) {
-            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch)
+            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch, securityPolicy)
           } else if (!currentBranch) {
-            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch)
+            await checkoutGitBranchWithWorktreeRecovery(gitRoot, branch, securityPolicy)
           }
           const previousTip = await runCommandCapture('git', ['rev-parse', 'HEAD'], { cwd: gitRoot })
           const targetSha = await runCommandCapture('git', ['rev-parse', '--verify', `${sha}^{commit}`], { cwd: gitRoot })
@@ -9005,7 +9126,7 @@ export function createCodexBridgeMiddleware(options: {
           })
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
+          setJson(res, asRecord(error)?.statusCode === 403 ? 403 : 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
         }
         return
       }
@@ -9032,16 +9153,16 @@ export function createCodexBridgeMiddleware(options: {
         return
       }
 
-      if (req.method === 'PUT' && url.pathname === '/codex-api/thread-queue-state') {
-        const payload = await readJsonBody(req)
-        const record = asRecord(payload)
-        if (!record) {
-          setJson(res, 400, { error: 'Invalid body: expected object' })
+      if (url.pathname === '/codex-api/thread-queue-state' && (req.method === 'PATCH' || req.method === 'PUT')) {
+        if (req.method === 'PUT') {
+          setJson(res, 409, { error: 'Queue snapshots are no longer accepted. Refresh the page.' })
           return
         }
-        await writeThreadQueueState(normalizeThreadQueueState(record))
-        void backendQueueProcessor.scheduleAllQueuedThreads()
-        setJson(res, 200, { ok: true })
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        const result = await mutateThreadQueue(threadId, body?.operation)
+        if (asRecord(body?.operation)?.type === 'add') backendQueueProcessor.scheduleThreadQueueDrain(threadId, 0)
+        setJson(res, 200, result)
         return
       }
 

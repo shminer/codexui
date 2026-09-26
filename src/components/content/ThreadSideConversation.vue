@@ -1,23 +1,33 @@
 <template>
-  <Teleport to="body">
-    <div v-show="visible" class="side-conversation-host" @click.self="emit('minimize')">
+  <Teleport :to="popupTarget ?? 'body'">
+    <div v-show="visible" class="side-conversation-host" :class="{ 'side-conversation-host--popup': popupTarget }" @click.self="minimize">
       <section
         class="side-conversation-panel"
         role="dialog"
         :aria-modal="isMobile ? 'true' : undefined"
         :aria-labelledby="titleId"
-        :style="isMobile ? undefined : sideConversationWindowStyle"
+        :style="isMobile || popupTarget ? undefined : sideConversationWindowStyle"
         @click.stop
       >
         <div class="side-conversation-handle" aria-hidden="true" />
         <header class="side-conversation-header" @pointerdown="onSideConversationHeaderPointerDown">
           <h2 :id="titleId" class="side-conversation-title">{{ t('Side conversation') }}</h2>
           <button
+            v-if="!popupTarget"
+            class="side-conversation-icon-button"
+            type="button"
+            :aria-label="t('Open in new window')"
+            :title="t('Open in new window')"
+            @click="popOut"
+          >
+            <IconTablerMaximize />
+          </button>
+          <button
             class="side-conversation-icon-button"
             type="button"
             :aria-label="t('Minimize side conversation')"
             :title="t('Minimize side conversation')"
-            @click="emit('minimize')"
+            @click="minimize"
           >
             <IconTablerMinimize />
           </button>
@@ -57,42 +67,48 @@
           :has-queue-above="false"
           @respond-server-request="emit('respond-server-request', $event)"
         />
-        <footer v-else class="side-conversation-composer">
-          <textarea
-            ref="inputRef"
-            :value="draft"
-            class="side-conversation-input"
-            rows="2"
-            :placeholder="t('Ask a side question...')"
-            :aria-label="t('Side conversation message')"
+        <div v-show="!pendingRequests[0]" class="side-conversation-composer">
+          <ThreadComposer
+            ref="composerRef"
+            :active-thread-id="threadId"
+            :owner-document="popupTarget?.ownerDocument"
+            :persist-draft="false"
+            :allow-goal="false"
+            :allow-side-conversation="false"
+            :cwd="cwd"
+            :collaboration-modes="collaborationModes"
+            :selected-collaboration-mode="selectedCollaborationMode"
+            :models="models"
+            :selected-model="selectedModel"
+            :supported-reasoning-efforts="supportedReasoningEfforts"
+            :selected-reasoning-effort="selectedReasoningEffort"
+            :selected-speed-mode="selectedSpeedMode"
+            :skills="skills"
+            :is-turn-in-progress="isTurnInProgress"
+            :has-queue-above="queuedMessages.length > 0"
+            :send-with-enter="sendWithEnter"
+            :in-progress-submit-mode="inProgressSubmitMode"
             :disabled="isOpening || !threadId"
-            @input="updateDraft"
-            @keydown="onInputKeydown"
-          />
-          <button
-            v-if="isTurnInProgress"
-            class="side-conversation-action side-conversation-action--stop"
-            type="button"
-            :aria-label="t('Stop')"
-            :title="t('Stop')"
-            @click="emit('interrupt')"
+            @submit="emit('send', $event)"
+            @interrupt="emit('interrupt')"
+            @update:selected-collaboration-mode="emit('update:selected-collaboration-mode', $event)"
+            @update:selected-model="emit('update:selected-model', $event)"
+            @update:selected-reasoning-effort="emit('update:selected-reasoning-effort', $event)"
+            @update:selected-speed-mode="emit('update:selected-speed-mode', $event)"
           >
-            <IconTablerPlayerStopFilled />
-          </button>
-          <button
-            v-else
-            class="side-conversation-action side-conversation-action--send"
-            type="button"
-            :aria-label="t('Send message')"
-            :title="t('Send message')"
-            :disabled="!canSend"
-            @click="submit"
-          >
-            <IconTablerArrowUp />
-          </button>
-        </footer>
+            <template #queue>
+              <QueuedMessages
+                :messages="queuedMessages"
+                @edit="emit('edit-queued-message', $event)"
+                @steer="emit('steer-queued-message', $event)"
+                @delete="emit('remove-queued-message', $event)"
+                @reorder="emit('reorder-queued-message', $event)"
+              />
+            </template>
+          </ThreadComposer>
+        </div>
         <div
-          v-if="!isMobile"
+          v-if="!isMobile && !popupTarget"
           class="side-conversation-resize-handle"
           role="separator"
           aria-orientation="vertical"
@@ -115,18 +131,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { UiLiveOverlay, UiMessage, UiServerRequest, UiServerRequestReply } from '../../types/codex'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import type { CollaborationModeKind, CollaborationModeOption, ReasoningEffort, SpeedMode, UiLiveOverlay, UiMessage, UiServerRequest, UiServerRequestReply } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
-import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
 import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
-import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
+import QueuedMessages from './QueuedMessages.vue'
 import ThreadConversation from './ThreadConversation.vue'
+import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
 import ThreadPendingRequestPanel from './ThreadPendingRequestPanel.vue'
-import { shouldSubmitComposer } from './composerSubmitShortcut'
 import {
   clampTerminalWindowRect,
   initialSideConversationWindowRect,
@@ -143,7 +158,7 @@ type SideConversationWindowGesture = {
   target: HTMLElement
 }
 
-const props = defineProps<{
+defineProps<{
   threadId: string
   cwd: string
   messages: UiMessage[]
@@ -152,17 +167,33 @@ const props = defineProps<{
   error: string
   isOpening: boolean
   isTurnInProgress: boolean
+  collaborationModes: CollaborationModeOption[]
+  selectedCollaborationMode: CollaborationModeKind
+  models: string[]
+  selectedModel: string
+  supportedReasoningEfforts: ReasoningEffort[]
+  selectedReasoningEffort: ReasoningEffort | ''
+  selectedSpeedMode: SpeedMode
+  skills: Array<{ name: string; displayName?: string; description: string; path: string; scope?: string; enabled?: boolean }>
+  queuedMessages: Array<{ id: string; text: string; imageUrls: string[]; skills: Array<{ name: string; path: string }>; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; collaborationMode: CollaborationModeKind }>
+  inProgressSubmitMode: 'steer' | 'queue'
   sendWithEnter?: boolean
   visible: boolean
-  draft: string
 }>()
 
 const emit = defineEmits<{
   minimize: []
   end: []
-  send: [text: string]
-  'update:draft': [value: string]
+  send: [payload: SubmitPayload]
   interrupt: []
+  'update:selected-collaboration-mode': [mode: CollaborationModeKind]
+  'update:selected-model': [modelId: string]
+  'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
+  'update:selected-speed-mode': [mode: SpeedMode]
+  'edit-queued-message': [messageId: string]
+  'steer-queued-message': [messageId: string]
+  'remove-queued-message': [messageId: string]
+  'reorder-queued-message': [payload: { draggedId: string; targetId: string }]
   'respond-server-request': [reply: UiServerRequestReply]
 }>()
 
@@ -170,15 +201,66 @@ const { isMobile } = useMobile()
 const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
 const SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP = 16
-const inputRef = ref<HTMLTextAreaElement | null>(null)
+const composerRef = ref<ThreadComposerExposed | null>(null)
+const popupTarget = shallowRef<HTMLElement | null>(null)
+let popupWindow: Window | null = null
+let popupThemeObserver: MutationObserver | null = null
+
+function returnFromPopup(): void {
+  popupThemeObserver?.disconnect()
+  popupThemeObserver = null
+  popupTarget.value = null
+  popupWindow = null
+}
+
+function closePopup(): void {
+  const opened = popupWindow
+  returnFromPopup()
+  opened?.close()
+}
+
+function minimize(): void {
+  closePopup()
+  emit('minimize')
+}
+
+function popOut(): void {
+  if (popupWindow && !popupWindow.closed) {
+    popupWindow.focus()
+    return
+  }
+  const opened = window.open(new URL('side-conversation.html', document.baseURI).href, '_blank', isMobile.value ? undefined : 'popup,width=760,height=900')
+  if (!opened) return
+  stopSideConversationWindowGesture()
+  popupWindow = opened
+  opened.addEventListener('load', () => {
+    if (popupWindow !== opened || opened.closed) return
+    const popupDocument = opened.document
+    popupDocument.title = t('Side conversation')
+    const viewport = popupDocument.querySelector<HTMLMetaElement>('meta[name="viewport"]') ?? popupDocument.createElement('meta')
+    viewport.name = 'viewport'
+    viewport.content = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content
+      ?? 'width=device-width, initial-scale=1.0'
+    popupDocument.head.appendChild(viewport)
+    const base = popupDocument.createElement('base')
+    base.href = document.baseURI
+    popupDocument.head.appendChild(base)
+    for (const style of document.querySelectorAll('style, link[rel="stylesheet"]')) {
+      popupDocument.head.appendChild(style.cloneNode(true))
+    }
+    const syncTheme = (): void => {
+      popupDocument.documentElement.className = document.documentElement.className
+      popupDocument.documentElement.style.cssText = document.documentElement.style.cssText
+    }
+    syncTheme()
+    popupThemeObserver = new MutationObserver(syncTheme)
+    popupThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+    opened.addEventListener('pagehide', returnFromPopup, { once: true })
+    popupTarget.value = popupDocument.body
+  }, { once: true })
+}
 const sideConversationWindow = ref<TerminalFloatingWindowRect>(initialSideConversationWindowRect(sideConversationViewportSize()))
 let sideConversationWindowGesture: SideConversationWindowGesture | null = null
-const canSend = computed(() => (
-  props.threadId.length > 0
-  && props.draft.trim().length > 0
-  && !props.isOpening
-  && !props.isTurnInProgress
-))
 const sideConversationWindowStyle = computed<Record<string, string>>(() => ({
   left: `${sideConversationWindow.value.left}px`,
   top: `${sideConversationWindow.value.top}px`,
@@ -199,33 +281,30 @@ const sideConversationWindowSizeText = computed(() => (
 
 onMounted(() => {
   resetSideConversationWindow()
+  window.addEventListener('pagehide', closePopup)
   window.addEventListener('resize', onSideConversationViewportResize)
   window.visualViewport?.addEventListener('resize', onSideConversationViewportResize)
   window.visualViewport?.addEventListener('scroll', clampSideConversationWindowToViewport)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', closePopup)
+  closePopup()
   stopSideConversationWindowGesture()
   window.removeEventListener('resize', onSideConversationViewportResize)
   window.visualViewport?.removeEventListener('resize', onSideConversationViewportResize)
   window.visualViewport?.removeEventListener('scroll', clampSideConversationWindowToViewport)
 })
 
-function submit(): void {
-  if (!canSend.value) return
-  emit('send', props.draft.trim())
-  emit('update:draft', '')
+function hydrateDraft(payload: Parameters<ThreadComposerExposed['hydrateDraft']>[0]): void {
+  composerRef.value?.hydrateDraft(payload)
 }
 
-function updateDraft(event: Event): void {
-  emit('update:draft', (event.target as HTMLTextAreaElement).value)
+function hasUnsavedDraft(): boolean {
+  return composerRef.value?.hasUnsavedDraft() ?? false
 }
 
-function onInputKeydown(event: KeyboardEvent): void {
-  if (!shouldSubmitComposer(event, props.sendWithEnter)) return
-  event.preventDefault()
-  submit()
-}
+defineExpose({ hydrateDraft, hasUnsavedDraft })
 
 function sideConversationViewportSize(): TerminalVisualViewport {
   if (typeof window === 'undefined') {
@@ -254,6 +333,7 @@ function onSideConversationViewportResize(): void {
 }
 
 function onSideConversationHeaderPointerDown(event: PointerEvent): void {
+  if (popupTarget.value) return
   if (isMobile.value || event.button !== 0 || !event.isPrimary) return
   const target = event.target
   if (target instanceof Element && target.closest('button')) return
@@ -352,15 +432,6 @@ function stopSideConversationWindowGesture(): void {
   }
 }
 
-watch(
-  () => [props.threadId, props.visible] as const,
-  ([threadId, visible]) => {
-    if (!threadId || !visible) return
-    void nextTick(() => inputRef.value?.focus())
-  },
-  { immediate: true },
-)
-
 watch(isMobile, (mobile) => {
   stopSideConversationWindowGesture()
   if (!mobile) resetSideConversationWindow()
@@ -379,6 +450,17 @@ watch(isMobile, (mobile) => {
   @apply pointer-events-auto fixed flex flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl;
 }
 
+.side-conversation-host--popup {
+  padding: 0;
+}
+
+.side-conversation-host--popup .side-conversation-panel {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
 .side-conversation-handle {
   @apply hidden;
 }
@@ -392,8 +474,7 @@ watch(isMobile, (mobile) => {
   @apply min-w-0 flex-1 truncate text-sm font-semibold text-zinc-900;
 }
 
-.side-conversation-icon-button,
-.side-conversation-action {
+.side-conversation-icon-button {
   @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 transition disabled:cursor-not-allowed disabled:opacity-50;
 }
 
@@ -401,8 +482,7 @@ watch(isMobile, (mobile) => {
   @apply bg-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900;
 }
 
-.side-conversation-icon-button :deep(svg),
-.side-conversation-action :deep(svg) {
+.side-conversation-icon-button :deep(svg) {
   @apply h-5 w-5;
 }
 
@@ -427,19 +507,23 @@ watch(isMobile, (mobile) => {
 }
 
 .side-conversation-composer {
-  @apply flex shrink-0 items-end gap-2 border-t border-zinc-200 p-3 pr-10;
+  @apply min-w-0 shrink-0 border-t border-zinc-200 p-2 pr-9;
 }
 
-.side-conversation-input {
-  @apply min-h-10 max-h-32 min-w-0 flex-1 resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm leading-5 text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-500 disabled:bg-zinc-100;
+.side-conversation-composer :deep(.queued-messages) {
+  @apply max-h-28 overflow-y-auto;
 }
 
-.side-conversation-action--send {
-  @apply bg-zinc-900 text-white hover:bg-zinc-700 disabled:bg-zinc-300;
+.side-conversation-composer :deep(.thread-composer-shell) {
+  @apply rounded-lg;
 }
 
-.side-conversation-action--stop {
-  @apply bg-zinc-200 text-zinc-700 hover:bg-zinc-300;
+.side-conversation-composer :deep(.queued-messages-inner) {
+  @apply rounded-t-lg;
+}
+
+.side-conversation-composer :deep(.thread-composer-shell--no-top-radius) {
+  @apply rounded-t-none;
 }
 
 .side-conversation-resize-handle {
@@ -474,7 +558,7 @@ watch(isMobile, (mobile) => {
   }
 
   .side-conversation-composer {
-    @apply p-3;
+    @apply p-2;
   }
 }
 </style>

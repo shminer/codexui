@@ -1291,8 +1291,13 @@ export async function getThreadReviewResult(threadId: string): Promise<{
   }
 }
 
-export async function getMethodCatalog(): Promise<string[]> {
-  return fetchRpcMethodCatalog()
+let methodCatalogRequest: Promise<string[]> | null = null
+
+export function getMethodCatalog(): Promise<string[]> {
+  if (!methodCatalogRequest) {
+    methodCatalogRequest = fetchRpcMethodCatalog().finally(() => { methodCatalogRequest = null })
+  }
+  return methodCatalogRequest
 }
 
 export async function getNotificationCatalog(): Promise<string[]> {
@@ -1801,6 +1806,23 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
   return payload.cleared
 }
 
+export async function supportsThreadRollback(): Promise<boolean> {
+  return (await getMethodCatalog()).includes('thread/rollback')
+}
+
+export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[] }> {
+  const response = await fetch('/codex-api/thread/rollback', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId, turnId, cwd }),
+  })
+  const payload = await response.json()
+  if (!response.ok) throw new Error(extractErrorMessage(payload, 'Failed to edit conversation history'))
+  return {
+    messages: normalizeThreadMessagesV2(payload.result, readThreadTurnStartIndex(payload.result)),
+    fileErrors: Array.isArray(payload.fileErrors) ? payload.fileErrors : [],
+  }
+}
+
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
   const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
   return normalizeThreadMessagesV2(payload, readThreadTurnStartIndex(payload))
@@ -1944,17 +1966,19 @@ export async function startThread(cwd?: string, model?: string): Promise<Started
 }
 
 export async function forkThread(threadId: string): Promise<ForkedThread>
+export async function forkThread(threadId: string, options: { lastTurnId: string }): Promise<ForkedThread>
 export async function forkThread(threadId: string, cwd: string | undefined, model: string | undefined): Promise<StartedThread>
 export async function forkThread(
   threadId: string,
-  cwd?: string,
+  cwd?: string | { lastTurnId: string },
   model?: string,
 ): Promise<StartedThread | ForkedThread> {
-  if (arguments.length <= 1) {
+  if (arguments.length <= 1 || typeof cwd === 'object') {
     try {
       const payload = await callRpc<ThreadForkResponse & ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', {
         threadId,
         persistExtendedHistory: true,
+        ...(typeof cwd === 'object' ? { lastTurnId: cwd.lastTurnId } : {}),
       })
       const forkedThreadId = normalizeThreadIdFromPayload(payload)
       if (!forkedThreadId) {
@@ -2084,14 +2108,14 @@ export async function discardSideConversationThreadInBackground(threadId: string
   }
 }
 
-export function discardSideConversationThreadOnPageHide(threadId: string): void {
+export function discardSideConversationThreadOnPageHide(threadId: string, turnId?: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
 
   void fetch('/codex-api/side-conversation/discard', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threadId: normalizedThreadId }),
+    body: JSON.stringify({ threadId: normalizedThreadId, turnId }),
     keepalive: true,
   }).catch(() => {})
 }
@@ -3012,15 +3036,20 @@ export async function getThreadQueueState(): Promise<ThreadQueueState> {
   return normalizeThreadQueueState(envelope.data)
 }
 
-export async function setThreadQueueState(nextState: ThreadQueueState): Promise<void> {
+export type ThreadQueueOperation =
+  | { type: 'add'; message: StoredQueuedMessage; beforeId?: string }
+  | { type: 'remove'; id: string }
+  | { type: 'move'; id: string; targetId: string }
+
+export async function mutateThreadQueue(threadId: string, operation: ThreadQueueOperation): Promise<{ data: ThreadQueueState; removed?: StoredQueuedMessage }> {
   const response = await fetch('/codex-api/thread-queue-state', {
-    method: 'PUT',
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(normalizeThreadQueueState(nextState)),
+    body: JSON.stringify({ threadId, operation }),
   })
-  if (!response.ok) {
-    throw new Error('Failed to save thread queue state')
-  }
+  if (!response.ok) throw new Error('Failed to update the message queue. Refresh and try again.')
+  const payload = await response.json()
+  return { data: normalizeThreadQueueState(payload.data), removed: normalizeStoredQueuedMessage(payload.removed) ?? undefined }
 }
 
 export async function createWorktree(sourceCwd: string, baseBranch?: string): Promise<WorktreeCreateResult> {

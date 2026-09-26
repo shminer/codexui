@@ -10,7 +10,7 @@
       <IconTablerChevronDown class="search-dropdown-chevron" />
     </button>
 
-    <Teleport to="body">
+    <Teleport :to="ownerDocument?.body ?? 'body'">
       <div
         v-if="isOpen"
         ref="menuRef"
@@ -107,7 +107,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 
@@ -123,6 +123,7 @@ export type SearchDropdownOption = {
 
 const props = defineProps<{
   options: SearchDropdownOption[]
+  ownerDocument?: Document
   selectedValues: string[]
   placeholder?: string
   searchPlaceholder?: string
@@ -177,8 +178,9 @@ function updateMenuPosition(): void {
   const root = rootRef.value
   if (!menu || !root) return
   const rect = root.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
+  const ownerWindow = root.ownerDocument.defaultView ?? window
+  const viewportWidth = ownerWindow.innerWidth
+  const viewportHeight = ownerWindow.innerHeight
   const desiredWidth = Math.min(384, viewportWidth - 16)
   const left = Math.max(8, Math.min(rect.right - desiredWidth, viewportWidth - desiredWidth - 8))
 
@@ -241,9 +243,10 @@ function onDocumentPointerDown(event: PointerEvent): void {
   const menu = menuRef.value
   if (!root) return
   const target = event.target
-  if (!(target instanceof Node)) return
-  if (root.contains(target)) return
-  if (menu?.contains(target)) return
+  if (!target) return
+  const targetNode = target as Node
+  if (root.contains(targetNode)) return
+  if (menu?.contains(targetNode)) return
   isOpen.value = false
 }
 
@@ -254,16 +257,17 @@ function onWindowLayoutChange(): void {
   updateMenuPosition()
 }
 
-onMounted(() => {
-  window.addEventListener('pointerdown', onDocumentPointerDown)
-  window.addEventListener('resize', onWindowLayoutChange)
-  window.addEventListener('scroll', onWindowLayoutChange, true)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', onDocumentPointerDown)
-  window.removeEventListener('resize', onWindowLayoutChange)
-  window.removeEventListener('scroll', onWindowLayoutChange, true)
-})
+watch(() => props.ownerDocument?.defaultView ?? window, (ownerWindow, _previous, onCleanup) => {
+  isOpen.value = false
+  ownerWindow.addEventListener('pointerdown', onDocumentPointerDown)
+  ownerWindow.addEventListener('resize', onWindowLayoutChange)
+  ownerWindow.addEventListener('scroll', onWindowLayoutChange, true)
+  onCleanup(() => {
+    ownerWindow.removeEventListener('pointerdown', onDocumentPointerDown)
+    ownerWindow.removeEventListener('resize', onWindowLayoutChange)
+    ownerWindow.removeEventListener('scroll', onWindowLayoutChange, true)
+  })
+}, { immediate: true })
 </script>
 
 <style scoped>

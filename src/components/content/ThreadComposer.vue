@@ -3,10 +3,11 @@
     <div v-if="turnThroughputText" class="thread-composer-throughput" :title="t('Prefill is client-observed time to first text; decode measures text streaming; average covers the full turn.')" role="status">
       {{ turnThroughputText }}
     </div>
+    <slot v-if="!isComposerExpanded" name="queue" />
     <div
       class="thread-composer-shell"
       :class="{
-        'thread-composer-shell--no-top-radius': hasQueueAbove,
+        'thread-composer-shell--no-top-radius': hasQueueAbove && !isComposerExpanded,
         'thread-composer-shell--drag-active': isDragActive,
       }"
     >
@@ -383,6 +384,7 @@
         </div>
 
         <ComposerDropdown
+            :owner-document="ownerDocument"
             class="thread-composer-control"
             :model-value="selectedModel"
             :options="modelOptions"
@@ -396,6 +398,7 @@
         />
 
         <ComposerSearchDropdown
+          :owner-document="ownerDocument"
             class="thread-composer-control"
             :options="skillDropdownOptions"
             :selected-values="selectedSkillPaths"
@@ -412,6 +415,7 @@
         />
 
         <ComposerDropdown
+            :owner-document="ownerDocument"
             class="thread-composer-control"
             :model-value="selectedReasoningEffort"
             :options="reasoningOptions"
@@ -423,6 +427,7 @@
 
         <div class="thread-composer-actions">
           <button
+            v-if="allowSideConversation !== false"
             class="thread-composer-side"
             :class="{ 'thread-composer-side--active': sideConversationOpen }"
             type="button"
@@ -537,8 +542,12 @@ type SkillSourceBadge = {
 
 type SkillItem = { name: string; displayName?: string; description: string; path: string; scope?: string; enabled?: boolean }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   activeThreadId: string
+  ownerDocument?: Document
+  persistDraft?: boolean
+  allowGoal?: boolean
+  allowSideConversation?: boolean
   cwd?: string
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
@@ -577,7 +586,11 @@ const props = defineProps<{
   isGoalLoading?: boolean
   isGoalUpdating?: boolean
   goalError?: string
-}>()
+}>(), {
+  persistDraft: true,
+  allowGoal: true,
+  allowSideConversation: true,
+})
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
 
@@ -780,7 +793,7 @@ const speedModeDescription = computed(() => {
     : t('Default speed with normal credit usage')
 })
 const goalAvailable = computed(() => (
-  Boolean(props.activeThreadId.trim()) && props.activeThreadId !== '__new-thread__'
+  props.allowGoal !== false && Boolean(props.activeThreadId.trim()) && props.activeThreadId !== '__new-thread__'
 ))
 const goalCanResume = computed(() => (
   props.goal?.status === 'paused' || props.goal?.status === 'blocked' || props.goal?.status === 'usageLimited'
@@ -1135,7 +1148,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
     mode,
   })
-  clearPersistedDraftForThread(props.activeThreadId)
+  if (props.persistDraft !== false) clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
   isComposerExpanded.value = false
   folderUploadGroups.value = []
@@ -1720,7 +1733,7 @@ function onInputPaste(event: ClipboardEvent): void {
   const imageFiles = items
     .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
     .map((item) => item.getAsFile())
-    .filter((file): file is File => file instanceof File)
+    .filter((file): file is File => file !== null)
   if (imageFiles.length === 0) return
   if (!hasPlainText) {
     event.preventDefault()
@@ -1984,10 +1997,6 @@ function onDocumentClick(event: MouseEvent): void {
 }
 
 onMounted(() => {
-  document.addEventListener('click', onDocumentClick)
-  window.addEventListener('drop', onWindowDragCleanup)
-  window.addEventListener('dragend', onWindowDragCleanup)
-  window.addEventListener('blur', onWindowDragCleanup)
   void reloadPrompts()
   queueComposerOverflowMeasurement()
 })
@@ -1999,24 +2008,34 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', onDocumentClick)
-  window.removeEventListener('drop', onWindowDragCleanup)
-  window.removeEventListener('dragend', onWindowDragCleanup)
-  window.removeEventListener('blur', onWindowDragCleanup)
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
   stopGoalClock()
 })
 
+watch(() => props.ownerDocument ?? document, (owner, _previous, onCleanup) => {
+  const ownerWindow = owner.defaultView
+  owner.addEventListener('click', onDocumentClick)
+  ownerWindow?.addEventListener('drop', onWindowDragCleanup)
+  ownerWindow?.addEventListener('dragend', onWindowDragCleanup)
+  ownerWindow?.addEventListener('blur', onWindowDragCleanup)
+  onCleanup(() => {
+    owner.removeEventListener('click', onDocumentClick)
+    ownerWindow?.removeEventListener('drop', onWindowDragCleanup)
+    ownerWindow?.removeEventListener('dragend', onWindowDragCleanup)
+    ownerWindow?.removeEventListener('blur', onWindowDragCleanup)
+  })
+}, { immediate: true })
+
 watch(
   () => props.activeThreadId,
   (nextThreadId) => {
-    if (lastActiveThreadId) {
+    if (lastActiveThreadId && props.persistDraft !== false) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }
     clearDraftState()
-    const restored = loadPersistedDraftForThread(nextThreadId)
+    const restored = props.persistDraft === false ? null : loadPersistedDraftForThread(nextThreadId)
     if (restored) {
       replaceDraftState(restored)
       onInputChange()
@@ -2031,7 +2050,7 @@ watch(
 )
 
 watch([draft, selectedImages, fileAttachments, selectedSkills], () => {
-  if (!lastActiveThreadId) return
+  if (!lastActiveThreadId || props.persistDraft === false) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
 
@@ -2096,11 +2115,11 @@ watch(
 }
 
 .thread-composer-throughput {
-  @apply px-2 pb-1 text-right text-[11px] leading-4 text-zinc-500 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis;
+  @apply px-2 pb-1 text-right text-[11px] leading-4 text-zinc-500 tabular-nums whitespace-normal break-words;
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-x-0 bottom-0 top-12 sm:top-14 z-50 max-w-none bg-white/95 p-3 sm:p-6;
+  @apply fixed inset-x-0 bottom-0 top-12 sm:top-14 z-50 flex max-w-none flex-col bg-white/95 p-3 sm:p-6;
 }
 
 .thread-composer-shell {
@@ -2108,7 +2127,7 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-shell {
-  @apply mx-auto flex h-full w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-col shadow-2xl;
+  @apply mx-auto flex min-h-0 w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-1 flex-col shadow-2xl;
 }
 
 .thread-composer-shell--drag-active {

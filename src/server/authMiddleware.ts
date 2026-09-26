@@ -152,6 +152,7 @@ function isAuthorizedByRequestLike(
   hostHeader: string | undefined,
   cookieHeader: string | undefined,
   validTokens: Map<string, number>,
+  allowTailscaleAuthBypass: boolean,
 ): boolean {
   const remote = remoteAddress ?? ''
   // SSH reverse tunnels terminate on loopback, so remoteAddress alone is not enough
@@ -159,7 +160,7 @@ function isAuthorizedByRequestLike(
   if (isLocalhostRemote(remote) && isLocalhostHost(hostHeader ?? '')) {
     return true
   }
-  if (isTrustedTailscaleRemote(remote)) {
+  if (allowTailscaleAuthBypass && isTrustedTailscaleRemote(remote)) {
     return true
   }
 
@@ -221,7 +222,7 @@ export type AuthSession = {
   isRequestAuthorized: (req: IncomingMessage) => boolean
 }
 
-export function createAuthSession(password: string): AuthSession {
+export function createAuthSession(password: string, allowTailscaleAuthBypass = true): AuthSession {
   const validTokens = readPersistedSessions()
   if (pruneExpiredSessions(validTokens)) {
     tryPersistSessions(validTokens)
@@ -232,7 +233,7 @@ export function createAuthSession(password: string): AuthSession {
       tryPersistSessions(validTokens)
     }
 
-    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)) {
+    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens, allowTailscaleAuthBypass)) {
       next()
       return
     }
@@ -293,7 +294,7 @@ export function createAuthSession(password: string): AuthSession {
   return {
     middleware,
     isRequestAuthorized: (req: IncomingMessage) => (
-      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)
+      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens, allowTailscaleAuthBypass)
     ),
   }
 }

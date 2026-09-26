@@ -1,3 +1,5 @@
+import { createAuthSession } from './authMiddleware'
+import type { IncomingMessage } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { buildSafeSecurityPolicy, PERMISSIVE_SECURITY_POLICY } from './securityPolicy'
 import { loadSafeRuntimeConfig } from '../safe/runtimePolicy'
@@ -33,5 +35,14 @@ describe('server security policy', () => {
     expect(policy.terminalInputEnabled).toBe(true)
     expect(policy.fileEditingEnabled).toBe(true)
     expect(policy.isRouteDisabled('POST', '/codex-api/telegram/config')).toBe(true)
+  })
+})
+
+describe('Tailscale authentication policy', () => {
+  it.each(['100.100.1.2', '::ffff:100.100.1.2', 'fd7a:115c:a1e0::2'])('requires authentication in safe mode for %s', (remoteAddress) => {
+    const request = { socket: { remoteAddress }, headers: { host: '100.100.1.3:5900' } } as IncomingMessage
+    const safe = buildSafeSecurityPolicy(loadSafeRuntimeConfig({}))
+    expect(createAuthSession('test', safe.allowTailscaleAuthBypass).isRequestAuthorized(request)).toBe(false)
+    expect(createAuthSession('test', PERMISSIVE_SECURITY_POLICY.allowTailscaleAuthBypass).isRequestAuthorized(request)).toBe(true)
   })
 })

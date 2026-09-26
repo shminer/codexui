@@ -81,7 +81,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const securityPolicy = options.securityPolicy ?? PERMISSIVE_SECURITY_POLICY
   const bridge = createCodexBridgeMiddleware({ securityPolicy })
-  const authSession = options.password ? createAuthSession(options.password) : null
+  const authSession = options.password ? createAuthSession(options.password, securityPolicy.allowTailscaleAuthBypass) : null
 
   // 1. Auth middleware (if password is set)
   if (authSession) {

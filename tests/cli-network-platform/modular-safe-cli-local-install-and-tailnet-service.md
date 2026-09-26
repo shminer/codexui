@@ -176,3 +176,14 @@ pnpm run service:uninstall
 ```
 
 The password file is intentionally retained; delete it only when the user explicitly wants to discard that credential.
+
+### Safe authentication and Git policy regression
+
+- Setup: a safe server with a password file, an allowed temporary project root, and file editing disabled. Keep a second temporary directory outside that root.
+- Request Git review summary/snapshot and Git branch/status for the outside directory; attempt review actions, git/init, checkout and reset there. Expected: HTTP 403, no files changed. Writes within the root also return 403 while file editing is disabled.
+- Enable file editing explicitly and repeat: init inside the root succeeds; outside requests remain 403. An allowed subfolder must not grant access to its parent Git repository.
+- Connect directly from a Tailscale address without a session cookie: safe mode requires login. A valid login session works. The ordinary entry keeps its existing Tailscale behavior.
+- Cleanup: stop only the test server and remove its temporary directories/password file.
+- Performance: default ordinary mode adds no Git subprocess. Safe mode checks canonical cwd and Git root, and checks Git metadata for writes; each request has a fixed number of checks and no retry loop.
+
+- With file editing enabled, request checkout of a branch occupied by a worktree outside the allowed roots. Expected: 403 and the outside worktree keeps its branch; automatic detach recovery also enforces canonical allowed roots. This adds one path check only on the occupied-branch recovery path.

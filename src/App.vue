@@ -965,6 +965,7 @@
                     <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                       :is-turn-in-progress="isSelectedThreadInProgress"
                       :active-thread-id="composerThreadContextId" :cwd="composerCwd"
+                      :can-rollback="canRollbackThread"
                       :live-overlay="liveOverlay"
                       :pending-requests="selectedThreadServerRequests"
                       :has-more-persisted-above="hasMoreOlderMessages"
@@ -987,13 +988,6 @@
                     <span>{{ t(codexCliMissingError) }}</span>
                     <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
                   </div>
-                  <QueuedMessages
-                    :messages="selectedThreadQueuedMessages"
-                    @edit="onEditQueuedMessage"
-                    @steer="steerQueuedMessage"
-                    @delete="removeQueuedMessage"
-                    @reorder="onReorderQueuedMessage"
-                  />
                   <ThreadTerminalPanel
                     v-if="selectedThreadTerminalOpen && selectedThreadId && composerCwd"
                     ref="threadTerminalPanelRef"
@@ -1002,6 +996,14 @@
                     :cwd="composerCwd"
                     @hide="onHideSelectedThreadTerminal"
                     @terminal-focus-change="onTerminalFocusChange"
+                  />
+                  <QueuedMessages
+                    v-if="selectedThreadPendingRequest"
+                    :messages="selectedThreadQueuedMessages"
+                    @edit="onEditQueuedMessage"
+                    @steer="steerQueuedMessage"
+                    @delete="removeQueuedMessage"
+                    @reorder="onReorderQueuedMessage"
                   />
                   <ThreadPendingRequestPanel
                     v-if="selectedThreadPendingRequest"
@@ -1050,7 +1052,18 @@
                     @reload-goal="onReloadGoal"
                     @clear-goal="onClearGoal"
                     @open-side-conversation="onOpenSideConversation"
-                    @interrupt="onInterruptTurn" />
+                    @interrupt="onInterruptTurn"
+                  >
+                    <template #queue>
+                      <QueuedMessages
+                        :messages="selectedThreadQueuedMessages"
+                        @edit="onEditQueuedMessage"
+                        @steer="steerQueuedMessage"
+                        @delete="removeQueuedMessage"
+                        @reorder="onReorderQueuedMessage"
+                      />
+                    </template>
+                  </ThreadComposer>
                 </div>
               </template>
             </div>
@@ -1061,6 +1074,7 @@
   </DesktopLayout>
   <ThreadSideConversation
     v-if="isSideConversationOpen"
+    ref="sideConversationRef"
     :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
     :cwd="composerCwd"
@@ -1070,13 +1084,29 @@
     :error="sideConversationError"
     :is-opening="isSideConversationOpening"
     :is-turn-in-progress="isSideConversationInProgress"
+    :collaboration-modes="availableCollaborationModes"
+    :selected-collaboration-mode="sideConversationCollaborationMode"
+    :models="availableModelIds"
+    :selected-model="sideConversationModelId"
+    :supported-reasoning-efforts="availableModelReasoningEfforts[sideConversationModelId] ?? []"
+    :selected-reasoning-effort="sideConversationReasoningEffort"
+    :selected-speed-mode="selectedSpeedMode"
+    :skills="installedSkills"
+    :queued-messages="sideConversationQueuedMessages"
+    :in-progress-submit-mode="inProgressSendMode"
     :send-with-enter="sendWithEnter"
-    :draft="sideConversationDraft"
     @minimize="hideSideConversation"
     @end="endSideConversation"
-    @update:draft="setSideConversationDraft"
-    @send="sendSideConversationMessage"
+    @update:selected-collaboration-mode="setSideConversationCollaborationMode"
+    @update:selected-model="setSideConversationModel"
+    @update:selected-reasoning-effort="setSideConversationReasoningEffort"
+    @update:selected-speed-mode="onSelectSpeedMode"
+    @send="onSubmitSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
+    @edit-queued-message="onEditSideConversationQueuedMessage"
+    @steer-queued-message="steerSideConversationQueuedMessage"
+    @remove-queued-message="removeSideConversationQueuedMessage"
+    @reorder-queued-message="onReorderSideConversationQueuedMessage"
     @respond-server-request="onRespondSideConversationServerRequest"
   />
   <div v-if="projectZipExportStatus.phase !== 'idle'" class="project-zip-modal-backdrop" role="presentation">
@@ -1345,6 +1375,7 @@ const {
   selectedLiveOverlay,
   sideConversationThreadId,
   sideConversationMessages,
+  sideConversationQueuedMessages,
   sideConversationLiveOverlay,
   sideConversationServerRequests,
   sideConversationError,
@@ -1352,7 +1383,9 @@ const {
   isSideConversationVisible,
   isSideConversationOpening,
   isSideConversationInProgress,
-  sideConversationDraft,
+  sideConversationModelId,
+  sideConversationReasoningEffort,
+  sideConversationCollaborationMode,
   getLiveOverlayForThread,
   codexQuota,
   selectedThreadId,
@@ -1393,8 +1426,13 @@ const {
   openSideConversation,
   hideSideConversation,
   endSideConversation,
-  setSideConversationDraft,
+  setSideConversationModel,
+  setSideConversationReasoningEffort,
+  setSideConversationCollaborationMode,
   sendSideConversationMessage,
+  removeSideConversationQueuedMessage,
+  reorderSideConversationQueuedMessage,
+  steerSideConversationQueuedMessage,
   interruptSideConversationTurn,
   discardSideConversationInBackground,
   discardSideConversationOnPageHide,
@@ -1422,6 +1460,7 @@ const {
   stopPolling,
   primeSelectedThread,
   rollbackSelectedThread,
+  canRollbackThread,
 } = useDesktopState()
 
 const route = useRoute()
@@ -1459,6 +1498,8 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
+const editingSideConversationQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
 const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -3050,6 +3091,35 @@ function onRespondSideConversationServerRequest(payload: UiServerRequestReply): 
   })
 }
 
+function onSubmitSideConversationMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
+  const editing = editingSideConversationQueuedMessageState.value
+  editingSideConversationQueuedMessageState.value = null
+  const queueIndex = payload.mode === 'queue' && editing?.threadId === sideConversationThreadId.value
+    ? editing.queueIndex
+    : undefined
+  void sendSideConversationMessage(payload.text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueIndex)
+}
+
+function onEditSideConversationQueuedMessage(messageId: string): void {
+  const queueIndex = sideConversationQueuedMessages.value.findIndex((item) => item.id === messageId)
+  const message = sideConversationQueuedMessages.value[queueIndex]
+  const composer = sideConversationRef.value
+  if (!message || !composer) return
+  if (composer.hasUnsavedDraft() && !window.confirm('Replace the current draft with this queued message for editing?')) return
+  editingSideConversationQueuedMessageState.value = { threadId: sideConversationThreadId.value, queueIndex }
+  composer.hydrateDraft({
+    text: message.text,
+    imageUrls: [...message.imageUrls],
+    fileAttachments: message.fileAttachments.map((file) => ({ ...file })),
+    skills: message.skills.map((skill) => ({ ...skill })),
+  })
+  removeSideConversationQueuedMessage(messageId)
+}
+
+function onReorderSideConversationQueuedMessage(payload: { draggedId: string; targetId: string }): void {
+  reorderSideConversationQueuedMessage(payload.draggedId, payload.targetId)
+}
+
 async function handleServerRequestResponse(payload: UiServerRequestReply): Promise<void> {
   const responded = await respondToPendingServerRequest(payload)
   const followUpMessageText = payload.followUpMessageText?.trim() ?? ''
@@ -3062,8 +3132,8 @@ async function handleServerRequestResponse(payload: UiServerRequestReply): Promi
   }
 }
 
-async function onForkThreadFromMessage(payload: { threadId: string; turnIndex: number }): Promise<void> {
-  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnIndex)
+async function onForkThreadFromMessage(payload: { threadId: string; turnId: string }): Promise<void> {
+  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnId)
   if (!forkedThreadId) return
   await router.push({ name: 'thread', params: { threadId: forkedThreadId } })
   if (selectedThreadId.value !== forkedThreadId) {
@@ -4201,7 +4271,8 @@ function onInterruptTurn(): void {
   void interruptSelectedThreadTurn()
 }
 
-function onRollback(payload: { turnId: string }): void {
+async function onRollback(payload: { turnId: string }): Promise<void> {
+  const originalThreadId = selectedThreadId.value
   const targetTurnId = payload.turnId.trim()
   if (targetTurnId.length > 0) {
     const rollbackUserMessage = [...filteredMessages.value]
@@ -4211,11 +4282,11 @@ function onRollback(payload: { turnId: string }): void {
         && (message.turnId?.trim() ?? '') === targetTurnId
         && message.text.trim().length > 0
       ))
-    if (rollbackUserMessage?.text && threadComposerRef.value) {
+    const succeeded = await rollbackSelectedThread(targetTurnId)
+    if (succeeded && selectedThreadId.value === originalThreadId && rollbackUserMessage?.text && threadComposerRef.value) {
       threadComposerRef.value.appendTextToDraft(rollbackUserMessage.text)
     }
   }
-  void rollbackSelectedThread(payload.turnId)
 }
 
 function onImplementPlan(payload: { turnId: string }): void {

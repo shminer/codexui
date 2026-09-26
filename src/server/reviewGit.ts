@@ -4,6 +4,7 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { PERMISSIVE_SECURITY_POLICY, type ServerSecurityPolicy } from './securityPolicy.js'
 
 type ReviewScope = 'workspace' | 'baseBranch' | 'commit'
 type ReviewWorkspaceView = 'unstaged' | 'staged'
@@ -67,6 +68,7 @@ type ReviewSnapshot = {
 type ReviewSummary = ReviewSnapshot['summary']
 
 type ReviewRouteContext = {
+  securityPolicy?: ServerSecurityPolicy
   readJsonBody: (req: IncomingMessage) => Promise<unknown>
 }
 
@@ -965,20 +967,54 @@ async function applyReviewAction(payload: unknown): Promise<ReviewSnapshot> {
   return await buildReviewSnapshot(normalizedCwd, scope, workspaceView)
 }
 
+// Check the repository root too: Git commands issued in an allowed subdirectory
+// can otherwise read or modify the parent repository outside that directory.
+export async function authorizeGitDirectory(
+  cwd: string, policy: ServerSecurityPolicy, res: ServerResponse, write: boolean,
+): Promise<string | null> {
+  if (write && !policy.fileEditingEnabled) {
+    setJson(res, 403, { error: 'File editing is disabled' })
+    return null
+  }
+  const allowed = await policy.resolveLocalPath(normalizeInputCwd(cwd))
+  if (!allowed) {
+    setJson(res, 403, { error: 'Path is outside the allowed roots' })
+    return null
+  }
+  if (policy !== PERMISSIVE_SECURITY_POLICY) {
+    const gitRoot = await resolveGitRoot(allowed)
+    if (gitRoot && !await policy.resolveLocalPath(gitRoot)) {
+      setJson(res, 403, { error: 'Git repository is outside the allowed roots' })
+      return null
+    }
+    if (gitRoot && write) {
+      const gitDir = await runCommandCapture('git', ['rev-parse', '--git-common-dir'], { cwd: allowed })
+      if (!await policy.resolveLocalPath(resolve(allowed, gitDir))) {
+        setJson(res, 403, { error: 'Git metadata is outside the allowed roots' })
+        return null
+      }
+    }
+  }
+  return allowed
+}
+
 export async function handleReviewRoutes(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   context: ReviewRouteContext,
 ): Promise<boolean> {
+  const policy = context.securityPolicy ?? PERMISSIVE_SECURITY_POLICY
   if (req.method === 'GET' && url.pathname === '/codex-api/review/summary') {
-    const cwd = url.searchParams.get('cwd')?.trim() ?? ''
+    let cwd = url.searchParams.get('cwd')?.trim() ?? ''
     const workspaceView = url.searchParams.get('workspaceView') === 'staged' ? 'staged' : 'unstaged'
     if (!cwd) {
       setJson(res, 400, { error: 'Missing cwd' })
       return true
     }
 
+    cwd = await authorizeGitDirectory(cwd, policy, res, false) ?? ''
+    if (!cwd) return true
     try {
       setJson(res, 200, {
         data: await buildReviewSummary(cwd, workspaceView),
@@ -990,7 +1026,7 @@ export async function handleReviewRoutes(
   }
 
   if (req.method === 'GET' && url.pathname === '/codex-api/review/snapshot') {
-    const cwd = url.searchParams.get('cwd')?.trim() ?? ''
+    let cwd = url.searchParams.get('cwd')?.trim() ?? ''
     const scope = url.searchParams.get('scope') === 'baseBranch'
       ? 'baseBranch'
       : url.searchParams.get('scope') === 'commit'
@@ -1004,6 +1040,8 @@ export async function handleReviewRoutes(
       return true
     }
 
+    cwd = await authorizeGitDirectory(cwd, policy, res, false) ?? ''
+    if (!cwd) return true
     try {
       setJson(res, 200, {
         data: await buildReviewSnapshot(cwd, scope, workspaceView, baseBranch, commitSha),
@@ -1016,9 +1054,11 @@ export async function handleReviewRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/review/action') {
     try {
-      const payload = await context.readJsonBody(req)
+      const payload = asRecord(await context.readJsonBody(req))
+      const cwd = await authorizeGitDirectory(readString(payload?.cwd), policy, res, true)
+      if (!cwd) return true
       setJson(res, 200, {
-        data: await applyReviewAction(payload),
+        data: await applyReviewAction({ ...payload, cwd }),
       })
     } catch (error) {
       setJson(res, 500, { error: getErrorMessage(error, 'Failed to apply review action') })
@@ -1028,12 +1068,14 @@ export async function handleReviewRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/review/git/init') {
     const payload = asRecord(await context.readJsonBody(req))
-    const cwd = readString(payload?.cwd)
+    let cwd = readString(payload?.cwd)
     if (!cwd) {
       setJson(res, 400, { error: 'Missing cwd' })
       return true
     }
 
+    cwd = await authorizeGitDirectory(cwd, policy, res, true) ?? ''
+    if (!cwd) return true
     try {
       await initializeGitRepository(cwd)
       setJson(res, 200, { ok: true })

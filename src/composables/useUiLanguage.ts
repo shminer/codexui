@@ -147,6 +147,7 @@ const zhCN: Record<string, string> = {
   'Side conversation': '侧窗聊天',
   'Open side conversation': '打开侧窗聊天',
   'Minimize side conversation': '最小化侧窗聊天',
+  'Open in new window': '弹出到新窗口',
   'End side conversation': '结束侧窗聊天',
   'Resize side conversation': '调整侧窗聊天大小',
   'Side conversation is open': '侧窗聊天已打开',

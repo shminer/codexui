@@ -17,3 +17,10 @@
 
 #### Rollback/Cleanup
 - None.
+
+### Delayed completion ownership
+
+- Setup: use a notification fixture for one main thread.
+- Start turn B, then deliver an older turn A completion (including an error payload).
+- Expected: B remains running, its active ID and stop control remain intact, and A cannot set the current error or drain UI state. Completing B clears the running state normally.
+- Cleanup: stop the fixture. The guard is a constant-time thread/turn comparison with no additional requests.

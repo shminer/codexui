@@ -20,8 +20,23 @@
           {{ isLoadingMore || isLoadingPersistedAbove ? 'Loading…' : 'Load earlier messages' }}
         </button>
       </li>
-      <template v-for="message in visibleMessages" :key="message.id">
+      <template v-for="message in visibleTimeline" :key="message?.id ?? 'live-overlay'">
+      <li v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay">
+        <div class="message-row">
+          <div class="message-stack">
+            <article class="live-overlay-inline" aria-live="polite">
+              <p class="live-overlay-label">{{ liveOverlay.activityLabel }}</p>
+              <p v-if="liveOverlay.reasoningText" class="live-overlay-reasoning">{{ liveOverlay.reasoningText }}</p>
+              <div v-if="liveOverlay.errorText" class="live-overlay-error">
+                <span>{{ liveOverlay.errorText }}</span>
+                <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
+              </div>
+            </article>
+          </div>
+        </div>
+      </li>
       <li
+        v-else-if="message"
         class="conversation-item"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
@@ -776,20 +791,6 @@
         </div>
       </li>
       </template>
-      <li v-if="liveOverlay" class="conversation-item conversation-item-overlay">
-        <div class="message-row">
-          <div class="message-stack">
-            <article class="live-overlay-inline" aria-live="polite">
-              <p class="live-overlay-label">{{ liveOverlay.activityLabel }}</p>
-              <p v-if="liveOverlay.reasoningText" class="live-overlay-reasoning">{{ liveOverlay.reasoningText }}</p>
-              <div v-if="liveOverlay.errorText" class="live-overlay-error">
-                <span>{{ liveOverlay.errorText }}</span>
-                <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
-              </div>
-            </article>
-          </div>
-        </div>
-      </li>
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
     </ul>
 
@@ -1366,13 +1367,14 @@ const props = defineProps<{
   activeThreadId: string
   cwd: string
   readonly?: boolean
+  canRollback?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
 }>()
 
 const emit = defineEmits<{
-  forkThread: [payload: { threadId: string; turnIndex: number }]
+  forkThread: [payload: { threadId: string; turnId: string }]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
@@ -1867,29 +1869,29 @@ const copyableResponseContentByAnchorId = computed<Record<string, string>>(() =>
   return next
 })
 
-const forkableTurnIndexByAnchorId = computed<Record<string, number>>(() => {
-  const groupedTurns = new Map<string, { anchorMessageId: string; turnIndex: number }>()
+const forkableTurnIdByAnchorId = computed<Record<string, string>>(() => {
+  const groupedTurns = new Map<string, { anchorMessageId: string; turnId: string }>()
 
   for (const message of props.messages) {
-    if (!isCopyableAssistantMessage(message) || typeof message.turnIndex !== 'number') continue
+    if (!isCopyableAssistantMessage(message) || !message.turnId) continue
 
-    const responseKey = `turn:${message.turnIndex}`
+    const responseKey = message.turnId
     const existing = groupedTurns.get(responseKey)
     if (existing) {
       existing.anchorMessageId = message.id
-      existing.turnIndex = message.turnIndex
+      existing.turnId = message.turnId
       continue
     }
 
     groupedTurns.set(responseKey, {
       anchorMessageId: message.id,
-      turnIndex: message.turnIndex,
+      turnId: message.turnId,
     })
   }
 
-  const next: Record<string, number> = {}
+  const next: Record<string, string> = {}
   for (const groupedTurn of groupedTurns.values()) {
-    next[groupedTurn.anchorMessageId] = groupedTurn.turnIndex
+    next[groupedTurn.anchorMessageId] = groupedTurn.turnId
   }
   return next
 })
@@ -1899,7 +1901,7 @@ function showCopyResponseButton(message: UiMessage): boolean {
 }
 
 function showForkResponseButton(message: UiMessage): boolean {
-  return !props.readonly && typeof forkableTurnIndexByAnchorId.value[message.id] === 'number'
+  return !props.readonly && typeof forkableTurnIdByAnchorId.value[message.id] === 'string'
 }
 
 function mergeFileChangeDiff(first: string, second: string): string {
@@ -2049,6 +2051,13 @@ const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderableMessages.value.length,
 ))
 const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value))
+const visibleTimeline = computed<Array<UiMessage | null>>(() => {
+  const rows: Array<UiMessage | null> = [...visibleMessages.value]
+  if (!props.liveOverlay) return rows
+  const steeringIndex = rows.findIndex((message) => message?.messageType === 'userMessage.optimistic.steer' || message?.messageType === 'userMessage.steer')
+  rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, null)
+  return rows
+})
 const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
@@ -2412,12 +2421,12 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
 
 function forkResponse(anchorMessageId: string): void {
   if (props.readonly) return
-  const turnIndex = forkableTurnIndexByAnchorId.value[anchorMessageId]
-  if (typeof turnIndex !== 'number') return
+  const turnId = forkableTurnIdByAnchorId.value[anchorMessageId]
+  if (!turnId) return
   if (!props.activeThreadId) return
   emit('forkThread', {
     threadId: props.activeThreadId,
-    turnIndex,
+    turnId,
   })
 }
 
@@ -2433,11 +2442,11 @@ const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
 })
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return props.canRollback === true && !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
 }
 
 function editMessage(messageId: string): void {
-  if (props.readonly || props.isTurnInProgress) return
+  if (!props.canRollback || props.readonly || props.isTurnInProgress) return
   const turnId = editableTurnIdByMessageId.value[messageId]
   if (!turnId) return
   emit('rollback', { turnId })

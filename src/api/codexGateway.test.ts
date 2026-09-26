@@ -1,5 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+
+describe('fork through selected response', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('passes the inclusive lastTurnId to native fork while preserving complete-thread forks', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)))
+      return Response.json({ result: { thread: { id: 'forked', cwd: '/tmp', turns: [] }, model: 'gpt-5.5' } })
+    }))
+    expect((await forkThread('source', { lastTurnId: 'selected' })).threadId).toBe('forked')
+    await forkThread('source')
+    expect(requests).toEqual([
+      { method: 'thread/fork', params: { threadId: 'source', persistExtendedHistory: true, lastTurnId: 'selected' } },
+      { method: 'thread/fork', params: { threadId: 'source', persistExtendedHistory: true } },
+    ])
+  })
+})
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -904,5 +922,20 @@ describe('resumeThread', () => {
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
     ])
+  })
+})
+
+describe('shared method capability lookup', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('shares concurrent startup reads but refreshes a later explicit check', async () => {
+    const fetch = vi.fn(async () => Response.json({ data: ['thread/rollback'] }))
+    vi.stubGlobal('fetch', fetch)
+    const [catalog, supported] = await Promise.all([getMethodCatalog(), supportsThreadRollback()])
+    expect(catalog).toEqual(['thread/rollback'])
+    expect(supported).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    fetch.mockResolvedValue(Response.json({ data: [] }))
+    expect(await supportsThreadRollback()).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
