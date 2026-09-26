@@ -229,32 +229,35 @@ function popOut(): void {
     popupWindow.focus()
     return
   }
-  const opened = window.open('', '_blank', isMobile.value ? undefined : 'popup,width=760,height=900')
+  const opened = window.open(new URL('side-conversation.html', document.baseURI).href, '_blank', isMobile.value ? undefined : 'popup,width=760,height=900')
   if (!opened) return
   stopSideConversationWindowGesture()
-  const popupDocument = opened.document
-  popupDocument.title = t('Side conversation')
-  const viewport = popupDocument.createElement('meta')
-  viewport.name = 'viewport'
-  viewport.content = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content
-    ?? 'width=device-width, initial-scale=1.0'
-  popupDocument.head.appendChild(viewport)
-  const base = popupDocument.createElement('base')
-  base.href = document.baseURI
-  popupDocument.head.appendChild(base)
-  for (const style of document.querySelectorAll('style, link[rel="stylesheet"]')) {
-    popupDocument.head.appendChild(style.cloneNode(true))
-  }
-  const syncTheme = (): void => {
-    popupDocument.documentElement.className = document.documentElement.className
-    popupDocument.documentElement.style.cssText = document.documentElement.style.cssText
-  }
-  syncTheme()
-  popupThemeObserver = new MutationObserver(syncTheme)
-  popupThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
-  opened.addEventListener('pagehide', returnFromPopup, { once: true })
   popupWindow = opened
-  popupTarget.value = popupDocument.body
+  opened.addEventListener('load', () => {
+    if (popupWindow !== opened || opened.closed) return
+    const popupDocument = opened.document
+    popupDocument.title = t('Side conversation')
+    const viewport = popupDocument.querySelector<HTMLMetaElement>('meta[name="viewport"]') ?? popupDocument.createElement('meta')
+    viewport.name = 'viewport'
+    viewport.content = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content
+      ?? 'width=device-width, initial-scale=1.0'
+    popupDocument.head.appendChild(viewport)
+    const base = popupDocument.createElement('base')
+    base.href = document.baseURI
+    popupDocument.head.appendChild(base)
+    for (const style of document.querySelectorAll('style, link[rel="stylesheet"]')) {
+      popupDocument.head.appendChild(style.cloneNode(true))
+    }
+    const syncTheme = (): void => {
+      popupDocument.documentElement.className = document.documentElement.className
+      popupDocument.documentElement.style.cssText = document.documentElement.style.cssText
+    }
+    syncTheme()
+    popupThemeObserver = new MutationObserver(syncTheme)
+    popupThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+    opened.addEventListener('pagehide', returnFromPopup, { once: true })
+    popupTarget.value = popupDocument.body
+  }, { once: true })
 }
 const sideConversationWindow = ref<TerminalFloatingWindowRect>(initialSideConversationWindowRect(sideConversationViewportSize()))
 let sideConversationWindowGesture: SideConversationWindowGesture | null = null
