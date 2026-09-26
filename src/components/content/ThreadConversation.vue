@@ -1372,7 +1372,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  forkThread: [payload: { threadId: string; turnIndex: number }]
+  forkThread: [payload: { threadId: string; turnId: string }]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
@@ -1867,29 +1867,29 @@ const copyableResponseContentByAnchorId = computed<Record<string, string>>(() =>
   return next
 })
 
-const forkableTurnIndexByAnchorId = computed<Record<string, number>>(() => {
-  const groupedTurns = new Map<string, { anchorMessageId: string; turnIndex: number }>()
+const forkableTurnIdByAnchorId = computed<Record<string, string>>(() => {
+  const groupedTurns = new Map<string, { anchorMessageId: string; turnId: string }>()
 
   for (const message of props.messages) {
-    if (!isCopyableAssistantMessage(message) || typeof message.turnIndex !== 'number') continue
+    if (!isCopyableAssistantMessage(message) || !message.turnId) continue
 
-    const responseKey = `turn:${message.turnIndex}`
+    const responseKey = message.turnId
     const existing = groupedTurns.get(responseKey)
     if (existing) {
       existing.anchorMessageId = message.id
-      existing.turnIndex = message.turnIndex
+      existing.turnId = message.turnId
       continue
     }
 
     groupedTurns.set(responseKey, {
       anchorMessageId: message.id,
-      turnIndex: message.turnIndex,
+      turnId: message.turnId,
     })
   }
 
-  const next: Record<string, number> = {}
+  const next: Record<string, string> = {}
   for (const groupedTurn of groupedTurns.values()) {
-    next[groupedTurn.anchorMessageId] = groupedTurn.turnIndex
+    next[groupedTurn.anchorMessageId] = groupedTurn.turnId
   }
   return next
 })
@@ -1899,7 +1899,7 @@ function showCopyResponseButton(message: UiMessage): boolean {
 }
 
 function showForkResponseButton(message: UiMessage): boolean {
-  return !props.readonly && typeof forkableTurnIndexByAnchorId.value[message.id] === 'number'
+  return !props.readonly && typeof forkableTurnIdByAnchorId.value[message.id] === 'string'
 }
 
 function mergeFileChangeDiff(first: string, second: string): string {
@@ -2412,12 +2412,12 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
 
 function forkResponse(anchorMessageId: string): void {
   if (props.readonly) return
-  const turnIndex = forkableTurnIndexByAnchorId.value[anchorMessageId]
-  if (typeof turnIndex !== 'number') return
+  const turnId = forkableTurnIdByAnchorId.value[anchorMessageId]
+  if (!turnId) return
   if (!props.activeThreadId) return
   emit('forkThread', {
     threadId: props.activeThreadId,
-    turnIndex,
+    turnId,
   })
 }
 

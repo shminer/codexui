@@ -3062,8 +3062,8 @@ async function handleServerRequestResponse(payload: UiServerRequestReply): Promi
   }
 }
 
-async function onForkThreadFromMessage(payload: { threadId: string; turnIndex: number }): Promise<void> {
-  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnIndex)
+async function onForkThreadFromMessage(payload: { threadId: string; turnId: string }): Promise<void> {
+  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnId)
   if (!forkedThreadId) return
   await router.push({ name: 'thread', params: { threadId: forkedThreadId } })
   if (selectedThreadId.value !== forkedThreadId) {

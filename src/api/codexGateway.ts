@@ -1944,17 +1944,19 @@ export async function startThread(cwd?: string, model?: string): Promise<Started
 }
 
 export async function forkThread(threadId: string): Promise<ForkedThread>
+export async function forkThread(threadId: string, options: { lastTurnId: string }): Promise<ForkedThread>
 export async function forkThread(threadId: string, cwd: string | undefined, model: string | undefined): Promise<StartedThread>
 export async function forkThread(
   threadId: string,
-  cwd?: string,
+  cwd?: string | { lastTurnId: string },
   model?: string,
 ): Promise<StartedThread | ForkedThread> {
-  if (arguments.length <= 1) {
+  if (arguments.length <= 1 || typeof cwd === 'object') {
     try {
       const payload = await callRpc<ThreadForkResponse & ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', {
         threadId,
         persistExtendedHistory: true,
+        ...(typeof cwd === 'object' ? { lastTurnId: cwd.lastTurnId } : {}),
       })
       const forkedThreadId = normalizeThreadIdFromPayload(payload)
       if (!forkedThreadId) {

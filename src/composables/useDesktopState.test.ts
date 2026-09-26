@@ -2837,6 +2837,59 @@ describe('side conversation lifecycle', () => {
   })
 })
 
+describe('fork from response', () => {
+  it('reports an unavailable selected turn without copying the whole thread', async () => {
+    installTestWindow()
+    gatewayMocks.forkThread.mockRejectedValueOnce(new Error('Selected turn not found'))
+    const state = useDesktopState()
+    expect(await state.forkThreadFromTurn('source', 'missing')).toBe('')
+    expect(gatewayMocks.forkThread).toHaveBeenCalledExactlyOnceWith('source', { lastTurnId: 'missing' })
+    expect(gatewayMocks.getOlderThreadMessages).not.toHaveBeenCalled()
+    expect(state.error.value).toContain('Selected turn not found')
+  })
+
+  it('archives a failed fork without selecting or publishing its full history', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadDetail.mockResolvedValue({ messages: [], inProgress: false, activeTurnId: '', turnIndexByTurnId: { selected: 0, latest: 2 } })
+    gatewayMocks.forkThread.mockResolvedValue({ threadId: 'incomplete', cwd: '/tmp', model: 'gpt-5.5', messages: [] })
+    gatewayMocks.archiveThread.mockResolvedValue(undefined)
+    const state = useDesktopState()
+    state.primeSelectedThread('source')
+    expect(await state.forkThreadFromTurn('source', 'selected')).toBe('')
+    expect(gatewayMocks.archiveThread).toHaveBeenCalledWith('incomplete')
+    expect(gatewayMocks.renameThread).not.toHaveBeenCalled()
+    expect(state.selectedThreadId.value).toBe('source')
+    expect(state.projectGroups.value.flatMap((group) => group.threads).some((row) => row.id === 'incomplete')).toBe(false)
+    expect(state.error.value).toContain('not trimmed')
+  })
+
+  it('uses the selected turn id when recent and full turn indices differ', async () => {
+    installTestWindow()
+    const message = (turnId: string, turnIndex: number) => ({ id: `${turnId}-reply`, role: 'assistant' as const, text: turnId, turnId, turnIndex })
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-5.5', modelProvider: 'codex', messages: [message('turn-16', 6), message('turn-19', 9)], inProgress: false, activeTurnId: '', hasMoreOlder: true, turnIndexByTurnId: { 'turn-16': 6, 'turn-19': 9 } })
+    gatewayMocks.getThreadDetail.mockImplementation(async (threadId: string) => {
+      const lookup = threadId === 'forked-thread' ? { 'turn-16': 16 } : { 'turn-19': 19 }
+      return { model: 'gpt-5.5', modelProvider: 'codex', messages: [message('turn-16', 16)], inProgress: false, activeTurnId: '', hasMoreOlder: true, turnIndexByTurnId: lookup }
+    })
+    gatewayMocks.getOlderThreadMessages.mockResolvedValue({ messages: [message('turn-16', 16)], inProgress: false, activeTurnId: '', hasMoreOlder: false, startTurnIndex: 16, turnIndexByTurnId: { 'turn-16': 16 } })
+    gatewayMocks.forkThread.mockResolvedValue({ threadId: 'forked-thread', cwd: '/tmp/project', model: 'gpt-5.5', messages: [message('turn-19', 19)] })
+    gatewayMocks.rollbackThread.mockResolvedValue([message('turn-16', 16)])
+    gatewayMocks.renameThread.mockResolvedValue(undefined)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+
+    const state = useDesktopState()
+    await state.loadMessages('source-thread')
+    const forkedId = await state.forkThreadFromTurn('source-thread', 'turn-16')
+
+    expect(forkedId).toBe('forked-thread')
+    expect(gatewayMocks.forkThread).toHaveBeenCalledExactlyOnceWith('source-thread', { lastTurnId: 'turn-16' })
+    expect(gatewayMocks.getOlderThreadMessages).not.toHaveBeenCalled()
+    expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
+    expect(state.selectedThreadId.value).toBe('forked-thread')
+    expect(state.messages.value.at(-1)?.turnId).toBe('turn-16')
+  })
+})
+
 describe('provider model selection', () => {
   it('ignores global selected-model localStorage when OpenCode Zen is the active provider', async () => {
     installTestWindow({

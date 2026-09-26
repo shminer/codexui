@@ -5834,9 +5834,10 @@ export function useDesktopState() {
     }
   }
 
-  async function forkThreadFromTurn(threadId: string, turnIndex: number): Promise<string> {
+  async function forkThreadFromTurn(threadId: string, turnId: string): Promise<string> {
     const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId || !Number.isInteger(turnIndex) || turnIndex < 0) return ''
+    const selectedTurnId = turnId.trim()
+    if (!normalizedThreadId || !selectedTurnId) return ''
 
     if (inProgressById.value[normalizedThreadId] === true) {
       error.value = 'Finish the current turn before forking from a response.'
@@ -5852,31 +5853,30 @@ export function useDesktopState() {
       }
     }
 
-    const sourceMessages = persistedMessagesByThreadId.value[normalizedThreadId] ?? []
-    let lastTurnIndex = -1
-    for (const message of sourceMessages) {
-      if (typeof message.turnIndex === 'number' && Number.isFinite(message.turnIndex)) {
-        lastTurnIndex = Math.max(lastTurnIndex, message.turnIndex)
-      }
-    }
-
-    if (lastTurnIndex >= 0 && turnIndex > lastTurnIndex) return ''
-
     const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === normalizedThreadId) ?? null
     const selectedEffort = readReasoningEffortForThread(normalizedThreadId) || 'medium'
+    let unverifiedForkId = ''
 
     try {
       error.value = ''
-      const forked = await forkThread(normalizedThreadId)
+      const forked = await forkThread(normalizedThreadId, { lastTurnId: selectedTurnId })
       const forkedThreadId = forked.threadId.trim()
       if (!forkedThreadId) return ''
+      unverifiedForkId = forkedThreadId
 
       const forkedCwd = forked.cwd.trim() || sourceThread?.cwd?.trim() || ''
       const forkedThreadTitle = toForkedThreadTitle(sourceThread?.title || sourceThread?.preview || 'Untitled thread')
+      const verifiedFork = await getThreadDetail(forkedThreadId)
+      const lastVerifiedTurnIndex = Math.max(-1, ...Object.values(verifiedFork.turnIndexByTurnId))
+      if (verifiedFork.turnIndexByTurnId[selectedTurnId] !== lastVerifiedTurnIndex) {
+        throw new Error('The fork was not trimmed to the selected response.')
+      }
+      await renameThread(forkedThreadId, forkedThreadTitle)
+      unverifiedForkId = ''
       insertOptimisticThread(forkedThreadId, forkedCwd, forkedThreadTitle)
       setThreadModelId(forkedThreadId, forked.model)
       setSelectedReasoningEffortForThread(forkedThreadId, selectedEffort)
-      setPersistedMessagesForThread(forkedThreadId, forked.messages)
+      setPersistedMessagesForThread(forkedThreadId, verifiedFork.messages)
       loadedMessagesByThreadId.value = {
         ...loadedMessagesByThreadId.value,
         [forkedThreadId]: true,
@@ -5896,18 +5896,20 @@ export function useDesktopState() {
       setTurnErrorForThread(forkedThreadId, null)
       setThreadInProgress(forkedThreadId, false)
 
-      const turnsToRollback = lastTurnIndex - turnIndex
-      if (turnsToRollback > 0) {
-        const rolledBackMessages = await rollbackThread(forkedThreadId, turnsToRollback)
-        setPersistedMessagesForThread(forkedThreadId, rolledBackMessages)
-      }
-
-      await renameThreadById(forkedThreadId, forkedThreadTitle)
       setSelectedThreadId(forkedThreadId)
       void loadThreads().catch(() => {})
       return forkedThreadId
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      let message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      if (unverifiedForkId) {
+        try {
+          await archiveThread(unverifiedForkId)
+          removeArchivedThreadFromLoadedLists(unverifiedForkId)
+        } catch {
+          message += ` The incomplete fork ${unverifiedForkId} could not be archived.`
+        }
+      }
+      error.value = message
       return ''
     }
   }
