@@ -76,14 +76,29 @@ it('leaves files untouched while a turn is active or the selected turn is missin
   expect(await readFile(file, 'utf8')).toBe('after\n')
 })
 
-it('reports a retained-history read failure after history and files were reverted', async () => {
+it.each([{ retained: [] }, { retained: [{ id: 'earlier' }] }])('preserves retained turns $retained when the post-revert read fails', async ({ retained }) => {
   const { file, log } = await setup()
+  const rpc = vi.fn()
+    .mockResolvedValueOnce({ thread: { path: log, turns: [...retained, { id: 'selected' }, { id: 'later' }] } })
+    .mockResolvedValueOnce({ thread: { id: 'thread', turns: [] } })
+    .mockRejectedValueOnce(new Error('read interrupted'))
+  const result = await rollbackThreadWithFiles({ rpc }, 'thread', 'selected', directory)
+  expect(result.result).toEqual({ thread: { id: 'thread', path: log, turns: retained } })
+  expect(result.historyError).toContain('retained history could not be reloaded: read interrupted')
+  expect(result.fileErrors).toEqual([])
+  expect(await readFile(file, 'utf8')).toBe('before\n')
+})
+
+it('keeps file conflicts separate from the retained-history warning', async () => {
+  const { file, log } = await setup('external edit\n')
   const rpc = vi.fn()
     .mockResolvedValueOnce({ thread: { path: log, turns: [{ id: 'selected' }] } })
     .mockResolvedValueOnce({ thread: { turns: [] } })
     .mockRejectedValueOnce(new Error('read interrupted'))
-  await expect(rollbackThreadWithFiles({ rpc }, 'thread', 'selected', directory)).rejects.toThrow('Conversation history was reverted, but retained history could not be reloaded: read interrupted')
-  expect(await readFile(file, 'utf8')).toBe('before\n')
+  const result = await rollbackThreadWithFiles({ rpc }, 'thread', 'selected', directory)
+  expect(result.fileErrors).toHaveLength(1)
+  expect(result.historyError).toContain('read interrupted')
+  expect(await readFile(file, 'utf8')).toBe('external edit\n')
 })
 
 it('invalidates only the reverted thread caches after native success', async () => {

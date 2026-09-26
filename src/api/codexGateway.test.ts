@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getMethodCatalog, supportsThreadRollback, rollbackThread, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 describe('fork through selected response', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -947,6 +947,20 @@ describe('shared method capability lookup', () => {
 
 describe('native history revert', () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it('returns retained messages and both warnings after a completed revert', async () => {
+    const fetch = vi.fn(async () => Response.json({
+      result: { thread: { turns: [{ id: 'earlier', status: 'completed', items: [{ id: 'prompt', type: 'userMessage', content: [{ type: 'text', text: 'Keep this message' }] }] }] } },
+      fileErrors: ['file changed externally'],
+      historyError: 'retained history could not be reloaded',
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const result = await rollbackThreadAndFiles('thread', 'selected', '/tmp/project')
+    expect(result.messages).toEqual([expect.objectContaining({ text: 'Keep this message', turnId: 'earlier' })])
+    expect(result.fileErrors).toEqual(['file changed externally'])
+    expect(result.historyError).toBe('retained history could not be reloaded')
+    expect(fetch).toHaveBeenCalledWith('/codex-api/thread/rollback', expect.objectContaining({ body: JSON.stringify({ threadId: 'thread', turnId: 'selected', cwd: '/tmp/project' }) }))
+  })
 
   it('converts a turn count to beforeTurnId and reads retained messages after the empty revert response', async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = []

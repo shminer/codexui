@@ -3663,6 +3663,19 @@ describe('history rollback capability', () => {
     expect(state.error.value).toContain('file changed externally')
     expect(state.isRollingBack.value).toBe(false)
   })
+  it('allows draft restoration and keeps retained messages when the post-revert read fails', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.supportsThreadRollback.mockResolvedValue(true)
+    const messages = [{ id: 'earlier-message', role: 'user', text: 'Keep this message', turnId: 'earlier' }]
+    gatewayMocks.rollbackThreadAndFiles.mockResolvedValue({ messages, fileErrors: ['file changed externally'], historyError: 'retained history could not be reloaded' })
+    gatewayMocks.resumeThread.mockRejectedValue(new Error('read interrupted'))
+    gatewayMocks.getThreadDetail.mockRejectedValue(new Error('read interrupted'))
+    expect(await state.rollbackSelectedThread('turn-1')).toBe(true)
+    expect(state.messages.value).toEqual(messages)
+    expect(state.error.value).toContain('retained history could not be reloaded')
+    expect(state.error.value).toContain('file changed externally')
+    expect(state.isRollingBack.value).toBe(false)
+  })
 })
 
 describe('side memory event races', () => {

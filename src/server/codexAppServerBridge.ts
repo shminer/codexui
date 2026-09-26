@@ -3798,7 +3798,7 @@ async function applyTurnFileChanges(
 export async function rollbackThreadWithFiles(
   appServer: RpcExecutor, threadId: string, turnId: string, cwd: string,
   policy: ServerSecurityPolicy = PERMISSIVE_SECURITY_POLICY,
-): Promise<{ result: unknown; fileErrors: string[] }> {
+): Promise<{ result: unknown; fileErrors: string[]; historyError?: string }> {
   const response = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
   const thread = asRecord(response?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : []
@@ -3823,7 +3823,7 @@ export async function rollbackThreadWithFiles(
       }
     }
   }
-  await appServer.rpc('thread/revert', { threadId, beforeTurnId: turnId })
+  const reverted = asRecord(await appServer.rpc('thread/revert', { threadId, beforeTurnId: turnId }))
   let fileErrors: string[]
   try {
     const files = await revertTurnFileChanges(cwd, changes)
@@ -3836,7 +3836,11 @@ export async function rollbackThreadWithFiles(
     const result = await appServer.rpc('thread/read', { threadId, includeTurns: true })
     return { result, fileErrors }
   } catch (error) {
-    throw new Error(`Conversation history was reverted, but retained history could not be reloaded: ${getErrorMessage(error, 'thread/read failed')}${fileErrors.length ? `; file errors: ${fileErrors.join('; ')}` : ''}`)
+    return {
+      result: { ...response, ...reverted, thread: { ...thread, ...asRecord(reverted?.thread), turns: turns.slice(0, index) } },
+      fileErrors,
+      historyError: `Conversation history was reverted, but retained history could not be reloaded: ${getErrorMessage(error, 'thread/read failed')}`,
+    }
   }
 }
 

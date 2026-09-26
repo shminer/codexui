@@ -13,5 +13,7 @@ describe('ThreadConversation edit-message in-progress wiring', () => {
     expect(conversationSource).toContain('!props.readonly && !props.isTurnInProgress')
     expect(conversationSource).toContain('if (!props.canRollback || props.readonly || props.isTurnInProgress) return')
     expect(conversationUsage).toContain(':is-turn-in-progress="isSelectedThreadInProgress"')
+    expect(appSource).toContain('if (succeeded && selectedThreadId.value === originalThreadId && rollbackUserMessage?.text && threadComposerRef.value)')
+    expect(appSource).toContain('threadComposerRef.value.appendTextToDraft(rollbackUserMessage.text)')
   })
 })

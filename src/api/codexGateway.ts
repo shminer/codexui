@@ -1810,7 +1810,7 @@ export async function supportsThreadRollback(): Promise<boolean> {
   return (await getMethodCatalog()).includes('thread/revert')
 }
 
-export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[] }> {
+export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[]; historyError?: string }> {
   const response = await fetch('/codex-api/thread/rollback', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ threadId, turnId, cwd }),
@@ -1820,6 +1820,7 @@ export async function rollbackThreadAndFiles(threadId: string, turnId: string, c
   return {
     messages: normalizeThreadMessagesV2(payload.result, readThreadTurnStartIndex(payload.result)),
     fileErrors: Array.isArray(payload.fileErrors) ? payload.fileErrors : [],
+    historyError: typeof payload.historyError === 'string' ? payload.historyError : undefined,
   }
 }
 

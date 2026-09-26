@@ -6791,7 +6791,7 @@ export function useDesktopState() {
     try {
       canRollbackThread.value = await supportsThreadRollback()
       if (!canRollbackThread.value) throw new Error('This Codex runtime does not support editing conversation history.')
-      const { messages: nextMessages, fileErrors } = await rollbackThreadAndFiles(threadId, turnId, selectedThread.value?.cwd?.trim() ?? '')
+      const { messages: nextMessages, fileErrors, historyError } = await rollbackThreadAndFiles(threadId, turnId, selectedThread.value?.cwd?.trim() ?? '')
       setPersistedMessagesForThread(threadId, nextMessages)
       setLiveAgentMessagesForThread(threadId, [])
       clearLiveReasoningForThread(threadId)
@@ -6801,7 +6801,8 @@ export function useDesktopState() {
       setTurnErrorForThread(threadId, null)
       pendingThreadsRefresh = true
       await syncFromNotifications()
-      if (fileErrors.length) error.value = `Conversation history was rolled back, but some file changes could not be reverted: ${fileErrors.join('; ')}`
+      const warnings = [historyError, fileErrors.length ? `Conversation history was rolled back, but some file changes could not be reverted: ${fileErrors.join('; ')}` : ''].filter(Boolean)
+      if (warnings.length) error.value = warnings.join('\n')
       return true
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to rollback thread'
