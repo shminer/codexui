@@ -32,3 +32,10 @@ Backend queued messages are retried and drained for idle threads even if the ori
 - Remove temporary test projects/threads if they are no longer needed
 
 ---
+
+### Stop and failed-turn queue pause
+
+- Setup: a running main thread with at least one queued follow-up.
+- Stop the current turn or simulate a failed completion; wait longer than the 5-second drain interval and reload.
+- Expected: remaining messages stay queued; no next turn starts and no retry loop polls a stopped queue. Steer a queued message or send a new turn to continue. After a successful completion, normal queue draining resumes. This matches the temporary side queue behavior.
+- Cleanup: remove the queued test messages. Completed and busy queues retain their normal recovery; paused queues schedule no further timer.

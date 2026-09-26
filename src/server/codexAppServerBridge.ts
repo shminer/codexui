@@ -7005,8 +7005,8 @@ export class BackendQueueProcessor {
       if (!await this.hasQueuedTurns(threadId) || this.disposed) return
       const canStart = await this.canStartQueuedTurn(threadId)
       if (this.disposed) return
-      if (!canStart) {
-        if (await this.hasQueuedTurns(threadId)) {
+      if (canStart !== true) {
+        if (canStart === false && await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
         return
@@ -7042,7 +7042,7 @@ export class BackendQueueProcessor {
     return Array.isArray(queue) && queue.length > 0
   }
 
-  private async canStartQueuedTurn(threadId: string): Promise<boolean> {
+  private async canStartQueuedTurn(threadId: string): Promise<boolean | 'paused'> {
     const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: true }))
     const thread = asRecord(response?.thread)
     if (!thread) return false
@@ -7052,6 +7052,8 @@ export class BackendQueueProcessor {
     if (statusType === 'inProgress' || statusType === 'running' || statusType === 'active') return false
 
     const turns = Array.isArray(thread.turns) ? thread.turns : []
+    const lastStatus = readNonEmptyString(asRecord(turns.at(-1))?.status)
+    if (lastStatus === 'interrupted' || lastStatus === 'failed') return 'paused'
     return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status) === 'inProgress')
   }
 

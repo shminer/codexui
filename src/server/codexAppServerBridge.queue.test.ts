@@ -99,3 +99,22 @@ it('does not start or reschedule a queue after disposal during a metadata read',
   const current = await mutateThreadQueue('main', { type: 'move', id: 'missing', targetId: 'a' })
   expect(current.data.main?.map(message => message.id)).toEqual(['a'])
 })
+
+describe('stopped queue recovery', () => {
+  it.each(['interrupted', 'failed'])('keeps remaining main queue paused after a %s turn', async (status) => {
+    await writeFile(join(reviewHome, '.codex-global-state.json'), JSON.stringify({
+      'thread-queue-state': { main: [{ id: 'queued', text: 'do the next task', imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' }] },
+    }))
+    let notify: (notification: any) => void
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' }, turns: [{ id: 'stopped', status }] } }
+      if (method === 'config/read') return { config: { model: 'global-model', model_reasoning_effort: 'medium' } }
+      return {}
+    })
+    processor = new BackendQueueProcessor({ rpc, onNotification: (handler: any) => { notify = handler; return () => {} } } as any)
+    notify!({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'stopped', status } } })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(rpc.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)
+  })
+
+})
