@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
-import { handleReviewRoutes } from './reviewGit.js'
+import { authorizeGitDirectory, handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { readRecentThreadTurns } from './recentThreadTurns.js'
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
@@ -7727,7 +7727,7 @@ export function createCodexBridgeMiddleware(options: {
         return
       }
 
-      if (await handleReviewRoutes(req, res, url, { readJsonBody })) {
+      if (await handleReviewRoutes(req, res, url, { readJsonBody, securityPolicy })) {
         return
       }
 
@@ -8665,7 +8665,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing cwd' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8746,7 +8747,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing cwd' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8798,7 +8800,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing branch' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, true)
+        if (!cwd) return
         try {
           const cwdInfo = await stat(cwd)
           if (!cwdInfo.isDirectory()) {
@@ -8833,7 +8836,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing branch' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await runCommandCapture('git', ['rev-parse', '--verify', `${branch}^{commit}`], { cwd: gitRoot })
@@ -8881,7 +8885,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing sha' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, false)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await runCommandCapture('git', ['rev-parse', '--verify', `${sha}^{commit}`], { cwd: gitRoot })
@@ -8980,7 +8985,8 @@ export function createCodexBridgeMiddleware(options: {
           setJson(res, 400, { error: 'Missing commit' })
           return
         }
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+        const cwd = await authorizeGitDirectory(rawCwd, securityPolicy, res, true)
+        if (!cwd) return
         try {
           const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
           await assertNoTrackedGitChanges(gitRoot)
