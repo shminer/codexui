@@ -12,6 +12,7 @@ export type ServerSecurityPolicy = {
   terminalInputEnabled: boolean
   fileEditingEnabled: boolean
   backgroundIntegrationsEnabled: boolean
+  allowTailscaleAuthBypass: boolean
 }
 
 export const PERMISSIVE_SECURITY_POLICY: ServerSecurityPolicy = {
@@ -21,6 +22,7 @@ export const PERMISSIVE_SECURITY_POLICY: ServerSecurityPolicy = {
   terminalInputEnabled: true,
   fileEditingEnabled: true,
   backgroundIntegrationsEnabled: true,
+  allowTailscaleAuthBypass: true,
 }
 
 export function buildSafeSecurityPolicy(config: SafeRuntimeConfig): ServerSecurityPolicy {
@@ -31,5 +33,6 @@ export function buildSafeSecurityPolicy(config: SafeRuntimeConfig): ServerSecuri
     terminalInputEnabled: config.terminalInputEnabled,
     fileEditingEnabled: config.fileEditingEnabled,
     backgroundIntegrationsEnabled: false,
+    allowTailscaleAuthBypass: config.allowTailscaleAuthBypass,
   }
 }
