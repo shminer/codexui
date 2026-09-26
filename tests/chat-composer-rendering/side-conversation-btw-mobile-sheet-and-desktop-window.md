@@ -76,3 +76,5 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - Close the side window or reload the parent. Expected: the active turn is interrupted when its ID is known, then the child is unsubscribed. No transcript or side queue is saved. Empty side queues trigger no background history reads/retry timers.
 - Cleanup: close the temporary child; no persistent test session is needed.
 - Performance: one metadata read per coalesced sync; no history payload and no polling for threads without queued messages. No live long-duration throughput measurement was performed.
+
+- Reorder fixture delivery so idle metadata precedes the final assistant item, and so running metadata arrives after turn completion. Expected: one final reply, no restored Thinking state. Replay of a final item updates the same in-memory ID. Each render deduplicates side rows in linear time; no extra request is needed.

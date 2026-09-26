@@ -2122,7 +2122,10 @@ export function useDesktopState() {
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
     const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
-    const combined = [...persisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const rows = [...persisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const combined = isKnownSideConversationThread(threadId)
+      ? [...new Map(rows.map((message) => [message.id, message])).values()]
+      : rows
 
     const saved = savedTurnSummariesByThreadId.value[threadId] ?? []
     const current = turnSummaryByThreadId.value[threadId]
@@ -3139,7 +3142,7 @@ export function useDesktopState() {
         ]
         clearLiveAgentMessagesForThread(threadId)
         clearLiveFileChangesForThread(threadId)
-        setPersistedMessagesForThread(threadId, messages.map((message) => {
+        setPersistedMessagesForThread(threadId, [...new Map(messages.map((message) => [message.id, message])).values()].map((message) => {
           if (message.messageType === 'userMessage.optimistic.steer') return { ...message, messageType: 'userMessage.optimistic' }
           if (message.messageType === 'userMessage.steer') return { ...message, messageType: 'userMessage' }
           return message
@@ -3346,6 +3349,8 @@ export function useDesktopState() {
     }
   }
 
+  let optimisticMessageSequence = 0
+
   function appendOptimisticUserMessage(
     threadId: string,
     text: string,
@@ -3356,7 +3361,7 @@ export function useDesktopState() {
   ): void {
     const existing = persistedMessagesByThreadId.value[threadId] ?? []
     const nextMessage: UiMessage = {
-      id: `optimistic-user:${threadId}:${Date.now()}`,
+      id: `optimistic-user:${threadId}:${Date.now()}:${++optimisticMessageSequence}`,
       role: 'user',
       text,
       images: imageUrls.length > 0 ? [...imageUrls] : undefined,
@@ -5480,9 +5485,10 @@ export function useDesktopState() {
       // transcript belongs to this page and is populated only by live events.
       if (isKnownSideConversationThread(threadId)) {
         const observedTurnId = activeTurnIdByThreadId.value[threadId]
+        const completedCount = sideConversationCompletedTurnIds.size
         const summary = await getThreadSummary(threadId)
         if (discardedSideConversationThreadIds.has(threadId)) return
-        if (observedTurnId === activeTurnIdByThreadId.value[threadId] && !sideConversationPendingTurnStarts.size) {
+        if (observedTurnId === activeTurnIdByThreadId.value[threadId] && completedCount === sideConversationCompletedTurnIds.size && !sideConversationPendingTurnStarts.size) {
           setThreadInProgress(threadId, summary.inProgress)
           if (!summary.inProgress) {
             activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)

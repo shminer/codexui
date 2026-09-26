@@ -3654,3 +3654,31 @@ describe('history rollback capability', () => {
     expect(state.isRollingBack.value).toBe(false)
   })
 })
+
+describe('side memory event races', () => {
+  it('updates a late final item without duplicating the saved side reply', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'side-turn' } } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: 'partial' } })
+    await state.loadMessages(params.threadId, { force: true })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'final answer' } } })
+    expect(state.sideConversationMessages.value.filter(message => message.text.includes('answer') || message.text === 'partial')).toEqual([
+      expect.objectContaining({ text: 'final answer' }),
+    ])
+  })
+
+  it('ignores running metadata that arrives after a completed turn', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadSummary.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const load = state.loadMessages('side-thread-default', { force: true })
+    emit({ method: 'turn/started', params: { threadId: 'side-thread-default', turn: { id: 'new' } } })
+    emit({ method: 'turn/completed', params: { threadId: 'side-thread-default', turn: { id: 'new', status: 'completed' } } })
+    finish({ inProgress: true })
+    await load
+    expect(state.isSideConversationInProgress.value).toBe(false)
+  })
+})
