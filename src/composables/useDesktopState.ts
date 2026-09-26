@@ -7091,11 +7091,13 @@ export function useDesktopState() {
   }
 
   function startPolling(): void {
-    void supportsThreadRollback().then((supported) => { canRollbackThread.value = supported }).catch(() => {})
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
     const epoch = ++pollingEpoch
+    void supportsThreadRollback().then((supported) => {
+      if (epoch === pollingEpoch) canRollbackThread.value = supported
+    }).catch(() => {})
     void loadPendingServerRequestsFromBridge(epoch)
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (epoch !== pollingEpoch) return

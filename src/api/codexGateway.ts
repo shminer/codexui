@@ -1291,8 +1291,13 @@ export async function getThreadReviewResult(threadId: string): Promise<{
   }
 }
 
-export async function getMethodCatalog(): Promise<string[]> {
-  return fetchRpcMethodCatalog()
+let methodCatalogRequest: Promise<string[]> | null = null
+
+export function getMethodCatalog(): Promise<string[]> {
+  if (!methodCatalogRequest) {
+    methodCatalogRequest = fetchRpcMethodCatalog().finally(() => { methodCatalogRequest = null })
+  }
+  return methodCatalogRequest
 }
 
 export async function getNotificationCatalog(): Promise<string[]> {
@@ -1802,7 +1807,7 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
 }
 
 export async function supportsThreadRollback(): Promise<boolean> {
-  return (await fetchRpcMethodCatalog()).includes('thread/rollback')
+  return (await getMethodCatalog()).includes('thread/rollback')
 }
 
 export async function rollbackThreadAndFiles(threadId: string, turnId: string, cwd: string): Promise<{ messages: UiMessage[]; fileErrors: string[] }> {

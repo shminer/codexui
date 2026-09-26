@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 describe('fork through selected response', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -922,5 +922,20 @@ describe('resumeThread', () => {
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
     ])
+  })
+})
+
+describe('shared method capability lookup', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('shares concurrent startup reads but refreshes a later explicit check', async () => {
+    const fetch = vi.fn(async () => Response.json({ data: ['thread/rollback'] }))
+    vi.stubGlobal('fetch', fetch)
+    const [catalog, supported] = await Promise.all([getMethodCatalog(), supportsThreadRollback()])
+    expect(catalog).toEqual(['thread/rollback'])
+    expect(supported).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    fetch.mockResolvedValue(Response.json({ data: [] }))
+    expect(await supportsThreadRollback()).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })

@@ -38,3 +38,5 @@ The old rollback button is replaced with an `Edit message` action under each eli
 - Simulate a file conflict after successful history rollback: the UI keeps the new history and explicitly lists file errors instead of reporting full success. Switching threads during the request must not append the old prompt to the new thread.
 - Cleanup: archive the test thread and delete the disposable project.
 - Performance: capability loads once per polling lifecycle, and is checked again only on explicit Edit. The server reads the session once before rollback, reuses that patch snapshot, and trims the returned history to the normal recent page. No retry loop or duplicated file undo.
+
+- Concurrent startup consumers share the in-flight method-catalog request. A later explicit Edit checks capabilities again, so a failed or stale startup read cannot authorize file changes.
