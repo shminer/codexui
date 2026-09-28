@@ -6323,7 +6323,7 @@ export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
   private initializePromise: Promise<void> | null = null
-  private readBuffer = ''
+  private stdoutLines: ReturnType<typeof createInterface> | null = null
   private nextId = 1
   private stopping = false
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
@@ -6402,20 +6402,12 @@ export class AppServerProcess {
     this.process = proc
 
     proc.stdout.setEncoding('utf8')
-    proc.stdout.on('data', (chunk: string) => {
-      this.readBuffer += chunk
-
-      let lineEnd = this.readBuffer.indexOf('\n')
-      while (lineEnd !== -1) {
-        const line = this.readBuffer.slice(0, lineEnd).trim()
-        this.readBuffer = this.readBuffer.slice(lineEnd + 1)
-
-        if (line.length > 0) {
-          this.handleLine(line)
-        }
-
-        lineEnd = this.readBuffer.indexOf('\n')
-      }
+    // Scan each pipe chunk once; rescanning an accumulated response is quadratic.
+    this.stdoutLines = createInterface({ input: proc.stdout, crlfDelay: Infinity })
+    this.stdoutLines.on('line', (rawLine: string) => {
+      if (this.process !== proc) return
+      const line = rawLine.trim()
+      if (line.length > 0) this.handleLine(line)
     })
 
     proc.stderr.setEncoding('utf8')
@@ -6440,7 +6432,8 @@ export class AppServerProcess {
       this.process = null
       this.initialized = false
       this.initializePromise = null
-      this.readBuffer = ''
+      this.stdoutLines?.close()
+      this.stdoutLines = null
     })
   }
 
@@ -6935,7 +6928,8 @@ export class AppServerProcess {
     this.initialized = false
     this.initializePromise = null
     this.activeConfigSignature = ''
-    this.readBuffer = ''
+    this.stdoutLines?.close()
+    this.stdoutLines = null
 
     const failure = new Error('codex app-server stopped')
     for (const request of this.pending.values()) {
