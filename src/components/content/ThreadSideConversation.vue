@@ -90,6 +90,7 @@
             :in-progress-submit-mode="inProgressSubmitMode"
             :disabled="isOpening || !threadId"
             @submit="emit('send', $event)"
+            @steer-first-queued-message="emit('steer-first-queued-message')"
             @interrupt="emit('interrupt')"
             @update:selected-collaboration-mode="emit('update:selected-collaboration-mode', $event)"
             @update:selected-model="emit('update:selected-model', $event)"
@@ -192,6 +193,7 @@ const emit = defineEmits<{
   'update:selected-speed-mode': [mode: SpeedMode]
   'edit-queued-message': [messageId: string]
   'steer-queued-message': [messageId: string]
+  'steer-first-queued-message': []
   'remove-queued-message': [messageId: string]
   'reorder-queued-message': [payload: { draggedId: string; targetId: string }]
   'respond-server-request': [reply: UiServerRequestReply]

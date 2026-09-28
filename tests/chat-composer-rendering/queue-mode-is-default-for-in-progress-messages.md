@@ -16,11 +16,16 @@ When a turn is already running, the in-progress message path defaults to `Queue`
 4. While the response is running, submit a second message and observe submit mode label / destination behavior
 5. Open the queue list and confirm the second message is queued
 6. Switch to dark theme and repeat step 4 using another thread
+7. Keep Queue selected, type a draft, and press Ctrl+Enter or Command+Enter
+8. Queue two messages, clear the composer, and press the shortcut again
 
 #### Expected Results
 - The in-progress setting defaults to `Queue` when no saved preference exists
 - A second message sent during an active turn is queued, not used as steer
 - Queue order and queued item actions remain functional in both light theme and dark theme
+- Ctrl+Enter and Command+Enter send a non-empty draft immediately as Steer without changing the saved Queue default
+- With an empty composer, the shortcut Steers the first queued message and leaves the remaining queue order unchanged
+- With no draft and no queued message, the shortcut makes no request
 
 #### Rollback/Cleanup
 - Clear the queue by sending/steering queued items or deleting queued rows

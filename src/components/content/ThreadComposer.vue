@@ -192,6 +192,8 @@
                   class="thread-composer-attach-mode-button"
                   :class="{ 'is-active': activeInProgressMode === 'steer' }"
                   type="button"
+                  aria-keyshortcuts="Control+Enter Meta+Enter"
+                  :title="t('Steer immediately (Ctrl/Command+Enter)')"
                   :disabled="isInteractionDisabled"
                   @click="setActiveInProgressMode('steer')"
                 >
@@ -532,7 +534,7 @@ import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
-import { shouldSubmitComposer } from './composerSubmitShortcut'
+import { readComposerSubmitShortcut, resolveComposerSteerAction } from './composerSubmitShortcut'
 
 type SkillSourceBadge = {
   badge: string
@@ -628,6 +630,7 @@ const emit = defineEmits<{
   'resume-goal': []
   'reload-goal': []
   'clear-goal': []
+  'steer-first-queued-message': []
 }>()
 const { t } = useUiLanguage()
 
@@ -1748,6 +1751,23 @@ function onInputChange(): void {
 
 function onInputKeydown(event: KeyboardEvent): void {
   if (event.isComposing) return
+  const submitShortcut = readComposerSubmitShortcut(event, props.sendWithEnter)
+  if (submitShortcut === 'steer') {
+    event.preventDefault()
+    const steerAction = resolveComposerSteerAction({
+      canSubmit: canSubmit.value,
+      hasUnsavedDraft: hasUnsavedDraft.value,
+      hasPendingAttachments: pendingAttachmentCount.value > 0,
+      interactionDisabled: isInteractionDisabled.value,
+      hasQueue: props.hasQueueAbove,
+    })
+    if (steerAction === 'submit-draft') {
+      onSubmit('steer')
+    } else if (steerAction === 'steer-first-queued') {
+      emit('steer-first-queued-message')
+    }
+    return
+  }
   if (isFileMentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -1782,7 +1802,7 @@ function onInputKeydown(event: KeyboardEvent): void {
     }
   }
 
-  if (shouldSubmitComposer(event, props.sendWithEnter)) {
+  if (submitShortcut === 'default') {
     event.preventDefault()
     onSubmit(props.isTurnInProgress ? activeInProgressMode.value : 'steer')
     return

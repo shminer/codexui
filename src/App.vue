@@ -1043,6 +1043,7 @@
                     :side-conversation-open="isSideConversationVisible"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                    @steer-first-queued-message="onSteerFirstQueuedMessage"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
                     @save-goal="onSaveGoal"
@@ -1104,6 +1105,7 @@
     @interrupt="interruptSideConversationTurn"
     @edit-queued-message="onEditSideConversationQueuedMessage"
     @steer-queued-message="steerSideConversationQueuedMessage"
+    @steer-first-queued-message="onSteerFirstSideConversationQueuedMessage"
     @remove-queued-message="removeSideConversationQueuedMessage"
     @reorder-queued-message="onReorderSideConversationQueuedMessage"
     @respond-server-request="onRespondSideConversationServerRequest"
@@ -3097,6 +3099,12 @@ function onSubmitSideConversationMessage(payload: { text: string; imageUrls: str
   void sendSideConversationMessage(payload.text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueIndex)
 }
 
+function onSteerFirstSideConversationQueuedMessage(): void {
+  editingSideConversationQueuedMessageState.value = null
+  const message = sideConversationQueuedMessages.value[0]
+  if (message) steerSideConversationQueuedMessage(message.id)
+}
+
 function onEditSideConversationQueuedMessage(messageId: string): void {
   const queueIndex = sideConversationQueuedMessages.value.findIndex((item) => item.id === messageId)
   const message = sideConversationQueuedMessages.value[queueIndex]
@@ -3492,6 +3500,12 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
     return
   }
   void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex)
+}
+
+function onSteerFirstQueuedMessage(): void {
+  editingQueuedMessageState.value = null
+  const message = selectedThreadQueuedMessages.value[0]
+  if (message) void steerQueuedMessage(message.id)
 }
 
 function onOpenSideConversation(): void {

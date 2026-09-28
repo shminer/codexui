@@ -31,6 +31,7 @@ const zhCN: Record<string, string> = {
   'Require ⌘ + enter to send': '需要 ⌘ + Enter 才发送',
   'When busy, send as': '忙碌时发送方式',
   'Steer': '引导',
+  'Steer immediately (Ctrl/Command+Enter)': '立即引导（Ctrl/Command+Enter）',
   'Queue': '排队',
   'Appearance': '外观',
   'System': '跟随系统',

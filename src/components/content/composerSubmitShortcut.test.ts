@@ -1,24 +1,59 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { shouldSubmitComposer } from './composerSubmitShortcut'
+import { readComposerSubmitShortcut, resolveComposerSteerAction } from './composerSubmitShortcut'
 
-describe('shouldSubmitComposer', () => {
+describe('readComposerSubmitShortcut', () => {
   it.each([
-    ['enabled Enter', true, { key: 'Enter' }, true],
-    ['enabled Shift+Enter', true, { key: 'Enter', shiftKey: true }, false],
-    ['disabled Enter', false, { key: 'Enter' }, false],
-    ['disabled Ctrl+Enter', false, { key: 'Enter', ctrlKey: true }, true],
-    ['disabled Command+Enter', false, { key: 'Enter', metaKey: true }, true],
-    ['IME Enter', true, { key: 'Enter', isComposing: true }, false],
-    ['other key', true, { key: 'a' }, false],
+    ['enabled Enter', true, { key: 'Enter' }, 'default'],
+    ['enabled Shift+Enter', true, { key: 'Enter', shiftKey: true }, null],
+    ['enabled Ctrl+Enter', true, { key: 'Enter', ctrlKey: true }, 'steer'],
+    ['enabled Command+Enter', true, { key: 'Enter', metaKey: true }, 'steer'],
+    ['disabled Enter', false, { key: 'Enter' }, null],
+    ['disabled Ctrl+Enter', false, { key: 'Enter', ctrlKey: true }, 'steer'],
+    ['disabled Command+Enter', false, { key: 'Enter', metaKey: true }, 'steer'],
+    ['repeated Enter', true, { key: 'Enter', repeat: true }, 'default'],
+    ['repeated Ctrl+Enter', true, { key: 'Enter', ctrlKey: true, repeat: true }, null],
+    ['IME Ctrl+Enter', true, { key: 'Enter', ctrlKey: true, isComposing: true }, null],
+    ['other key', true, { key: 'a' }, null],
   ])('%s', (_label, sendWithEnter, overrides, expected) => {
-    expect(shouldSubmitComposer({
+    expect(readComposerSubmitShortcut({
       shiftKey: false,
       metaKey: false,
       ctrlKey: false,
       isComposing: false,
+      repeat: false,
       ...overrides,
     }, sendWithEnter)).toBe(expected)
+  })
+})
+
+describe('resolveComposerSteerAction', () => {
+  it.each([
+    ['sendable draft', { canSubmit: true }, 'submit-draft'],
+    ['empty composer with queue', { hasQueue: true }, 'steer-first-queued'],
+    ['empty composer without queue', {}, null],
+    ['non-sendable draft with queue', { hasUnsavedDraft: true, hasQueue: true }, null],
+    ['pending attachment with queue', { hasPendingAttachments: true, hasQueue: true }, null],
+    ['disabled interaction with queue', { interactionDisabled: true, hasQueue: true }, null],
+  ])('%s', (_label, overrides, expected) => {
+    expect(resolveComposerSteerAction({
+      canSubmit: false,
+      hasUnsavedDraft: false,
+      hasPendingAttachments: false,
+      interactionDisabled: false,
+      hasQueue: false,
+      ...overrides,
+    })).toBe(expected)
+  })
+})
+
+describe('main composer steer shortcut wiring', () => {
+  it('steers the first queued message through the existing queue action', async () => {
+    const appSource = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+
+    expect(appSource).toContain('@steer-first-queued-message="onSteerFirstQueuedMessage"')
+    expect(appSource).toContain('const message = selectedThreadQueuedMessages.value[0]')
+    expect(appSource).toContain('if (message) void steerQueuedMessage(message.id)')
   })
 })
 
