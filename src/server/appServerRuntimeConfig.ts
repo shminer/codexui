@@ -23,7 +23,7 @@ type AppServerRuntimeConfig = {
 const DEFAULT_RUNTIME_CONFIG: AppServerRuntimeConfig = {
   sandboxMode: 'danger-full-access',
   approvalPolicy: 'never',
-  memories: true,
+  memories: false,
 }
 
 function normalizeRuntimeValue(value: string | undefined): string {

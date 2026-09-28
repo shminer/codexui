@@ -605,7 +605,7 @@ program
   .option('--no-open', 'do not open browser on startup')
   .option('--login', 'run automatic Codex login bootstrap', true)
   .option('--no-login', 'skip automatic Codex login bootstrap')
-  .option('--memories', 'enable Codex memories for spawned app-server processes', true)
+  .option('--memories', 'enable Codex memories for spawned app-server processes', false)
   .option('--no-memories', 'disable Codex memories for spawned app-server processes')
   .option('--sandbox-mode <mode>', 'Codex sandbox mode: read-only, workspace-write, danger-full-access')
   .option('--approval-policy <policy>', 'Codex approval policy: untrusted, on-failure, on-request, never')
