@@ -8,7 +8,29 @@ function record(value: unknown): RecordValue | null {
 }
 
 const MAX_TAIL_BYTES = 16 * 1024 * 1024
+const MAX_SESSION_META_BYTES = 64 * 1024
 const TAIL_CHUNK_BYTES = 64 * 1024
+
+async function hasMatchingSessionMeta(
+  handle: Awaited<ReturnType<typeof open>>,
+  size: number,
+  threadId: string,
+): Promise<boolean> {
+  const bytes = Math.min(size, MAX_SESSION_META_BYTES)
+  const chunk = Buffer.allocUnsafe(bytes)
+  if ((await handle.read(chunk, 0, bytes, 0)).bytesRead !== bytes) return false
+
+  let raw = chunk.toString('utf8')
+  if (bytes < size) raw = raw.slice(0, raw.lastIndexOf('\n') + 1)
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    let row: RecordValue | null
+    try { row = record(JSON.parse(line)) } catch { continue }
+    if (row?.type !== 'session_meta') continue
+    return record(row.payload)?.id === threadId
+  }
+  return false
+}
 
 export async function readRecentThreadTurns(path: string, sessionsRoot: string, threadId: string, limit = 10): Promise<{
   turns: RecordValue[]
@@ -18,11 +40,11 @@ export async function readRecentThreadTurns(path: string, sessionsRoot: string, 
   const file = await realpath(path)
   const withinRoot = relative(root, file)
   if (!withinRoot || isAbsolute(withinRoot) || withinRoot === '..' || withinRoot.startsWith(`..${sep}`)) return null
-  if (!file.endsWith(`-${threadId}.jsonl`)) return null
 
   const handle = await open(file, 'r')
   try {
     const size = (await handle.stat()).size
+    if (!await hasMatchingSessionMeta(handle, size, threadId)) return null
     let offset = size
     let tailBytes = 0
     const chunks: Buffer[] = []

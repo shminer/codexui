@@ -6333,7 +6333,7 @@ export class AppServerProcess {
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
   private readonly threadTurnPageReadCacheByThreadId = new Map<string, { result: unknown; expiresAt: number }>()
   private readonly threadTurnPageReadPromiseByThreadId = new Map<string, Promise<unknown>>()
-  private readonly sessionPathByThreadId = new Map<string, string>()
+  private readonly sessionPathByThreadId = new Map<string, { path: string; timestamp: number | null }>()
   private readonly capturedItemsByThreadId = new Map<string, Map<string, CapturedItem>>()
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
@@ -6565,7 +6565,13 @@ export class AppServerProcess {
     for (const row of rows) {
       const thread = asRecord(row)
       if (typeof thread?.id === 'string' && typeof thread.path === 'string') {
-        this.sessionPathByThreadId.set(thread.id, thread.path)
+        const updatedAt = typeof thread.updatedAt === 'number' && Number.isFinite(thread.updatedAt) ? thread.updatedAt : null
+        const createdAt = typeof thread.createdAt === 'number' && Number.isFinite(thread.createdAt) ? thread.createdAt : null
+        const timestamp = updatedAt ?? createdAt
+        const current = this.sessionPathByThreadId.get(thread.id)
+        if (!current || (timestamp !== null && (current.timestamp === null || timestamp > current.timestamp))) {
+          this.sessionPathByThreadId.set(thread.id, { path: thread.path, timestamp })
+        }
       }
     }
     while (this.sessionPathByThreadId.size > 2000) {
@@ -6575,7 +6581,7 @@ export class AppServerProcess {
   }
 
   getThreadSessionPath(threadId: string): string | undefined {
-    return this.sessionPathByThreadId.get(threadId)
+    return this.sessionPathByThreadId.get(threadId)?.path
   }
 
   async readThreadForTurnPage(threadId: string): Promise<unknown> {
