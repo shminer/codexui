@@ -27,7 +27,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: New worktree creation uses detached HEAD parity behavior](new-worktree-creation-uses-detached-head-parity-behavior.md) |
 | [Feature: Rollback undoes apply_patch file changes](rollback-undoes-apply-patch-file-changes.md) |
 | [Fix: Codex.app "New Worktree" Button Missing After Account Switch (CDP Injection)](codex-app-new-worktree-button-missing-after-account-switch-cdp-injection.md) |
-| [User message edit action replaces rollback button](user-message-edit-action-replaces-rollback-button.md) |
+| [User message edit copies text without changing the thread](user-message-edit-action-replaces-rollback-button.md) |
 | [Thread menu copy path action](thread-menu-copy-path-action.md) |
 | [Thread menu copy chat action](thread-menu-copy-chat-action.md) |
 | [Fork from selected response](fork-from-selected-response.md) |

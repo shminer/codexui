@@ -1,48 +1,36 @@
-### User message edit action replaces rollback button
+### User message edit copies text without changing the thread
 
 #### Feature/Change Name
-The old rollback button is replaced with an `Edit message` action under each eligible user message, while keeping the existing behavior that appends the original text into the composer and rolls the thread back from that turn. The action stays hidden while the thread is generating so it cannot interrupt the active turn.
+`Edit message` appends the selected user message to the composer. It does not revert conversation history or workspace files, and it remains available while a response is generating.
 
 #### Prerequisites/Setup
 1. Dev server running (`pnpm run dev`)
-2. An existing thread with at least one completed user/assistant turn
-3. A prompt that keeps the assistant response active long enough to inspect the composer
+2. An existing thread with multiple completed user/assistant turns
+3. Browser developer tools open on the Network panel
 
 #### Steps
-1. Open a thread with multiple completed turns and start a new long response
-2. While the response is generating, hover an earlier user message
-3. Confirm `Edit message` is hidden and the empty composer shows an enabled stop button
-4. Wait for the response to finish, then hover the same user message
-5. Confirm `Edit message` appears and assistant responses no longer show the old `Rollback` button
-6. Click `Edit message` on the earlier user message with recognizable text
-7. Observe the composer draft after the click
-8. Confirm the thread rolls back from the selected turn
+1. Type recognizable text into the composer without sending it
+2. Hover an earlier non-empty user message and click `Edit message`
+3. Confirm the original draft remains and the selected message is appended on a new line
+4. Confirm the composer receives focus and no message is sent automatically
+5. Confirm the conversation history, selected thread, and workspace files are unchanged
+6. Start a long response and repeat the action while the response is generating
+7. Confirm the response continues and the selected message is appended to the composer
+8. Inspect Network traffic for both clicks
 
 #### Expected Results
 - The action under eligible user messages is labeled `Edit message`
-- The action is hidden during an active response, leaving the stop button available for that response
+- The action remains available during an active response
 - Assistant responses no longer render the old rollback action
-- Clicking `Edit message` appends the original user text into the composer
-- The existing rollback behavior still truncates the selected turn and later turns
+- Clicking `Edit message` appends the original user text without replacing an existing draft
+- Clicking does not interrupt the active turn, truncate messages, refresh history, or undo file changes
+- No `thread/revert`, rollback-file, message-send, or extra thread-read request is made
 
 #### Rollback/Cleanup
-- Re-send the edited message if you want to recreate the conversation path
+- Clear the composer draft created by the test.
 
----
+#### Performance Audit
 
-### Capability and failure consistency
-
-- Setup: a runtime without `thread/revert`, then Codex CLI 0.157.1 or a fixture/runtime supporting it. Use only a disposable project with a known apply_patch edit. A catalog containing only the removed `thread/rollback` method does not count as edit support.
-- On the unsupported runtime, load the conversation: Edit is hidden. Calling the handler directly reports unsupported history editing without touching files or the draft.
-- On the supported runtime, make `thread/revert` fail: files and history remain intact. On success, verify the request uses `{ threadId, beforeTurnId }`, history trims before the selected user turn, the captured patch is undone, and only then is the user text added to the draft.
-- Revert a later turn in a multi-turn conversation: despite the native revert response containing empty `thread.turns`, the earlier messages remain visible after the follow-up `thread/read` and after refresh. Edit the first turn separately and confirm the empty history is handled normally.
-- After an edit, load earlier messages and simulate a live-state read failure: removed turns must not return from cached history snapshots or pages.
-- Hold an older-message request open before Edit. After native revert succeeds, request older messages again, then release the old request with the pre-edit history (repeat with an old read error). Both callers must receive only post-edit history; the old completion must neither repopulate the cache nor discard the newer in-flight read. If the new read fails, surface that error without starting another automatic retry.
-- Make the retained-history read fail after a successful revert: the endpoint still succeeds, the known earlier turns remain visible, and the original user text is appended to the draft. The warning explicitly states that history was already reverted but could not be reloaded. Repeat with the first turn and confirm an empty history plus the restored draft.
-- Combine the post-revert read failure with a file conflict: both warnings remain visible, the external file edit is preserved, and the draft is still restored.
-- Simulate a file conflict after successful history rollback: the UI keeps the new history and explicitly lists file errors instead of reporting full success. Switching threads during the request must not append the old prompt to the new thread.
-- Cleanup: archive the test thread and delete the disposable project.
-- Performance: capability loads once per polling lifecycle, and is checked again only on explicit Edit. The edit endpoint makes exactly three sequential native calls (`thread/read`, `thread/revert`, `thread/read`), reads the session once before revert, reuses that patch snapshot, and trims the returned history to the normal recent page. The existing post-edit UI refresh is unchanged. No per-turn request fanout, retry loop, or duplicated file undo.
-- Pagination performance: ordinary reads still share one in-flight request and the existing 30-second cache. Revert or an authoritative snapshot invalidates that thread's pending read; late callers share the current read/cache instead of reusing the removed history. No polling, revision map, or retry for a current-generation failure is added. Performance is reviewed by code path only; runtime timing and profiling remain unmeasured.
-
-- Concurrent startup consumers share the in-flight method-catalog request. A later explicit Edit checks capabilities again, so a failed or stale startup read cannot authorize file changes.
+- Each click emits one local component event and performs one existing draft string append.
+- The action performs no RPC or HTTP request, cache invalidation, message-list scan, retry, or background refresh.
+- Runtime timing is not required for this constant local path; verify the zero-request claim in the Network panel.
