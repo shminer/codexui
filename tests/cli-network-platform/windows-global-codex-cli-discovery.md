@@ -1,7 +1,7 @@
 ### Feature: Windows PATH Codex CLI discovery
 
 #### Prerequisites/Setup
-1. Windows with Node.js 18+ and a runnable `codex` command exposed through `PATH`.
+1. Windows with Node.js 18+ and `@openai/codex` installed through npm.
 2. A local clone installed with `pnpm run install:local`.
 
 #### Steps
@@ -31,10 +31,13 @@
    codex-mobile --no-login --no-tunnel --no-open
    ```
 
+5. After the first RPC request, inspect the server process and its descendants with `Get-CimInstance Win32_Process`. Record the `node.exe`, `cmd.exe`, and `codex.exe` parent process IDs for the tested port.
+
 #### Expected Results
-- Both commands discover `codex` through `PATH`, including an npm-generated `codex.cmd` shim.
+- Both commands resolve the npm platform package's native `codex.exe` and start it directly.
+- The CodexUI server owns `codex.exe` directly; there is no intermediate `cmd.exe` or `codex.js` Node process in that app-server chain.
 - Startup does not print `Codex CLI not found. Installing official Codex CLI from npm...` and does not issue a second npm install.
-- Commands continue to work when `codex.cmd` is the only PATH-based CLI shim.
+- `CODEXUI_CODEX_COMMAND` remains authoritative when explicitly set. If the native platform package cannot be resolved, the npm-generated `codex`/`codex.cmd` shim remains a working fallback.
 - The roots response preserves the selected projects, and the `model/list` response contains a nonempty `data` array.
 
 #### Rollback/Cleanup

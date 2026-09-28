@@ -17,4 +17,11 @@ describe('command invocation', () => {
 
     expect(getSpawnInvocation('codex', args, 'linux')).toEqual({ command: 'codex', args })
   })
+
+  it('starts a Windows Codex executable directly', () => {
+    const args = ['app-server']
+    const command = 'C:\\npm\\node_modules\\@openai\\codex-win32-x64\\vendor\\codex.exe'
+
+    expect(getSpawnInvocation(command, args, 'win32')).toEqual({ command, args })
+  })
 })

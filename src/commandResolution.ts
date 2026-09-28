@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { spawnSyncCommand } from './utils/commandInvocation.js'
 
 export type CommandInvocation = {
@@ -34,29 +35,57 @@ function getWindowsAppDataNpmPrefix(): string | null {
   return appData ? join(appData, 'npm') : null
 }
 
-function getPotentialNpmPrefixes(): string[] {
+function getPotentialNpmPrefixes(platform = process.platform): string[] {
   return uniqueStrings([
     process.env.npm_config_prefix,
     process.env.PREFIX,
     getUserNpmPrefix(),
-    process.platform === 'win32' ? getWindowsAppDataNpmPrefix() : null,
+    platform === 'win32' ? getWindowsAppDataNpmPrefix() : null,
   ])
 }
 
-function getPotentialCodexPackageDirs(prefix: string): string[] {
+function getPotentialCodexPackageDirs(prefix: string, platform = process.platform): string[] {
   const dirs = [join(prefix, 'node_modules', '@openai', 'codex')]
-  if (process.platform !== 'win32') {
+  if (platform !== 'win32') {
     dirs.push(join(prefix, 'lib', 'node_modules', '@openai', 'codex'))
   }
   return dirs
 }
 
-function getPotentialCodexExecutables(prefix: string): string[] {
-  return getPotentialCodexPackageDirs(prefix).map((packageDir) => join(packageDir, 'bin', 'codex'))
+function getPotentialCodexExecutables(prefix: string, platform = process.platform): string[] {
+  return getPotentialCodexPackageDirs(prefix, platform).map((packageDir) => join(packageDir, 'bin', 'codex'))
 }
 
-export function getCodexCommandCandidates(platform = process.platform): string[] {
-  return platform === 'win32' ? ['codex.exe', 'codex'] : ['codex']
+const WINDOWS_CODEX_TARGETS: Partial<Record<NodeJS.Architecture, { packageName: string; targetTriple: string }>> = {
+  x64: { packageName: '@openai/codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc' },
+  arm64: { packageName: '@openai/codex-win32-arm64', targetTriple: 'aarch64-pc-windows-msvc' },
+}
+
+function getPotentialWindowsCodexExecutables(prefix: string, arch: NodeJS.Architecture): string[] {
+  const target = WINDOWS_CODEX_TARGETS[arch]
+  if (!target) return []
+
+  return getPotentialCodexPackageDirs(prefix, 'win32').map((packageDir) => {
+    let vendorRoot = join(packageDir, 'vendor')
+    try {
+      const requireFromCodex = createRequire(join(packageDir, 'package.json'))
+      vendorRoot = join(dirname(requireFromCodex.resolve(`${target.packageName}/package.json`)), 'vendor')
+    } catch {
+      // The official launcher also falls back to a vendor directory in the main package.
+    }
+    return join(vendorRoot, target.targetTriple, 'bin', 'codex.exe')
+  })
+}
+
+export function getCodexCommandCandidates(
+  platform = process.platform,
+  arch = process.arch,
+  prefixes = getPotentialNpmPrefixes(platform),
+): string[] {
+  if (platform === 'win32') {
+    return ['codex.exe', ...prefixes.flatMap((prefix) => getPotentialWindowsCodexExecutables(prefix, arch)), 'codex']
+  }
+  return ['codex', ...prefixes.flatMap((prefix) => getPotentialCodexExecutables(prefix, platform))]
 }
 
 function getPotentialRipgrepExecutables(prefix: string): string[] {
@@ -108,14 +137,10 @@ export function prependPathEntry(existingPath: string, entry: string): string {
   return existingPath ? `${normalizedEntry}${delimiter}${existingPath}` : normalizedEntry
 }
 
-export function resolveCodexCommand(): string | null {
+export function resolveCodexCommand(platform = process.platform, arch = process.arch): string | null {
   const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
-  const packageCandidates = process.platform === 'win32'
-    ? []
-    : getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
-  const fallbackCandidates = [...getCodexCommandCandidates(), ...packageCandidates]
 
-  for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {
+  for (const candidate of uniqueStrings([explicit, ...getCodexCommandCandidates(platform, arch)])) {
     if (isRunnableCommand(candidate, ['--version'])) {
       return candidate
     }
