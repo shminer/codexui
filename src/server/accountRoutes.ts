@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from '
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getCodexSpawnEnv, resolveCodexCommandResolution } from '../commandResolution.js'
+import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 
@@ -650,9 +652,13 @@ async function withTemporaryCodexAppServer<T>(
   const authPath = join(tempCodexHome, 'auth.json')
   await writeFile(authPath, authRaw, { encoding: 'utf8', mode: 0o600 })
 
-  const proc = spawn('codex', buildAppServerArgs(), {
-    env: { ...process.env, CODEX_HOME: tempCodexHome },
+  const codexResolution = resolveCodexCommandResolution()
+  if (!codexResolution) throw new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.')
+  const invocation = getSpawnInvocation(codexResolution.command, buildAppServerArgs())
+  const proc = spawn(invocation.command, invocation.args, {
+    env: { ...getCodexSpawnEnv(codexResolution), CODEX_HOME: tempCodexHome },
     stdio: ['pipe', 'pipe', 'pipe'],
+    ...(invocation.shell ? { shell: true } : {}),
   })
 
   let disposed = false
@@ -1027,9 +1033,13 @@ async function startCodexLogin(): Promise<string> {
     return await waitForLoginUrl()
   }
 
-  const proc = spawn('codex', ['login'], {
-    env: process.env,
+  const codexResolution = resolveCodexCommandResolution()
+  if (!codexResolution) throw new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.')
+  const invocation = getSpawnInvocation(codexResolution.command, ['login'])
+  const proc = spawn(invocation.command, invocation.args, {
+    env: getCodexSpawnEnv(codexResolution),
     stdio: ['pipe', 'pipe', 'pipe'],
+    ...(invocation.shell ? { shell: true } : {}),
   })
   proc.stdin.end()
 

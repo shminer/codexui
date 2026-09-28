@@ -4,7 +4,12 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Command } from 'commander'
-import { resolveCodexCommand } from '../commandResolution.js'
+import {
+  applyCodexCommandResolution,
+  type CodexCommandResolution,
+  getCodexSpawnEnv,
+  resolveCodexCommandResolution,
+} from '../commandResolution.js'
 import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
 import { buildSafeSecurityPolicy } from '../server/securityPolicy.js'
@@ -48,12 +53,12 @@ async function readCliVersion(): Promise<string> {
   }
 }
 
-function requireCodexCommand(): string {
-  const command = resolveCodexCommand()
-  if (!command) {
+function requireCodexCommand(): CodexCommandResolution {
+  const resolution = resolveCodexCommandResolution()
+  if (!resolution) {
     throw new Error('Codex CLI is not installed. Install @openai/codex or run codex-mobile-safe login.')
   }
-  return command
+  return resolution
 }
 
 async function persistLaunchProject(projectPath: string): Promise<string> {
@@ -140,8 +145,8 @@ program.command('start')
     const launchProject = await persistLaunchProject(projectPath?.trim() || process.cwd())
     const sandboxMode = parseSafeSandboxMode(options.sandboxMode)
     const approvalPolicy = parseSafeApprovalPolicy(options.approvalPolicy)
-    const codexCommand = requireCodexCommand()
-    process.env.CODEXUI_CODEX_COMMAND = codexCommand
+    const codexResolution = requireCodexCommand()
+    applyCodexCommandResolution(codexResolution)
     process.env.CODEXUI_SANDBOX_MODE = sandboxMode
     process.env.CODEXUI_APPROVAL_POLICY = approvalPolicy
     process.env.CODEXUI_MEMORIES = options.memories ? 'true' : 'false'
@@ -263,8 +268,11 @@ program.command('doctor').description('Run static safety checks for the packaged
 })
 
 program.command('login').description('Run Codex login').action(() => {
-  const command = resolveCodexCommand() ?? 'codex'
-  const result = spawnSyncCommand(command, ['login'], { stdio: 'inherit' })
+  const resolution = resolveCodexCommandResolution() ?? { command: 'codex' }
+  const result = spawnSyncCommand(resolution.command, ['login'], {
+    stdio: 'inherit',
+    env: getCodexSpawnEnv(resolution),
+  })
   if (result.status !== 0) throw new Error(`Codex login failed with exit code ${String(result.status ?? -1)}`)
 })
 

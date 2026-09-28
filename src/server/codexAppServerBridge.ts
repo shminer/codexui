@@ -42,7 +42,9 @@ import { handleCustomEndpointProxyRequest } from './customEndpointProxy.js'
 import { ThreadTerminalManager } from './terminalManager.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
-  resolveCodexCommand,
+  type CodexCommandResolution,
+  getCodexSpawnEnv,
+  resolveCodexCommandResolution,
   resolveRipgrepCommand,
 } from '../commandResolution.js'
 import { isReasoningEffort, type CollaborationModeKind, type ReasoningEffort } from '../types/codex.js'
@@ -6340,12 +6342,12 @@ export class AppServerProcess {
   private activeConfigSignature = ''
 
 
-  private getCodexCommand(): string {
-    const codexCommand = resolveCodexCommand()
-    if (!codexCommand) {
+  private getCodexCommand(): CodexCommandResolution {
+    const resolution = resolveCodexCommandResolution()
+    if (!resolution) {
       throw new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.')
     }
-    return codexCommand
+    return resolution
   }
 
   private buildAppServerConfig(): { args: string[]; env: Record<string, string> } {
@@ -6389,13 +6391,12 @@ export class AppServerProcess {
     this.stopping = false
     const config = this.buildAppServerConfig()
     this.activeConfigSignature = this.getAppServerConfigSignature(config)
-    const invocation = getSpawnInvocation(this.getCodexCommand(), config.args)
-    const spawnEnv = Object.keys(config.env).length > 0
-      ? { ...process.env, ...config.env }
-      : undefined
+    const codexResolution = this.getCodexCommand()
+    const invocation = getSpawnInvocation(codexResolution.command, config.args)
+    const spawnEnv = { ...getCodexSpawnEnv(codexResolution), ...config.env }
     const proc = spawn(invocation.command, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      ...(spawnEnv ? { env: spawnEnv } : {}),
+      env: spawnEnv,
       ...(invocation.shell ? { shell: true } : {}),
     })
     this.process = proc
@@ -7244,15 +7245,16 @@ class MethodCatalog {
 
   private async runGenerateSchemaCommand(outDir: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const codexCommand = resolveCodexCommand()
-      if (!codexCommand) {
+      const codexResolution = resolveCodexCommandResolution()
+      if (!codexResolution) {
         reject(new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.'))
         return
       }
 
-      const invocation = getSpawnInvocation(codexCommand, ['app-server', 'generate-json-schema', '--out', outDir])
+      const invocation = getSpawnInvocation(codexResolution.command, ['app-server', 'generate-json-schema', '--out', outDir])
       const process = spawn(invocation.command, invocation.args, {
         stdio: ['ignore', 'ignore', 'pipe'],
+        env: getCodexSpawnEnv(codexResolution),
         ...(invocation.shell ? { shell: true } : {}),
       })
 
