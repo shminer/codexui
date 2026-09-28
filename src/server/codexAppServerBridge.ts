@@ -2519,7 +2519,7 @@ export async function callRpcWithArchiveRecovery(
     const threadId = readNonEmptyString(paramsRecord?.threadId)
 
     if (method === 'turn/start' && threadId && isThreadNotFoundError(error)) {
-      await appServer.rpc('thread/resume', { threadId })
+      await appServer.rpc('thread/resume', { threadId, excludeTurns: true })
       return appServer.rpc(method, params ?? null)
     }
 
@@ -7221,7 +7221,7 @@ export class BackendQueueProcessor {
   }
 
   private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
-    const resumed = asRecord(await this.appServer.rpc('thread/resume', { threadId: turn.threadId }))
+    const resumed = asRecord(await this.appServer.rpc('thread/resume', { threadId: turn.threadId, excludeTurns: true }))
     await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn, resumed))
   }
 }
@@ -8056,7 +8056,9 @@ export function createCodexBridgeMiddleware(options: {
           ? await mergeSessionMetadataIntoThreadResult(sanitizedResult)
           : sanitizedResult
 
-	        if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method)) {
+        const metadataOnlyResume = body.method === 'thread/resume' && asRecord(body.params)?.excludeTurns === true
+        // A metadata response is not a history snapshot and must not invalidate page reads.
+	        if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method) && !metadataOnlyResume) {
 	          const rpcRecord = asRecord(result)
 	          const rpcThread = asRecord(rpcRecord?.thread)
 	          const rpcThreadId = typeof rpcThread?.id === 'string' ? rpcThread.id : ''

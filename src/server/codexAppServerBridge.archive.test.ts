@@ -145,7 +145,7 @@ describe('callRpcWithArchiveRecovery', () => {
         method: 'turn/start',
         params: { threadId: 'test-thread', input: [{ type: 'text', text: 'hi' }] },
       },
-      { method: 'thread/resume', params: { threadId: 'test-thread' } },
+      { method: 'thread/resume', params: { threadId: 'test-thread', excludeTurns: true } },
       {
         method: 'turn/start',
         params: { threadId: 'test-thread', input: [{ type: 'text', text: 'hi' }] },

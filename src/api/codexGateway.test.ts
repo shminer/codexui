@@ -875,6 +875,20 @@ describe('resumeThread', () => {
     vi.unstubAllGlobals()
   })
 
+  it('restores runtime metadata without requesting turns on every platform', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: {
+      model: 'gpt-5.5', modelProvider: 'codex',
+      thread: { id: 'metadata-only', turns: [], status: { type: 'idle' } },
+    } }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(resumeThread('metadata-only')).resolves.toMatchObject({
+      model: 'gpt-5.5', modelProvider: 'codex', messages: [], historyExcluded: true,
+    })
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+      method: 'thread/resume', params: { threadId: 'metadata-only', excludeTurns: true },
+    })
+  })
+
   it('coalesces repeated resume failures for the same thread', async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -895,7 +909,7 @@ describe('resumeThread', () => {
 
     expect(results.every((result) => result.status === 'rejected')).toBe(true)
     expect(requests).toEqual([
-      { method: 'thread/resume', params: { threadId: 'missing-thread' } },
+      { method: 'thread/resume', params: { threadId: 'missing-thread', excludeTurns: true } },
     ])
   })
 
@@ -919,8 +933,8 @@ describe('resumeThread', () => {
     const retried = resumeThread('stalled-thread')
     expect(retried).not.toBe(first)
     expect(requests).toEqual([
-      { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
-      { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
+      { method: 'thread/resume', params: { threadId: 'stalled-thread', excludeTurns: true } },
+      { method: 'thread/resume', params: { threadId: 'stalled-thread', excludeTurns: true } },
     ])
   })
 })

@@ -1695,6 +1695,7 @@ export type ResumedThread = {
   hasMoreOlder: boolean
   turnIndexByTurnId: ThreadTurnIndexById
   subagents: UiSubagent[]
+  historyExcluded?: boolean
 }
 
 const RESUME_THREAD_COALESCE_TTL_MS = 30_000
@@ -1705,7 +1706,7 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
   if (existing) return existing
 
   const promise = (async () => {
-    const payload = await callRpc<ThreadResumeResponse>('thread/resume', { threadId })
+    const payload = await callRpc<ThreadResumeResponse>('thread/resume', { threadId, excludeTurns: true })
     const startTurnIndex = readThreadTurnStartIndex(payload)
     const messages = normalizeThreadMessagesV2(payload, startTurnIndex)
     return {
@@ -1717,6 +1718,7 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
       hasMoreOlder: startTurnIndex > 0,
       turnIndexByTurnId: buildTurnIndexByTurnId(payload, startTurnIndex),
       subagents: readThreadSubagents(payload),
+      historyExcluded: !payload.thread.turns?.length,
     }
   })()
 
