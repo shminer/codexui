@@ -2,18 +2,23 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadConversation edit-message in-progress wiring', () => {
-  it('hides and ignores edits while the selected turn is active', async () => {
+  it('copies user text into the composer without changing the thread', async () => {
     const [conversationSource, appSource] = await Promise.all([
       readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8'),
       readFile(new URL('../../App.vue', import.meta.url), 'utf8'),
     ])
     const conversationUsage = appSource.match(/<ThreadConversation\b[\s\S]*?\/>/u)?.[0]
 
-    expect(conversationSource).toContain('isTurnInProgress?: boolean')
-    expect(conversationSource).toContain('!props.readonly && !props.isTurnInProgress')
-    expect(conversationSource).toContain('if (!props.canRollback || props.readonly || props.isTurnInProgress) return')
-    expect(conversationUsage).toContain(':is-turn-in-progress="isSelectedThreadInProgress"')
-    expect(appSource).toContain('if (succeeded && selectedThreadId.value === originalThreadId && rollbackUserMessage?.text && threadComposerRef.value)')
-    expect(appSource).toContain('threadComposerRef.value.appendTextToDraft(rollbackUserMessage.text)')
+    expect(conversationSource).toContain('canEditMessage?: boolean')
+    expect(conversationSource).toContain("return props.canEditMessage !== false && !props.readonly && message.role === 'user' && message.text.trim().length > 0")
+    expect(conversationSource).toContain("emit('editMessage', message.text)")
+    expect(conversationUsage).toContain(':can-edit-message="!selectedThreadPendingRequest"')
+    expect(conversationUsage).toContain('@edit-message="onEditMessage"')
+    expect(conversationUsage).not.toContain(':is-turn-in-progress=')
+    expect(conversationUsage).not.toContain(':can-rollback=')
+    expect(conversationUsage).not.toContain('@rollback=')
+    expect(appSource).toContain('function onEditMessage(text: string): void {')
+    expect(appSource).toContain('threadComposerRef.value?.appendTextToDraft(text)')
+    expect(appSource).not.toContain('rollbackSelectedThread')
   })
 })

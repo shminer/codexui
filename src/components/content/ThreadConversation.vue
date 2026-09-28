@@ -766,7 +766,7 @@
                   class="message-edit-button"
                   aria-label="Edit this message"
                   title="Edit this message"
-                  @click="editMessage(message.id)"
+                  @click="editMessage(message)"
                 >
                   <IconTablerFilePencil class="icon-svg message-edit-icon" />
                   <span class="message-edit-label">Edit message</span>
@@ -1378,11 +1378,10 @@ const props = defineProps<{
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
   isLoading: boolean
-  isTurnInProgress?: boolean
   activeThreadId: string
   cwd: string
   readonly?: boolean
-  canRollback?: boolean
+  canEditMessage?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -1390,7 +1389,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]
-  rollback: [payload: { turnId: string }]
+  editMessage: [text: string]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
 }>()
@@ -2414,26 +2413,13 @@ function forkResponse(anchorMessageId: string): void {
   })
 }
 
-const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
-  const next: Record<string, string> = {}
-  for (const message of props.messages) {
-    if (message.role !== 'user' || typeof message.turnIndex !== 'number') continue
-    const turnId = typeof message.turnId === 'string' && message.turnId.length > 0 ? message.turnId : ''
-    if (!turnId || message.text.trim().length === 0) continue
-    next[message.id] = turnId
-  }
-  return next
-})
-
 function showEditMessageButton(message: UiMessage): boolean {
-  return props.canRollback === true && !props.readonly && !props.isTurnInProgress && typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return props.canEditMessage !== false && !props.readonly && message.role === 'user' && message.text.trim().length > 0
 }
 
-function editMessage(messageId: string): void {
-  if (!props.canRollback || props.readonly || props.isTurnInProgress) return
-  const turnId = editableTurnIdByMessageId.value[messageId]
-  if (!turnId) return
-  emit('rollback', { turnId })
+function editMessage(message: UiMessage): void {
+  if (!showEditMessageButton(message)) return
+  emit('editMessage', message.text)
 }
 
 function splitPlainTextByLinks(
