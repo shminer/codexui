@@ -1,12 +1,25 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join, parse } from 'node:path'
 import { spawnSyncCommand } from './utils/commandInvocation.js'
 
 export type CommandInvocation = {
   command: string
   args: string[]
 }
+
+export type CodexCommandResolution = {
+  command: string
+  env?: Record<string, string | undefined>
+}
+
+const CODEX_MANAGED_BY_ENV_NAMES = [
+  'CODEX_MANAGED_BY_NPM',
+  'CODEX_MANAGED_BY_PNPM',
+  'CODEX_MANAGED_BY_BUN',
+  'CODEX_MANAGED_BY_VITE_PLUS',
+] as const
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   const unique: string[] = []
@@ -34,29 +47,116 @@ function getWindowsAppDataNpmPrefix(): string | null {
   return appData ? join(appData, 'npm') : null
 }
 
-function getPotentialNpmPrefixes(): string[] {
+function getPotentialNpmPrefixes(platform = process.platform): string[] {
   return uniqueStrings([
     process.env.npm_config_prefix,
     process.env.PREFIX,
     getUserNpmPrefix(),
-    process.platform === 'win32' ? getWindowsAppDataNpmPrefix() : null,
+    platform === 'win32' ? getWindowsAppDataNpmPrefix() : null,
+    ...(platform === 'win32' ? getWindowsPathNpmPrefixes() : []),
   ])
 }
 
-function getPotentialCodexPackageDirs(prefix: string): string[] {
+function getWindowsPathNpmPrefixes(pathValue = process.env.PATH ?? ''): string[] {
+  return uniqueStrings(pathValue.split(delimiter).map((entry) => {
+    const normalized = entry.trim().replace(/^"|"$/g, '')
+    if (!normalized) return null
+    return existsSync(join(normalized, 'codex.cmd')) || existsSync(join(normalized, 'codex'))
+      ? normalized
+      : null
+  }))
+}
+
+function getPotentialCodexPackageDirs(prefix: string, platform = process.platform): string[] {
   const dirs = [join(prefix, 'node_modules', '@openai', 'codex')]
-  if (process.platform !== 'win32') {
+  if (platform !== 'win32') {
     dirs.push(join(prefix, 'lib', 'node_modules', '@openai', 'codex'))
   }
   return dirs
 }
 
-function getPotentialCodexExecutables(prefix: string): string[] {
-  return getPotentialCodexPackageDirs(prefix).map((packageDir) => join(packageDir, 'bin', 'codex'))
+function getPotentialCodexExecutables(prefix: string, platform = process.platform): string[] {
+  return getPotentialCodexPackageDirs(prefix, platform).map((packageDir) => join(packageDir, 'bin', 'codex'))
 }
 
-export function getCodexCommandCandidates(platform = process.platform): string[] {
-  return platform === 'win32' ? ['codex.exe', 'codex'] : ['codex']
+const WINDOWS_CODEX_TARGETS: Partial<Record<NodeJS.Architecture, { packageName: string; targetTriple: string }>> = {
+  x64: { packageName: '@openai/codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc' },
+  arm64: { packageName: '@openai/codex-win32-arm64', targetTriple: 'aarch64-pc-windows-msvc' },
+}
+
+function getPotentialWindowsCodexExecutables(prefix: string, arch: NodeJS.Architecture): string[] {
+  const target = WINDOWS_CODEX_TARGETS[arch]
+  if (!target) return []
+
+  return getPotentialCodexPackageDirs(prefix, 'win32').map((packageDir) => {
+    let vendorRoot = join(packageDir, 'vendor')
+    try {
+      const requireFromCodex = createRequire(join(packageDir, 'package.json'))
+      vendorRoot = join(dirname(requireFromCodex.resolve(`${target.packageName}/package.json`)), 'vendor')
+    } catch {
+      // The official launcher also falls back to a vendor directory in the main package.
+    }
+    return join(vendorRoot, target.targetTriple, 'bin', 'codex.exe')
+  })
+}
+
+function getManagedPackageEnv(packageRoot: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    CODEX_MANAGED_PACKAGE_ROOT: realpathSync(packageRoot),
+  }
+  for (const name of CODEX_MANAGED_BY_ENV_NAMES) env[name] = undefined
+
+  const normalizedRoot = packageRoot.replace(/\\/g, '/')
+  let marker: typeof CODEX_MANAGED_BY_ENV_NAMES[number] = 'CODEX_MANAGED_BY_NPM'
+  if (normalizedRoot.includes('/.bun/install/global/')) {
+    marker = 'CODEX_MANAGED_BY_BUN'
+  } else {
+    const canonicalRoot = realpathSync(packageRoot)
+    const filesystemRoot = parse(packageRoot).root
+    for (let current = packageRoot; current !== filesystemRoot; current = dirname(current)) {
+      const nodeModulesDir = join(current, 'node_modules')
+      if (!existsSync(join(nodeModulesDir, '.modules.yaml'))) continue
+      try {
+        if (realpathSync(join(nodeModulesDir, '@openai', 'codex')) === canonicalRoot) {
+          marker = 'CODEX_MANAGED_BY_PNPM'
+          break
+        }
+      } catch {}
+    }
+  }
+  env[marker] = '1'
+  return env
+}
+
+function getCodexCommandResolutions(
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+  prefixes: string[],
+): Array<CodexCommandResolution & { packageRoot?: string }> {
+  if (platform !== 'win32') {
+    return getCodexCommandCandidates(platform, arch, prefixes).map((command) => ({ command }))
+  }
+
+  const nativeCandidates = prefixes.flatMap((prefix) => {
+    const packageDirs = getPotentialCodexPackageDirs(prefix, 'win32')
+    const executables = getPotentialWindowsCodexExecutables(prefix, arch)
+    return executables.map((command, index) => ({
+      command,
+      packageRoot: packageDirs[index],
+    }))
+  })
+  return [{ command: 'codex.exe' }, ...nativeCandidates, { command: 'codex' }]
+}
+
+export function getCodexCommandCandidates(
+  platform = process.platform,
+  arch = process.arch,
+  prefixes = getPotentialNpmPrefixes(platform),
+): string[] {
+  if (platform === 'win32') {
+    return ['codex.exe', ...prefixes.flatMap((prefix) => getPotentialWindowsCodexExecutables(prefix, arch)), 'codex']
+  }
+  return ['codex', ...prefixes.flatMap((prefix) => getPotentialCodexExecutables(prefix, platform))]
 }
 
 function getPotentialRipgrepExecutables(prefix: string): string[] {
@@ -108,20 +208,50 @@ export function prependPathEntry(existingPath: string, entry: string): string {
   return existingPath ? `${normalizedEntry}${delimiter}${existingPath}` : normalizedEntry
 }
 
-export function resolveCodexCommand(): string | null {
-  const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
-  const packageCandidates = process.platform === 'win32'
-    ? []
-    : getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
-  const fallbackCandidates = [...getCodexCommandCandidates(), ...packageCandidates]
+export function resolveCodexCommand(platform = process.platform, arch = process.arch): string | null {
+  return resolveCodexCommandResolution(platform, arch)?.command ?? null
+}
 
-  for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {
-    if (isRunnableCommand(candidate, ['--version'])) {
-      return candidate
+export function resolveCodexCommandResolution(
+  platform = process.platform,
+  arch = process.arch,
+  probe: (command: string, args?: string[]) => boolean = isRunnableCommand,
+  prefixes = getPotentialNpmPrefixes(platform),
+): CodexCommandResolution | null {
+  const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
+  if (explicit && probe(explicit, ['--version'])) return { command: explicit }
+
+  for (const candidate of getCodexCommandResolutions(platform, arch, prefixes)) {
+    if (probe(candidate.command, ['--version'])) {
+      return candidate.packageRoot
+        ? { command: candidate.command, env: getManagedPackageEnv(candidate.packageRoot) }
+        : { command: candidate.command }
     }
   }
 
   return null
+}
+
+export function getCodexSpawnEnv(
+  resolution: CodexCommandResolution,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (!resolution.env) return baseEnv
+  const env = { ...baseEnv }
+  for (const [name, value] of Object.entries(resolution.env)) {
+    if (value === undefined) delete env[name]
+    else env[name] = value
+  }
+  return env
+}
+
+export function applyCodexCommandResolution(resolution: CodexCommandResolution): void {
+  process.env.CODEXUI_CODEX_COMMAND = resolution.command
+  if (!resolution.env) return
+  for (const [name, value] of Object.entries(resolution.env)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
 }
 
 export function resolveRipgrepCommand(): string | null {

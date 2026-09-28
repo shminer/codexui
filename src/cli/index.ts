@@ -11,11 +11,13 @@ import { get as httpsGet } from 'node:https'
 import { Command } from 'commander'
 import qrcode from 'qrcode-terminal'
 import {
+  applyCodexCommandResolution,
   canRunCommand,
+  type CodexCommandResolution,
   getNpmGlobalBinDir,
   getUserNpmPrefix,
   prependPathEntry,
-  resolveCodexCommand,
+  resolveCodexCommandResolution,
 } from '../commandResolution.js'
 import {
   parseApprovalPolicy,
@@ -207,9 +209,9 @@ function hasCodexAuth(): boolean {
   return existsSync(join(codexHome, 'auth.json'))
 }
 
-function ensureCodexInstalled(): string | null {
-  let codexCommand = resolveCodexCommand()
-  if (!codexCommand) {
+function ensureCodexInstalled(): CodexCommandResolution | null {
+  let resolution = resolveCodexCommandResolution()
+  if (!resolution) {
     const installWithFallback = (pkg: string, label: string): void => {
       const status = runWithStatus('npm', ['install', '-g', pkg])
       if (status === 0) {
@@ -227,8 +229,8 @@ function ensureCodexInstalled(): string | null {
     if (isTermuxRuntime()) {
       console.log('\nCodex CLI not found. Installing Termux-compatible Codex CLI from npm...\n')
       installWithFallback('@mmmbuto/codex-cli-termux', 'Codex CLI install')
-      codexCommand = resolveCodexCommand()
-      if (!codexCommand) {
+      resolution = resolveCodexCommandResolution()
+      if (!resolution) {
         console.log('\nTermux npm package did not expose `codex`. Installing official CLI fallback...\n')
         installWithFallback('@openai/codex', 'Codex CLI fallback install')
       }
@@ -237,20 +239,20 @@ function ensureCodexInstalled(): string | null {
       installWithFallback('@openai/codex', 'Codex CLI install')
     }
 
-    codexCommand = resolveCodexCommand()
-    if (!codexCommand && !isTermuxRuntime()) {
+    resolution = resolveCodexCommandResolution()
+    if (!resolution && !isTermuxRuntime()) {
       // Non-Termux path should resolve after official package install.
       throw new Error('Official Codex CLI install completed but binary is still not available in PATH')
     }
-    if (!codexCommand && isTermuxRuntime()) {
-      codexCommand = resolveCodexCommand()
+    if (!resolution && isTermuxRuntime()) {
+      resolution = resolveCodexCommandResolution()
     }
-    if (!codexCommand) {
+    if (!resolution) {
       throw new Error('Codex CLI install completed but binary is still not available in PATH')
     }
     console.log('\nCodex CLI installed.\n')
   }
-  return codexCommand
+  return resolution
 }
 
 type PasswordResolution = {
@@ -478,9 +480,9 @@ async function startServer(options: {
       console.warn(`\n[project] Could not open launch project: ${message}\n`)
     }
   }
-  const codexCommand = ensureCodexInstalled() ?? resolveCodexCommand()
-  if (codexCommand) {
-    process.env.CODEXUI_CODEX_COMMAND = codexCommand
+  const codexResolution = ensureCodexInstalled() ?? resolveCodexCommandResolution()
+  if (codexResolution) {
+    applyCodexCommandResolution(codexResolution)
   }
   if (options.sandboxMode) {
     process.env.CODEXUI_SANDBOX_MODE = options.sandboxMode
@@ -585,10 +587,10 @@ async function startServer(options: {
 }
 
 async function runLogin() {
-  const codexCommand = ensureCodexInstalled() ?? 'codex'
-  process.env.CODEXUI_CODEX_COMMAND = codexCommand
+  const resolution = ensureCodexInstalled() ?? { command: 'codex' }
+  applyCodexCommandResolution(resolution)
   console.log('\nStarting `codex login`...\n')
-  runOrFail(codexCommand, ['login'], 'Codex login')
+  runOrFail(resolution.command, ['login'], 'Codex login')
 }
 
 program
