@@ -5526,7 +5526,10 @@ export function useDesktopState() {
         throw resumeOutcome.failure
       }
       const resumedThread = resumeOutcome?.result ?? null
-      const detail = resumedThread ?? await getThreadDetail(threadId)
+      // Metadata-only resume must not replace the recent preview with empty history.
+      const detail = resumedThread && !resumedThread.historyExcluded
+        ? resumedThread
+        : await getThreadDetail(threadId)
       if (discardedSideConversationThreadIds.has(threadId)) return
 
       if (detail.modelProvider) {

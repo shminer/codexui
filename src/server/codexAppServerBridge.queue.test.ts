@@ -56,6 +56,7 @@ describe('queued turn settings', () => {
     processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
     await processor.processThreadQueue('main')
     const start = rpc.mock.calls.find(([method]) => method === 'turn/start')
+    expect(rpc).toHaveBeenCalledWith('thread/resume', { threadId: 'main', excludeTurns: true })
     expect(start?.[1].collaborationMode.settings.model).toBe('thread-model')
     expect(start?.[1].collaborationMode.settings.reasoning_effort).toBe('high')
     expect(rpc.mock.calls.some(([method]) => method === 'config/read')).toBe(false)

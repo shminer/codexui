@@ -185,6 +185,65 @@ afterEach(() => {
 })
 
 describe('recent thread preview', () => {
+  it('keeps recent and paged messages while metadata-only resume hydrates history', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValueOnce({
+      messages: [{ id: 'recent', role: 'user', text: 'Recent', turnId: 'turn-10', turnIndex: 0 }],
+      hasMoreOlder: true, turnIndexByTurnId: { 'turn-10': 0 },
+    })
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({
+      messages: [{ id: 'older', role: 'user', text: 'Earlier', turnId: 'turn-9', turnIndex: 9 }],
+      hasMoreOlder: false, turnIndexByTurnId: { 'turn-9': 9 },
+    })
+    gatewayMocks.resumeThread.mockResolvedValueOnce({
+      model: '', modelProvider: '', messages: [], historyExcluded: true,
+    })
+    let finishDetail: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise((resolve) => { finishDetail = resolve }))
+    const state = useDesktopState()
+    state.primeSelectedThread('metadata-preview')
+    const loading = state.loadMessages('metadata-preview')
+    await flushMicrotasks()
+    expect(state.messages.value.map((message) => message.id)).toEqual(['recent'])
+    expect(state.hasMoreOlderMessages.value).toBe(true)
+    await state.loadOlderMessages('metadata-preview')
+    finishDetail({
+      model: '', modelProvider: '', inProgress: false, activeTurnId: '', subagents: [],
+      messages: [{ id: 'recent', role: 'user', text: 'Recent', turnId: 'turn-10', turnIndex: 10 }],
+      hasMoreOlder: true, turnIndexByTurnId: { 'turn-10': 10 },
+    })
+    await loading
+    expect(state.messages.value.map((message) => message.id)).toEqual(['older', 'recent'])
+    expect(state.hasMoreOlderMessages.value).toBe(false)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for history hydration before sending without a duplicate resume', async () => {
+    installTestWindow()
+    gatewayMocks.getRecentThreadDetail.mockResolvedValue(null)
+    gatewayMocks.resumeThread.mockResolvedValueOnce({
+      model: 'thread-model', modelProvider: 'codex', messages: [], historyExcluded: true,
+    })
+    let finishDetail: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise((resolve) => { finishDetail = resolve }))
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('new-turn')
+    const state = useDesktopState()
+    state.primeSelectedThread('metadata-send')
+    const loading = state.loadMessages('metadata-send')
+    await flushMicrotasks()
+    const sending = state.sendMessageToSelectedThread('Hello')
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    finishDetail({ model: 'thread-model', modelProvider: 'codex', messages: [],
+      inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [], })
+    await Promise.all([loading, sending])
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.startThreadTurn.mock.calls[0]?.[3]).toBe('thread-model')
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+  })
+
   it('switches immediately while older thread loads settle without replacing the active view', async () => {
     installTestWindow()
     gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
