@@ -17,17 +17,20 @@
 6. Start a long response and repeat the action while the response is generating
 7. Confirm the response continues and the selected message is appended to the composer
 8. Inspect Network traffic for both clicks
+9. Trigger an approval or user-input request that temporarily replaces the composer
+10. Confirm `Edit message` is hidden until the pending request is resolved and the composer returns
 
 #### Expected Results
 - The action under eligible user messages is labeled `Edit message`
 - The action remains available during an active response
+- The action is hidden while a pending request has removed the composer, so it cannot silently discard a click
 - Assistant responses no longer render the old rollback action
 - Clicking `Edit message` appends the original user text without replacing an existing draft
 - Clicking does not interrupt the active turn, truncate messages, refresh history, or undo file changes
 - No `thread/revert`, rollback-file, message-send, or extra thread-read request is made
 
 #### Rollback/Cleanup
-- Clear the composer draft created by the test.
+- Resolve the pending request and clear the composer draft created by the test.
 
 #### Performance Audit
 

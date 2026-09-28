@@ -1381,6 +1381,7 @@ const props = defineProps<{
   activeThreadId: string
   cwd: string
   readonly?: boolean
+  canEditMessage?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -2413,7 +2414,7 @@ function forkResponse(anchorMessageId: string): void {
 }
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return !props.readonly && message.role === 'user' && message.text.trim().length > 0
+  return props.canEditMessage !== false && !props.readonly && message.role === 'user' && message.text.trim().length > 0
 }
 
 function editMessage(message: UiMessage): void {

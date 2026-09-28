@@ -964,6 +964,7 @@
                   <div class="content-thread">
                     <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                       :active-thread-id="composerThreadContextId" :cwd="composerCwd"
+                      :can-edit-message="!selectedThreadPendingRequest"
                       :live-overlay="liveOverlay"
                       :pending-requests="selectedThreadServerRequests"
                       :has-more-persisted-above="hasMoreOlderMessages"
