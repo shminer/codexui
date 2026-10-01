@@ -973,6 +973,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeLocalPathForUrl, getPathLeafName as getBasename, isAbsoluteLikePath, isWindowsLikePath, normalizeFileUrlToPath, normalizePathForUi } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { updateThreadFileChanges } from '../../api/codexGateway'
@@ -1546,7 +1547,7 @@ function isFilePath(value: string): boolean {
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(value)) return false
 
   const looksLikeUnixAbsolute = value.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(value)
+  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith('\\\\')
   const looksLikeRelative = value.startsWith('./') || value.startsWith('../') || value.startsWith('~/')
   if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute || looksLikeRelative) return true
 
@@ -1557,28 +1558,9 @@ function isFilePath(value: string): boolean {
   return /^[A-Za-z0-9._@() -]+(?:[\\/][A-Za-z0-9._@() -]+)+$/u.test(value)
 }
 
-function getBasename(pathValue: string): string {
-  const normalized = pathValue.replace(/\\/gu, '/')
-  const name = normalized.split('/').filter(Boolean).pop()
-  return name || pathValue
-}
-
 function normalizePathSeparators(pathValue: string): string {
-  return pathValue.replace(/\\/gu, '/')
-}
-
-function normalizeFileUrlToPath(pathValue: string): string {
-  if (!pathValue.startsWith('file://')) return pathValue
-  let stripped = pathValue.replace(/^file:\/\//u, '')
-  try {
-    stripped = decodeURIComponent(stripped)
-  } catch {
-    // Keep best-effort path if decoding fails.
-  }
-  if (/^\/[A-Za-z]:\//u.test(stripped)) {
-    stripped = stripped.slice(1)
-  }
-  return stripped
+  const path = normalizePathForUi(pathValue)
+  return /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith('\\\\') ? path.replace(/\\/gu, '/') : path
 }
 
 function inferHomeFromCwd(cwd: string): string {
@@ -1587,19 +1569,25 @@ function inferHomeFromCwd(cwd: string): string {
   if (userMatch) return `/Users/${userMatch[1]}`
   const homeMatch = normalized.match(/^\/home\/([^/]+)/u)
   if (homeMatch) return `/home/${homeMatch[1]}`
+  const windowsMatch = normalized.match(/^[A-Za-z]:\/Users\/[^/]+/iu)
+  if (windowsMatch) return windowsMatch[0]
   return ''
 }
 
-function normalizePathDots(pathValue: string): string {
+function normalizePathDots(pathValue: string, windowsPath = isWindowsLikePath(pathValue)): string {
   const normalized = normalizePathSeparators(pathValue)
   if (!normalized) return normalized
 
   let root = ''
   let rest = normalized
+  const uncMatch = windowsPath ? rest.match(/^\/\/[^/]+\/[^/]+(?:\/|$)/u) : null
   const driveMatch = rest.match(/^([A-Za-z]:)(\/.*)?$/u)
   if (driveMatch) {
     root = `${driveMatch[1]}/`
     rest = (driveMatch[2] ?? '').replace(/^\/+/u, '')
+  } else if (uncMatch) {
+    root = `${uncMatch[0].replace(/\/+$/u, '')}/`
+    rest = rest.slice(uncMatch[0].length)
   } else if (rest.startsWith('/')) {
     root = '/'
     rest = rest.slice(1)
@@ -1617,27 +1605,30 @@ function normalizePathDots(pathValue: string): string {
   }
 
   const joined = stack.join('/')
-  if (root) return `${root}${joined}`.replace(/\/+$/u, '') || root
+  if (root) return joined ? `${root}${joined}` : root
   return joined || normalized
 }
 
 function resolveRelativePath(pathValue: string, cwd: string): string {
-  const normalizedPath = normalizePathSeparators(normalizeFileUrlToPath(pathValue.trim()))
+  const path = normalizeFileUrlToPath(pathValue)
+  const windowsCwd = isWindowsLikePath(cwd)
+  const windowsPath = windowsCwd || isWindowsLikePath(path)
+  const normalizedPath = windowsCwd ? normalizePathSeparators(path).replace(/\\/gu, '/') : normalizePathSeparators(path)
   if (!normalizedPath) return ''
 
   const looksLikeAbsolute = normalizedPath.startsWith('/') || /^[A-Za-z]:\//u.test(normalizedPath)
-  if (looksLikeAbsolute) return normalizePathDots(normalizedPath)
+  if (looksLikeAbsolute) return normalizePathDots(normalizedPath, windowsPath)
 
   if (normalizedPath.startsWith('~/')) {
     const homeBase = inferHomeFromCwd(cwd)
     if (homeBase) {
-      return normalizePathDots(`${homeBase}/${normalizedPath.slice(2)}`)
+      return normalizePathDots(`${homeBase}/${normalizedPath.slice(2)}`, windowsPath)
     }
   }
 
-  const base = normalizePathSeparators(cwd.trim())
-  if (!base) return normalizePathDots(normalizedPath)
-  return normalizePathDots(`${base.replace(/\/+$/u, '')}/${normalizedPath}`)
+  const base = normalizePathSeparators(cwd)
+  if (!base) return normalizePathDots(normalizedPath, windowsPath)
+  return normalizePathDots(`${base.replace(/\/+$/u, '')}/${normalizedPath}`, windowsPath)
 }
 
 function parseFileReference(value: string): { path: string; line: number | null } | null {
@@ -2254,8 +2245,8 @@ function fileChangeSummaryStatusParts(summary: TurnFileChangeSummary | null): Fi
 
 function displayFileChangePath(pathValue: string): string {
   const resolved = resolveRelativePath(pathValue, props.cwd)
-  const normalizedCwd = normalizePathDots(normalizePathSeparators(props.cwd.trim()))
-  const normalizedResolved = normalizePathDots(normalizePathSeparators(resolved))
+  const normalizedCwd = normalizePathDots(props.cwd)
+  const normalizedResolved = normalizePathDots(resolved, isWindowsLikePath(props.cwd) || isWindowsLikePath(pathValue))
   if (normalizedCwd && normalizedResolved.startsWith(`${normalizedCwd}/`)) {
     return normalizedResolved.slice(normalizedCwd.length + 1)
   }
@@ -2871,13 +2862,7 @@ function toRenderableImageUrl(value: string): string {
     return normalized
   }
 
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  const looksLikeUnixAbsolute = normalized.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(normalized)
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute) {
+  if (/^file:/iu.test(normalized) || isAbsoluteLikePath(normalized)) {
     return `/codex-local-image?path=${encodeURIComponent(normalized)}`
   }
 
@@ -2885,19 +2870,11 @@ function toRenderableImageUrl(value: string): string {
 }
 
 function toBrowseUrl(pathValue: string): string {
-  const normalized = pathValue.trim()
-  if (!normalized) return '#'
-  const looksLikeAbsolutePath = (candidate: string): boolean => (
-    candidate.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(candidate)
-  )
+  if (!pathValue) return '#'
+  const resolved = resolveRelativePath(pathValue, props.cwd)
 
-  const parsed = parseFileReference(normalized)
-  const candidatePath = parsed?.path ?? normalized
-  const resolved = resolveRelativePath(candidatePath, props.cwd)
-
-  if (looksLikeAbsolutePath(resolved)) {
-    const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-    return `/codex-local-browse${encodeURI(normalizedResolved)}`
+  if (isAbsoluteLikePath(resolved)) {
+    return `/codex-local-browse${encodeLocalPathForUrl(resolved)}`
   }
 
   return '#'

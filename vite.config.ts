@@ -21,19 +21,6 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-function normalizeLocalImagePath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("file://")) {
-    try {
-      return decodeURIComponent(trimmed.replace(/^file:\/\//u, ""));
-    } catch {
-      return trimmed.replace(/^file:\/\//u, "");
-    }
-  }
-  return trimmed;
-}
-
 function getWorktreeName(): string {
   const normalizedCwd = process.cwd().replace(/\\/g, "/");
   const segments = normalizedCwd.split("/").filter(Boolean);
@@ -183,7 +170,7 @@ export default defineConfig({
           const url = new URL(req.url, "http://localhost");
           if (url.pathname !== "/codex-local-image") return next();
 
-          const localPath = normalizeLocalImagePath(url.searchParams.get("path") ?? "");
+          const localPath = normalizeLocalPath(url.searchParams.get("path") ?? "");
           if (!localPath || !isAbsolute(localPath)) {
             res.statusCode = 400;
             res.setHeader("Content-Type", "application/json");

@@ -7,12 +7,11 @@ function isInsideRoot(candidate: string, root: string): boolean {
 }
 
 export async function resolveAllowedPath(rawPath: string, allowedRoots: string[]): Promise<string | null> {
-  const trimmed = rawPath.trim()
-  if (!trimmed || !isAbsolute(trimmed) || allowedRoots.length === 0) return null
+  if (!rawPath || !isAbsolute(rawPath) || allowedRoots.length === 0) return null
 
   let candidate: string
   try {
-    candidate = await realpath(resolve(trimmed))
+    candidate = await realpath(resolve(rawPath))
   } catch {
     return null
   }

@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [Windows file links, images, skill paths, and Linux regression](../projects-sidebar-new-chat/windows-local-paths.md) |
 | [Each message shows its local date and time](each-message-shows-local-date-and-time.md) |
 | [Side conversation `/btw` mobile sheet and desktop window](side-conversation-btw-mobile-sheet-and-desktop-window.md) |
 | [Codex thread deep links render as local web thread URLs](codex-thread-deep-links-render-as-local-web-thread-urls.md) |

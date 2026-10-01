@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { resolvePythonCommand, resolveSkillInstallerScriptPath } from '../commandResolution.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
+import { normalizeSkillMarkdownPath } from '../pathUtils.js'
 
 type AppServerLike = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -55,13 +56,9 @@ function splitAbsolutePath(pathValue: string): string[] {
   return pathValue.split('/').filter(Boolean)
 }
 
-function buildAbsolutePath(parts: string[]): string {
-  return `/${parts.join('/')}`
-}
-
-function normalizeSkillMarkdownPath(skillPath: string): string {
-  if (!skillPath) return ''
-  return skillPath.endsWith('/SKILL.md') ? skillPath : `${skillPath}/SKILL.md`
+function buildAbsolutePath(parts: string[], referencePath: string): string {
+  const prefix = referencePath.startsWith('//') ? '//' : /^[A-Za-z]:\//u.test(referencePath) ? '' : '/'
+  return `${prefix}${parts.join('/')}`
 }
 
 function deriveSkillPathInfo(
@@ -82,13 +79,13 @@ function deriveSkillPathInfo(
   if (pluginSkillsIndex >= 2) {
     const pluginName = parts[pluginSkillsIndex - 2] ?? ''
     if (pluginName) {
-      const rootSkillPath = buildAbsolutePath([...parts.slice(0, pluginSkillsIndex + 1), pluginName, 'SKILL.md'])
+      const rootSkillPath = buildAbsolutePath([...parts.slice(0, pluginSkillsIndex + 1), pluginName, 'SKILL.md'], normalizedPath)
       if (knownPaths.has(rootSkillPath)) {
         return {
           normalizedPath,
           rootSkillPath,
           rootSkillName: pluginName,
-          installDir: buildAbsolutePath(parts.slice(0, pluginSkillsIndex + 1)),
+          installDir: buildAbsolutePath(parts.slice(0, pluginSkillsIndex + 1), normalizedPath),
           isNestedSkill: normalizedPath !== rootSkillPath,
         }
       }
@@ -103,10 +100,10 @@ function deriveSkillPathInfo(
   const installDirParts = parts.slice(0, firstSkillsIndex + 1)
   return {
     normalizedPath,
-    rootSkillPath: buildAbsolutePath([...rootParts, 'SKILL.md']),
+    rootSkillPath: buildAbsolutePath([...rootParts, 'SKILL.md'], normalizedPath),
     rootSkillName,
-    installDir: buildAbsolutePath(installDirParts),
-    isNestedSkill: normalizedPath !== buildAbsolutePath([...rootParts, 'SKILL.md']),
+    installDir: buildAbsolutePath(installDirParts, normalizedPath),
+    isNestedSkill: normalizedPath !== buildAbsolutePath([...rootParts, 'SKILL.md'], normalizedPath),
   }
 }
 
