@@ -15,6 +15,11 @@ describe('local path URLs', () => {
     ['/', '/'],
     ['/tmp/a#b?c%20.md', '/tmp/a%23b%3Fc%2520.md'],
     ['/tmp/a\\b.md', '/tmp/a%5Cb.md'],
+    ['/tmp/report.txt ', '/tmp/report.txt%20'],
+    ['/tmp/report.txt\t', '/tmp/report.txt%09'],
+    ['file:///tmp/report.txt%20', '/tmp/report.txt%20'],
+    ['\\\\?\\C:\\work\\report.txt ', '/C%3A/work/report.txt%20'],
+    ['//tmp/a\\b.md', '//tmp/a%5Cb.md'],
     ['/tmp/\u6d4b\u8bd5 (1).md', '/tmp/%E6%B5%8B%E8%AF%95%20(1).md'],
   ])('encodes %s without changing its target', (path, expected) => {
     expect(encodeLocalPathForUrl(path)).toBe(expected)
@@ -23,7 +28,7 @@ describe('local path URLs', () => {
   it.each([
     ['file:///C:/work/a%2520b.md', 'C:/work/a%20b.md'],
     ['file://localhost/home/user/a%23b.md', '/home/user/a#b.md'],
-    ['file://server/share/a%20b.md', '//server/share/a b.md'],
+    ['file://server/share/a%20b.md', '\\\\server\\share\\a b.md'],
     ['file:///tmp/a%5Cb.md', '/tmp/a\\b.md'],
     ['file:///tmp/%ZZ', ''],
   ])('decodes file URLs once: %s', (url, expected) => {
@@ -37,7 +42,7 @@ describe('path roots', () => {
     ['C:\\work\\project', 'C:\\work'],
     ['\\\\server\\share\\project', '\\\\server\\share\\'],
     ['\\\\server\\share', '\\\\server\\share'],
-    ['//server/share/project', '//server/share/'],
+    ['//home/alice', '//home'],
     ['/project', '/'], ['/', '/'], ['/home/user/project', '/home/user'],
   ])('keeps the parent of %s within its root', (path, expected) => {
     expect(getPathParent(path)).toBe(expected)
@@ -46,6 +51,8 @@ describe('path roots', () => {
   it('compares Windows UNC paths without changing Linux case sensitivity', () => {
     expect(normalizePathForComparison('\\\\SERVER\\Share')).toBe(normalizePathForComparison('//server/share'))
     expect(normalizePathForComparison('/home/User')).not.toBe(normalizePathForComparison('/home/user'))
+    expect(normalizePathForComparison('//home/User')).not.toBe(normalizePathForComparison('//home/user'))
+    expect(getPathParent('//server/share/project', true)).toBe('//server/share/')
   })
 
   it('preserves literal backslashes in Linux filenames', () => {
@@ -53,6 +60,8 @@ describe('path roots', () => {
     expect(getPathLeafName('/tmp/a\\b.md')).toBe('a\\b.md')
     expect(getPathLeafName('/tmp/a\\')).toBe('a\\')
     expect(getPathLeafName('C:\\tmp\\a.md')).toBe('a.md')
+    expect(getPathLeafName('//tmp/a\\b.md')).toBe('a\\b.md')
+    expect(getPathLeafName('/tmp/report.txt ')).toBe('report.txt ')
   })
 })
 

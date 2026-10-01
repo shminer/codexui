@@ -33,7 +33,7 @@ async function main() {
       ['ActualFile', file, file, `${root}/notes # %20.txt`],
       ['ActualFileUrl', pathToFileURL(file).href, urlFilePath, urlFilePath],
       ['Unc', '\\\\server\\share\\folder\\..\\notes.md', '\\\\server\\share\\folder\\..\\notes.md', '//server/share/notes.md'],
-      ['UncFileUrl', 'file://server/share/notes.md', '//server/share/notes.md', '//server/share/notes.md'],
+      ['UncFileUrl', 'file://server/share/notes.md', '\\\\server\\share\\notes.md', '//server/share/notes.md'],
       ['DevicePath', '\\\\?\\C:\\work\\notes.md', 'C:\\work\\notes.md', 'C:/work/notes.md'],
       ['Reserved', 'C:/work/a#b?c%20.md', 'C:/work/a#b?c%20.md', 'C:/work/a#b?c%20.md'],
       ['Unicode', 'C:/work/\u6d4b\u8bd5 (1).md', 'C:/work/\u6d4b\u8bd5 (1).md', 'C:/work/\u6d4b\u8bd5 (1).md'],
@@ -45,6 +45,14 @@ async function main() {
       ['LinuxSpecial', '/tmp/a#b?c%20.md', '/tmp/a#b?c%20.md', '/tmp/a#b?c%20.md'],
       ['LinuxBackslash', '/tmp/a\\b.md', '/tmp/a\\b.md', '/tmp/a\\b.md'],
       ['LinuxFileUrl', 'file:///tmp/a%20b.md', '/tmp/a b.md', '/tmp/a b.md'],
+      ['LinuxWhitespaceFileUrl', 'file:///tmp/report.txt%20', '/tmp/report.txt ', '/tmp/report.txt '],
+      ['LinuxDoubleSlash', '//home/alice/../notes.md', '//home/alice/../notes.md', '/home/notes.md'],
+      ['LinuxDoubleSlashBackslash', '//tmp/a\\b.md', '//tmp/a\\b.md', '/tmp/a\\b.md'],
+      ['ExplicitUncFileUrl', 'file://server/share/notes.md', '\\\\server\\share\\notes.md', '//server/share/notes.md'],
+    ] },
+    { name: 'linux-double-slash', cwd: '//home/alice', cases: [
+      ['LinuxDoubleSlashParent', '../notes.md', '../notes.md', '/home/notes.md'],
+      ['LinuxDoubleSlashRelative', 'src/a\\b.md', 'src/a\\b.md', '/home/alice/src/a\\b.md'],
     ] },
     { name: 'unc', cwd: '\\\\server\\share\\TestChat', cases: [
       ['UncRelative', 'src\\notes.md', 'src\\notes.md', '//server/share/TestChat/src/notes.md'],

@@ -59,16 +59,15 @@ function languageForPath(pathValue: string): string {
 }
 
 export function normalizeLocalPath(rawPath: string): string {
-  const trimmed = rawPath.trim()
-  if (!trimmed) return ''
-  if (/^file:/iu.test(trimmed)) {
+  if (!rawPath) return ''
+  if (/^file:/iu.test(rawPath)) {
     try {
-      return fileURLToPath(trimmed)
+      return fileURLToPath(rawPath)
     } catch {
       return ''
     }
   }
-  return trimmed
+  return rawPath
 }
 
 export function decodeBrowsePath(rawPath: string): string {

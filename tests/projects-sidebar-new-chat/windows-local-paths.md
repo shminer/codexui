@@ -23,6 +23,8 @@
 - Selecting PathSkill in the composer and opening its chip reads exactly one `SKILL.md`, including when the RPC path uses Windows backslashes. Mock server and frontend skill lists group nested skills without losing drive or UNC roots.
 - Directory navigation stops at the drive/share root. A Windows root listing survives an inaccessible entry's metadata. Linux root navigation, HTML relative assets, and Linux filenames containing question marks or backslashes still work.
 - Safe mode rejects root escapes, symlink/junction escapes, and editing while the editing policy is disabled.
+- Linux whitespace filenames: the HTTP check creates `report.txt` and `report.txt ` with distinct contents. The listing must retain `%20` in the second file's browse/edit links; opening and saving it must leave the plain sibling unchanged. A `folder ` directory must remain navigable, and safe-mode browsing must read the spaced target while editing stays disabled. These real-filesystem cases are skipped on Windows and cleaned up with the test fixture.
+- The Linux TestChat mocks include `file:///tmp/report.txt%20`, `//home/alice/../notes.md`, and cwd `//home/alice` with `../notes.md`. The whitespace URL must retain `%20`; both parent references must resolve to `/home/notes.md`. Literal backslashes under a Linux double-slash cwd must remain filename characters. Windows UNC parent traversal must still stop at its share root; explicit `file://server/share/...` URLs retain UNC semantics even with a Linux cwd.
 - UNC URL conversion is verified without depending on a network share. Opening an actual UNC share requires an available share and permissions and must be reported separately.
 
 ## Cleanup

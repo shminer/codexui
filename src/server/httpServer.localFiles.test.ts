@@ -93,6 +93,39 @@ describe('local filesystem HTTP routes', () => {
     expect(await fetch(assetUrl).then((r) => r.text())).toBe('relative asset')
   })
 
+  it.skipIf(process.platform === 'win32')('keeps whitespace filenames distinct when browsing and saving', async () => {
+    const plain = join(root, 'report.txt')
+    const spaced = `${plain} `
+    const folder = join(root, 'folder ')
+    await writeFile(plain, 'plain sibling')
+    await writeFile(spaced, 'spaced target')
+    await mkdir(folder)
+    await start()
+
+    const browseHref = `${browse(plain)}%20`
+    const editHref = `${edit(plain)}%20`
+    const html = await fetch(base + browse(root)).then((r) => r.text())
+    expect(html).toContain(`href="${browseHref}"`)
+    expect(html).toContain(`href="${editHref}"`)
+    expect(await fetch(base + browseHref).then((r) => r.text())).toBe('spaced target')
+    expect(await fetch(base + editHref).then((r) => r.text())).toContain('spaced target')
+    const saved = await fetch(base + editHref, { method: 'PUT', body: 'saved spaced target' })
+    expect(saved.status).toBe(200)
+    expect(await readFile(spaced, 'utf8')).toBe('saved spaced target')
+    expect(await readFile(plain, 'utf8')).toBe('plain sibling')
+    expect((await fetch(base + browse(folder))).status).toBe(200)
+    expect(await fetch(`${base}/codex-local-file?${new URLSearchParams({ path: spaced })}`).then((r) => r.text())).toBe('saved spaced target')
+
+    dispose?.()
+    await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()))
+    const policy = buildSafeSecurityPolicy({ ...loadSafeRuntimeConfig({}), allowedRoots: [root] })
+    await start(policy)
+    expect(await fetch(base + browseHref).then((r) => r.text())).toBe('saved spaced target')
+    expect((await fetch(base + editHref, { method: 'PUT', body: 'rejected' })).status).toBe(403)
+    expect(await readFile(plain, 'utf8')).toBe('plain sibling')
+    expect(await readFile(spaced, 'utf8')).toBe('saved spaced target')
+  })
+
   it('preserves safe allowed-root checks and disabled editing', async () => {
     const allowed = join(root, 'allowed')
     const outside = join(root, 'outside')

@@ -1,24 +1,22 @@
 function stripWindowsDevicePathPrefix(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed) return ''
-
-  if (trimmed.startsWith('\\\\?\\UNC\\')) {
-    return `\\\\${trimmed.slice('\\\\?\\UNC\\'.length)}`
+  if (value.startsWith('\\\\?\\UNC\\')) {
+    return `\\\\${value.slice('\\\\?\\UNC\\'.length)}`
   }
 
-  if (trimmed.startsWith('\\\\?\\')) {
-    return trimmed.slice('\\\\?\\'.length)
+  if (value.startsWith('\\\\?\\')) {
+    return value.slice('\\\\?\\'.length)
   }
 
-  return trimmed
+  return value
 }
 
 export function normalizePathForUi(value: string): string {
   return stripWindowsDevicePathPrefix(value)
 }
 
-function isWindowsLikePath(value: string): boolean {
-  return /^[a-z]:[\\/]/iu.test(value) || value.startsWith('\\\\') || value.startsWith('//')
+export function isWindowsLikePath(value: string): boolean {
+  const path = normalizePathForUi(value)
+  return /^[a-z]:[\\/]/iu.test(path) || path.startsWith('\\\\')
 }
 
 export function normalizeFileUrlToPath(value: string): string {
@@ -26,7 +24,7 @@ export function normalizeFileUrlToPath(value: string): string {
   try {
     const url = new URL(value)
     const path = decodeURIComponent(url.pathname)
-    if (url.hostname && url.hostname !== 'localhost') return `//${url.hostname}${path}`
+    if (url.hostname && url.hostname !== 'localhost') return `\\\\${url.hostname}${path.replace(/\//gu, '\\')}`
     return path.replace(/^\/([A-Za-z]:\/)/u, '$1')
   } catch {
     return ''
@@ -69,10 +67,10 @@ export function getPathLeafName(value: string): string {
   return normalized.slice(separatorIndex + 1)
 }
 
-export function getPathParent(value: string): string {
+export function getPathParent(value: string, windowsPath = isWindowsLikePath(value)): string {
   const path = normalizePathForUi(value)
-  const windowsSeparators = isWindowsLikePath(path) || !path.startsWith('/')
-  const root = path.match(/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$)|\/)/u)?.[0] ?? ''
+  const windowsSeparators = windowsPath || !path.startsWith('/')
+  const root = path.match(windowsPath ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$)|\/)/u : /^\//u)?.[0] ?? ''
   const normalized = path.replace(windowsSeparators ? /[\\/]+$/u : /\/+$/u, '')
   if (!normalized) return root
 
