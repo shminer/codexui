@@ -500,6 +500,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeLocalPathForUrl, getPathLeafName as getMentionFileName, getPathParent as getMentionDirName, normalizeSkillMarkdownPath as skillMarkdownPath } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   CollaborationModeKind,
@@ -1406,16 +1407,10 @@ function removeSkill(path: string): void {
   selectedSkills.value = selectedSkills.value.filter((s) => s.path !== path)
 }
 
-function skillMarkdownPath(path: string): string {
-  const trimmed = path.trim()
-  if (!trimmed) return ''
-  return trimmed.endsWith('/SKILL.md') ? trimmed : `${trimmed.replace(/\/+$/, '')}/SKILL.md`
-}
-
 function openSkillMarkdown(skill: SkillItem): void {
   const markdownPath = skillMarkdownPath(skill.path)
   if (!markdownPath || typeof window === 'undefined') return
-  window.open(`/codex-local-browse${encodeURI(markdownPath)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(markdownPath)}`, '_blank', 'noopener,noreferrer')
 }
 
 function removeFileAttachment(fsPath: string): void {
@@ -1932,18 +1927,6 @@ function onPromptDropdownToggle(path: string): void {
   const prompt = savedPrompts.value.find((entry) => entry.path === path)
   if (!prompt) return
   appendTextToDraft(prompt.content)
-}
-
-function getMentionFileName(path: string): string {
-  const idx = path.lastIndexOf('/')
-  if (idx < 0) return path
-  return path.slice(idx + 1)
-}
-
-function getMentionDirName(path: string): string {
-  const idx = path.lastIndexOf('/')
-  if (idx <= 0) return ''
-  return path.slice(0, idx)
 }
 
 function getFileExtension(path: string): string {

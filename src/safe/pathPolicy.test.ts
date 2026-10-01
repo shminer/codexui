@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -10,7 +10,7 @@ describe('safe path policy', () => {
     const file = join(root, 'notes.txt')
     await writeFile(file, 'ok')
 
-    await expect(resolveAllowedPath(file, [root])).resolves.toBe(file)
+    await expect(resolveAllowedPath(file, [root])).resolves.toBe(await realpath(file))
   })
 
   it('rejects paths outside every allowed root', async () => {
@@ -28,7 +28,7 @@ describe('safe path policy', () => {
     await mkdir(join(outside, 'nested'))
     const file = join(outside, 'nested', 'secret.txt')
     await writeFile(file, 'secret')
-    await symlink(join(outside, 'nested'), join(root, 'escape'))
+    await symlink(join(outside, 'nested'), join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
 
     await expect(resolveAllowedPath(join(root, 'escape', 'secret.txt'), [root])).resolves.toBeNull()
   })

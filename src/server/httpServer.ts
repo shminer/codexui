@@ -58,25 +58,6 @@ function renderFrontendMissingHtml(message: string, details?: string[]): string 
   ].join('')
 }
 
-function normalizeLocalImagePath(rawPath: string): string {
-  const trimmed = rawPath.trim()
-  if (!trimmed) return ''
-  if (trimmed.startsWith('file://')) {
-    try {
-      return decodeURIComponent(trimmed.replace(/^file:\/\//u, ''))
-    } catch {
-      return trimmed.replace(/^file:\/\//u, '')
-    }
-  }
-  return trimmed
-}
-
-function readWildcardPathParam(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.join('/')
-  return ''
-}
-
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const securityPolicy = options.securityPolicy ?? PERMISSIVE_SECURITY_POLICY
@@ -94,7 +75,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   // 3. Serve local images referenced in markdown (desktop parity for absolute image paths)
   app.get('/codex-local-image', async (req, res) => {
     const rawPath = typeof req.query.path === 'string' ? req.query.path : ''
-    const requestedPath = normalizeLocalImagePath(rawPath)
+    const requestedPath = normalizeLocalPath(rawPath)
     if (!requestedPath || !isAbsolute(requestedPath)) {
       res.status(400).json({ error: 'Expected absolute local file path.' })
       return
@@ -171,9 +152,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   })
 
   // 6. Serve local files by path to preserve relative asset loading for HTML.
-  app.get('/codex-local-browse/*path', async (req, res) => {
-    const rawPath = readWildcardPathParam(req.params.path)
-    const requestedPath = decodeBrowsePath(`/${rawPath}`)
+  app.get(['/codex-local-browse/', '/codex-local-browse/*path'], async (req, res) => {
+    const requestedPath = decodeBrowsePath(req.path.slice('/codex-local-browse'.length) || '/')
     if (!requestedPath || !isAbsolute(requestedPath)) {
       res.status(400).json({ error: 'Expected absolute local file path.' })
       return
@@ -209,8 +189,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       res.status(403).json({ error: 'File editing is disabled by the active security policy.' })
       return
     }
-    const rawPath = readWildcardPathParam(req.params.path)
-    const requestedPath = decodeBrowsePath(`/${rawPath}`)
+    const requestedPath = decodeBrowsePath(req.path.slice('/codex-local-edit'.length))
     if (!requestedPath || !isAbsolute(requestedPath)) {
       res.status(400).json({ error: 'Expected absolute local file path.' })
       return
@@ -238,8 +217,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       res.status(403).json({ error: 'File editing is disabled by the active security policy.' })
       return
     }
-    const rawPath = readWildcardPathParam(req.params.path)
-    const requestedPath = decodeBrowsePath(`/${rawPath}`)
+    const requestedPath = decodeBrowsePath(req.path.slice('/codex-local-edit'.length))
     if (!requestedPath || !isAbsolute(requestedPath)) {
       res.status(400).json({ error: 'Expected absolute local file path.' })
       return

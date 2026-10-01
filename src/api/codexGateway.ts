@@ -59,7 +59,7 @@ import type {
   UiThreadAutomationStatus,
 } from '../types/codex'
 import { isReasoningEffort } from '../types/codex'
-import { normalizePathForUi } from '../pathUtils.js'
+import { normalizePathForUi, normalizeSkillMarkdownPath } from '../pathUtils.js'
 
 type CurrentModelConfig = {
   model: string
@@ -4023,16 +4023,12 @@ export type SkillInfo = {
   enabled: boolean
 }
 
-function normalizeSkillMarkdownPath(skillPath: string): string {
-  if (!skillPath) return ''
-  return skillPath.endsWith('/SKILL.md') ? skillPath : `${skillPath}/SKILL.md`
-}
-
 function deriveGroupedSkillRoot(
   skillPath: string,
   knownPaths: Set<string>,
 ): { rootPath: string; rootName: string; isNested: boolean } | null {
   const normalizedPath = normalizeSkillMarkdownPath(skillPath)
+  const rootPrefix = normalizedPath.startsWith('//') ? '//' : /^[A-Za-z]:\//u.test(normalizedPath) ? '' : '/'
   const parts = normalizedPath.split('/').filter(Boolean)
   if (parts.length < 2) return null
 
@@ -4040,7 +4036,7 @@ function deriveGroupedSkillRoot(
   if (pluginSkillsIndex >= 2) {
     const pluginName = parts[pluginSkillsIndex - 2] ?? ''
     if (pluginName) {
-      const pluginRootPath = `/${[...parts.slice(0, pluginSkillsIndex + 1), pluginName, 'SKILL.md'].join('/')}`
+      const pluginRootPath = `${rootPrefix}${[...parts.slice(0, pluginSkillsIndex + 1), pluginName, 'SKILL.md'].join('/')}`
       if (knownPaths.has(pluginRootPath)) {
         return { rootPath: pluginRootPath, rootName: pluginName, isNested: pluginRootPath !== normalizedPath }
       }
@@ -4051,7 +4047,7 @@ function deriveGroupedSkillRoot(
   if (firstSkillsIndex < 0 || firstSkillsIndex + 1 >= parts.length - 1) return null
   const rootName = parts[firstSkillsIndex + 1] ?? ''
   if (!rootName) return null
-  const rootPath = `/${[...parts.slice(0, firstSkillsIndex + 2), 'SKILL.md'].join('/')}`
+  const rootPath = `${rootPrefix}${[...parts.slice(0, firstSkillsIndex + 2), 'SKILL.md'].join('/')}`
   if (!knownPaths.has(rootPath)) return { rootPath, rootName, isNested: rootPath !== normalizedPath }
   return { rootPath, rootName, isNested: rootPath !== normalizedPath }
 }
