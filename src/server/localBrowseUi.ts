@@ -28,11 +28,20 @@ const TEXT_EDITABLE_EXTENSIONS = new Set([
   '.txt', '.md', '.json', '.js', '.ts', '.tsx', '.jsx', '.css', '.scss',
   '.html', '.htm', '.xml', '.yml', '.yaml', '.log', '.csv', '.env', '.py',
   '.sh', '.toml', '.ini', '.conf', '.sql', '.bat', '.cmd', '.ps1',
+  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.vue', '.rs', '.go',
 ])
 
 function languageForPath(pathValue: string): string {
   const extension = extname(pathValue).toLowerCase()
   switch (extension) {
+    case '.c':
+    case '.cpp':
+    case '.cc':
+    case '.cxx':
+    case '.h':
+    case '.hpp': return 'c_cpp'
+    case '.rs': return 'rust'
+    case '.go': return 'golang'
     case '.js': return 'javascript'
     case '.ts': return 'typescript'
     case '.jsx': return 'javascript'
@@ -134,13 +143,13 @@ function normalizeNewProjectName(value: string): string {
 function toBrowseHref(pathValue: string, newProjectName = ''): string {
   const normalizedName = normalizeNewProjectName(newProjectName)
   const query = normalizedName ? `?newProjectName=${encodeURIComponent(normalizedName)}` : ''
-  return `/codex-local-browse${encodeURI(pathValue)}${query}`
+  return `/codex-local-browse${pathValue.split('/').map(encodeURIComponent).join('/')}${query}`
 }
 
 function toEditHref(pathValue: string, newProjectName = ''): string {
   const normalizedName = normalizeNewProjectName(newProjectName)
   const query = normalizedName ? `?newProjectName=${encodeURIComponent(normalizedName)}` : ''
-  return `/codex-local-edit${encodeURI(pathValue)}${query}`
+  return `/codex-local-edit${pathValue.split('/').map(encodeURIComponent).join('/')}${query}`
 }
 
 function escapeForInlineScriptString(value: string): string {
@@ -250,7 +259,8 @@ export async function createDirectoryListingHtml(localPath: string, options?: { 
       const editAction = item.editable
         ? ` <a class="icon-btn" aria-label="Edit ${escapeHtml(item.name)}" href="${escapeHtml(toEditHref(item.path, newProjectName))}" title="Edit">✏️</a>`
         : ''
-      return `<li class="file-row"><a class="file-link" href="${escapeHtml(toBrowseHref(item.path, newProjectName))}">${escapeHtml(item.name)}${suffix}</a><span class="row-actions">${editAction}</span></li>`
+      const href = item.isDirectory ? toBrowseHref(item.path, newProjectName) : `/codex-local-open?path=${encodeURIComponent(item.path)}`
+      return `<li class="file-row"><a class="file-link" href="${escapeHtml(href)}">${escapeHtml(item.name)}${suffix}</a><span class="row-actions">${editAction}</span></li>`
     })
     .join('\n')
 
@@ -358,7 +368,7 @@ export async function createDirectoryListingHtml(localPath: string, options?: { 
 </html>`
 }
 
-export async function createTextEditorHtml(localPath: string): Promise<string> {
+export async function createTextEditorHtml(localPath: string, options: { readOnly?: boolean } = {}): Promise<string> {
   const content = await readFile(localPath, 'utf8')
   const parentPath = dirname(localPath)
   const language = languageForPath(localPath)
@@ -383,14 +393,23 @@ export async function createTextEditorHtml(localPath: string): Promise<string> {
     .ace_marker-layer .ace_active-line { background: #10213c !important; }
     .ace_marker-layer .ace_selection { background: rgba(140, 194, 255, 0.3) !important; }
     .meta { opacity: 0.9; font-size: 12px; overflow-wrap: anywhere; }
+    button:disabled { opacity: .5; cursor: default; }
+    @media (prefers-color-scheme: light) {
+      body, .toolbar { background: #fff; color: #222; }
+      button, a { background: #f5f5f5; color: #222; border-color: #ccc; }
+      #status { color: #176b48; }
+      .ace_editor, .ace_gutter { background: #fff !important; color: #222 !important; }
+      .ace_marker-layer .ace_active-line { background: #f0f0f0 !important; }
+    }
   </style>
 </head>
 <body>
   <div class="toolbar">
     <div class="row">
       <a href="${escapeHtml(toBrowseHref(parentPath))}">Back</a>
-      <button id="saveBtn" type="button">Save</button>
-      <span id="status"></span>
+      <a href="${escapeHtml(toBrowseHref(localPath))}">Raw</a>
+      <button id="saveBtn" type="button" ${options.readOnly ? 'disabled' : ''}>Save</button>
+      <span id="status">${options.readOnly ? 'Read only' : ''}</span>
     </div>
     <div class="meta">${escapeHtml(localPath)} · ${escapeHtml(language)}</div>
   </div>
@@ -400,7 +419,11 @@ export async function createTextEditorHtml(localPath: string): Promise<string> {
     const saveBtn = document.getElementById('saveBtn');
     const status = document.getElementById('status');
     const editor = ace.edit('editor');
-    editor.setTheme('ace/theme/tomorrow_night');
+    editor.setReadOnly(${options.readOnly === true});
+    const theme = matchMedia('(prefers-color-scheme: dark)');
+    function applyTheme() { editor.setTheme(theme.matches ? 'ace/theme/tomorrow_night' : 'ace/theme/textmate'); }
+    applyTheme();
+    theme.addEventListener('change', applyTheme);
     editor.session.setMode('ace/mode/${escapeHtml(language)}');
     editor.setValue(${safeContentLiteral}, -1);
     editor.setOptions({
@@ -414,13 +437,16 @@ export async function createTextEditorHtml(localPath: string): Promise<string> {
     editor.resize();
 
     saveBtn.addEventListener('click', async () => {
+      if (editor.getReadOnly()) return;
       status.textContent = 'Saving...';
-      const response = await fetch(location.pathname, {
+      try {
+      const response = await fetch(${escapeForInlineScriptString(toEditHref(localPath))}, {
         method: 'PUT',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: editor.getValue(),
       });
       status.textContent = response.ok ? 'Saved' : 'Save failed';
+      } catch { status.textContent = 'Save failed'; }
     });
   </script>
 </body>

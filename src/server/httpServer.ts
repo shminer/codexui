@@ -170,6 +170,35 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     }
   })
 
+  app.get('/codex-local-open', async (req, res) => {
+    const requestedPath = normalizeLocalPath(typeof req.query.path === 'string' ? req.query.path : '')
+    if (!requestedPath || !isAbsolute(requestedPath)) {
+      res.status(400).json({ error: 'Expected absolute local file path.' })
+      return
+    }
+    const localPath = await securityPolicy.resolveLocalPath(requestedPath)
+    if (!localPath) {
+      res.status(403).json({ error: 'Path is outside configured roots.' })
+      return
+    }
+    try {
+      const info = await stat(localPath)
+      const preview = new Set(['.html', '.htm', '.svg', '.pdf', ...Object.keys(IMAGE_CONTENT_TYPES)])
+      if (info.isFile() && !preview.has(extname(localPath).toLowerCase()) && await isTextEditableFile(localPath)) {
+        if (info.size > 10 * 1024 * 1024) {
+          res.status(413).json({ error: 'File exceeds the 10 MB editor limit.' })
+          return
+        }
+        res.setHeader('Cache-Control', 'private, no-store')
+        res.type('html').send(await createTextEditorHtml(localPath, { readOnly: !securityPolicy.fileEditingEnabled }))
+        return
+      }
+      res.redirect(`/codex-local-browse${localPath.split('/').map(encodeURIComponent).join('/')}`)
+    } catch {
+      res.status(404).json({ error: 'File not found.' })
+    }
+  })
+
   // 6. Serve local files by path to preserve relative asset loading for HTML.
   app.get('/codex-local-browse/*path', async (req, res) => {
     const rawPath = readWildcardPathParam(req.params.path)
@@ -205,10 +234,6 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
   // 7. Edit text-like local files.
   app.get('/codex-local-edit/*path', async (req, res) => {
-    if (!securityPolicy.fileEditingEnabled) {
-      res.status(403).json({ error: 'File editing is disabled by the active security policy.' })
-      return
-    }
     const rawPath = readWildcardPathParam(req.params.path)
     const requestedPath = decodeBrowsePath(`/${rawPath}`)
     if (!requestedPath || !isAbsolute(requestedPath)) {
@@ -226,7 +251,15 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         res.status(400).json({ error: 'Expected file path.' })
         return
       }
-      const html = await createTextEditorHtml(localPath)
+      if (fileStat.size > 10 * 1024 * 1024) {
+        res.status(413).json({ error: 'File exceeds the 10 MB editor limit.' })
+        return
+      }
+      if (!(await isTextEditableFile(localPath))) {
+        res.status(415).json({ error: 'Only text-like files are editable.' })
+        return
+      }
+      const html = await createTextEditorHtml(localPath, { readOnly: !securityPolicy.fileEditingEnabled })
       res.status(200).type('text/html; charset=utf-8').send(html)
     } catch {
       res.status(404).json({ error: 'File not found.' })

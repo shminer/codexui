@@ -2896,8 +2896,7 @@ function toBrowseUrl(pathValue: string): string {
   const resolved = resolveRelativePath(candidatePath, props.cwd)
 
   if (looksLikeAbsolutePath(resolved)) {
-    const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-    return `/codex-local-browse${encodeURI(normalizedResolved)}`
+    return `/codex-local-open?path=${encodeURIComponent(resolved)}`
   }
 
   return '#'
@@ -2913,6 +2912,10 @@ function toEditUrlFromBrowseHref(href: string): string {
   if (!normalizedHref) return ''
   try {
     const resolved = new URL(normalizedHref, window.location.href)
+    if (resolved.pathname === '/codex-local-open') {
+      const path = resolved.searchParams.get('path')
+      return path ? `/codex-local-edit${(path.startsWith('/') ? path : `/${path}`).split('/').map(encodeURIComponent).join('/')}` : ''
+    }
     if (!resolved.pathname.startsWith('/codex-local-browse')) return ''
     const editPath = `/codex-local-edit${resolved.pathname.slice('/codex-local-browse'.length)}`
     return `${editPath}${resolved.search}${resolved.hash}`
