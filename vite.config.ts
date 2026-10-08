@@ -6,7 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { spawnSync } from "node:child_process";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { stat, writeFile } from "node:fs/promises";
-import { basename, extname, isAbsolute } from "node:path";
+import { extname, isAbsolute } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import pkg from "./package.json";
 
@@ -226,7 +226,7 @@ export default defineConfig({
 
           res.statusCode = 200;
           res.setHeader("Cache-Control", "private, no-store");
-          res.setHeader("Content-Disposition", `inline; filename="${basename(localPath)}"`);
+          res.setHeader("Content-Disposition", "inline");
 
           const stream = createReadStream(localPath);
           stream.on("error", () => {

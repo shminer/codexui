@@ -9,6 +9,7 @@ it('decodes raw development URLs once and wires the file dispatcher in Vite', as
   const vite = await readFile(new URL('../../vite.config.ts', import.meta.url), 'utf8')
   expect(vite).toContain('const openingFile = url.pathname === "/codex-local-open"')
   expect(vite).toContain('normalizeLocalPath(url.searchParams.get("path") ?? "")')
+  expect(vite).toContain('res.setHeader("Content-Disposition", "inline")')
 })
 
 it('opens source files through the dispatcher and renders a read-only C++ editor safely', async () => {
