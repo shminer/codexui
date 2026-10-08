@@ -910,7 +910,6 @@ const props = defineProps<{
   selectedThreadId: string
   isLoading: boolean
   searchQuery: string
-  searchMatchedThreadIds: string[] | null
 }>()
 
 const { t } = useUiLanguage()
@@ -1241,19 +1240,12 @@ watch([isPinnedSectionExpanded, isProjectsSectionExpanded, isChatsSectionExpande
 const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
-const matchedThreadIdSet = computed(() => {
-  if (!props.searchMatchedThreadIds) return null
-  return new Set(props.searchMatchedThreadIds)
-})
 const pinnedThreadIdSet = computed(() => new Set(pinnedThreadIds.value))
 const optimisticallyArchivedThreadIdSet = computed(() => new Set(optimisticallyArchivedThreadIds.value))
 
 function threadMatchesSearch(thread: UiThread): boolean {
   if (optimisticallyArchivedThreadIdSet.value.has(thread.id)) return false
   if (!isSearchActive.value) return true
-  if (matchedThreadIdSet.value) {
-    return matchedThreadIdSet.value.has(thread.id)
-  }
   const q = normalizedSearchQuery.value
   return thread.title.toLowerCase().includes(q) || thread.preview.toLowerCase().includes(q)
 }

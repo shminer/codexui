@@ -87,14 +87,16 @@
             <button type="button" :aria-pressed="!showArchivedThreads" @click="showArchivedThreads = false">{{ t('Active') }}</button>
             <button type="button" :aria-pressed="showArchivedThreads" @click="showArchivedThreads = true">{{ t('Archived') }}</button>
           </div>
-          <ThreadLibrary v-if="!isSidebarCollapsed && showArchivedThreads" @select="onSelectThread" @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
+          <ThreadLibrary v-if="!isSidebarCollapsed && (showArchivedThreads || sidebarSearchQuery.trim())"
+            :key="showArchivedThreads ? 'archived' : 'active'" :archived="showArchivedThreads" :query="sidebarSearchQuery"
+            :active-threads="projectGroups.flatMap((group) => group.threads)" :load-active-metadata="ensureThreadSearchMetadata"
+            @select="registerThreadSummary($event); onSelectThread($event.id)" @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
-            v-if="!isSidebarCollapsed && !showArchivedThreads"
+            v-if="!isSidebarCollapsed && !showArchivedThreads && !sidebarSearchQuery.trim()"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
-            :search-matched-thread-ids="serverMatchedThreadIds"
             @select="onSelectThread"
             @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-thread-files="onBrowseThreadFiles"
@@ -1284,7 +1286,6 @@ import {
   refreshAccountsFromAuth,
   resetGitBranchToCommit,
   startCodexLogin,
-  searchThreads,
   switchAccount,
 } from './api/codexGateway'
 import type { ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
@@ -1409,6 +1410,8 @@ const {
   messages,
   hasMoreOlderMessages,
   isLoadingThreads,
+  ensureThreadSearchMetadata,
+  registerThreadSummary,
   isLoadingMessages,
   isLoadingOlderMessages,
   isSendingMessage,
@@ -1552,8 +1555,6 @@ const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const settingsAreaRef = ref<HTMLElement | null>(null)
 const settingsPanelRef = ref<HTMLElement | null>(null)
 const settingsButtonRef = ref<HTMLElement | null>(null)
-const serverMatchedThreadIds = ref<string[] | null>(null)
-let threadSearchTimer: ReturnType<typeof setTimeout> | null = null
 let terminalKeyboardFocusFallbackTimer: ReturnType<typeof setTimeout> | null = null
 let sidebarScrollTop = 0
 let sidebarScrollRestoreRequestId = 0
@@ -2167,10 +2168,6 @@ onUnmounted(() => {
     window.clearInterval(accountStatePollTimer)
     accountStatePollTimer = null
   }
-  if (threadSearchTimer) {
-    clearTimeout(threadSearchTimer)
-    threadSearchTimer = null
-  }
   clearTerminalKeyboardFocusFallbackTimer()
   stopPolling()
 })
@@ -2181,30 +2178,6 @@ function updateVisualViewportState(): void {
   visualViewportHeight.value = window.visualViewport?.height ?? window.innerHeight
   visualViewportOffsetTop.value = window.visualViewport?.offsetTop ?? 0
 }
-
-watch(sidebarSearchQuery, (value) => {
-  const query = value.trim()
-  if (threadSearchTimer) {
-    clearTimeout(threadSearchTimer)
-    threadSearchTimer = null
-  }
-  if (!query) {
-    serverMatchedThreadIds.value = null
-    return
-  }
-
-  threadSearchTimer = setTimeout(() => {
-    void searchThreads(query, 1000)
-      .then((result) => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = result.threadIds
-      })
-      .catch(() => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = null
-      })
-  }, 220)
-})
 
 watch(isVirtualKeyboardOpen, (open) => {
   if (open) return

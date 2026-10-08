@@ -1767,6 +1767,7 @@ export function useDesktopState() {
   let threadListNextCursor: string | null = null
   let threadListBackgroundTimer: number | null = null
   let isLoadingRemainingThreadPages = false
+  let remainingThreadPagePromise: Promise<void> | null = null
   let hasLoadedAllThreadPages = false
   let loadedThreadListGroups: UiProjectGroup[] = []
   let loadedThreadListRootsState: WorkspaceRootsState | null = null
@@ -5341,10 +5342,11 @@ export function useDesktopState() {
     }, BACKGROUND_THREAD_PAGINATION_DELAY_MS)
   }
 
-  async function loadRemainingThreadPages(rootsState: WorkspaceRootsState | null): Promise<void> {
-    if (isLoadingRemainingThreadPages || !threadListNextCursor || hasActiveInProgressThreads()) return
+  async function loadRemainingThreadPages(rootsState: WorkspaceRootsState | null, force = false): Promise<void> {
+    if (remainingThreadPagePromise) return remainingThreadPagePromise
+    if (!threadListNextCursor || (!force && hasActiveInProgressThreads())) return
     isLoadingRemainingThreadPages = true
-
+    remainingThreadPagePromise = (async () => {
     try {
       const page = await getThreadGroupsPage(threadListNextCursor, getBackgroundThreadListLimit())
       threadListNextCursor = page.nextCursor
@@ -5356,10 +5358,27 @@ export function useDesktopState() {
       // Keep the first page usable; a later refresh can retry remaining pages.
     } finally {
       isLoadingRemainingThreadPages = false
+      remainingThreadPagePromise = null
       if (threadListNextCursor && !hasActiveInProgressThreads()) {
         scheduleRemainingThreadPages(rootsState)
       }
     }
+    })()
+    return remainingThreadPagePromise
+  }
+
+  async function ensureThreadSearchMetadata(): Promise<void> {
+    await loadThreads()
+    while (threadListNextCursor) {
+      const previousCursor = threadListNextCursor
+      await loadRemainingThreadPages(loadedThreadListRootsState, true)
+      if (threadListNextCursor === previousCursor) throw new Error('Failed to load remaining thread titles')
+    }
+  }
+
+  function registerThreadSummary(thread: UiThread): void {
+    loadedThreadListGroups = mergeThreadGroupPages(loadedThreadListGroups, [{ projectName: thread.projectName, threads: [thread] }])
+    applyThreadGroups(loadedThreadListGroups, loadedThreadListRootsState)
   }
 
   async function loadThreads(options: { force?: boolean } = {}) {
@@ -7355,6 +7374,8 @@ export function useDesktopState() {
     hasMoreOlderMessages,
     isLoadingThreads,
     isThreadListFullyLoaded,
+    ensureThreadSearchMetadata,
+    registerThreadSummary,
     isLoadingMessages,
     isLoadingOlderMessages,
     isSendingMessage,

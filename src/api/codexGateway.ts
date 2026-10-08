@@ -391,8 +391,16 @@ export type GitRepositoryStatus = {
 
 
 export type ThreadSearchResult = {
-  threadIds: string[]
-  indexedThreadCount: number
+  threads: UiThread[]
+  nextCursor: string | null
+}
+
+export type ThreadSearchOccurrence = {
+  itemId: string
+  turnId: string
+  turnCursor: string
+  snippet: string
+  snippetMatchRange: { start: number; end: number }
 }
 
 export type TelegramStatus = {
@@ -3730,18 +3738,27 @@ export async function searchComposerFiles(cwd: string, query: string, limit = 20
 
 export async function searchThreads(
   query: string,
-  limit = 200,
+  limit = 50,
+  cursor: string | null = null,
+  archived = false,
 ): Promise<ThreadSearchResult> {
-  const response = await fetch('/codex-api/thread-search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, limit }),
+  const payload = await callRpc<{ data: Array<{ thread: ThreadReadResponse['thread'] }>; nextCursor?: string | null }>('thread/search', {
+    searchTerm: query, limit, cursor, archived, sortKey: 'updated_at',
   })
-  const payload = (await response.json()) as { data?: ThreadSearchResult; error?: string }
-  if (!response.ok) {
-    throw new Error(payload.error || 'Failed to search threads')
-  }
-  return payload.data ?? { threadIds: [], indexedThreadCount: 0 }
+  if (!Array.isArray(payload?.data)) throw new Error('Invalid native thread search response')
+  return { threads: payload.data.map((row) => normalizeThreadSummaryV2({ thread: row.thread })), nextCursor: payload.nextCursor ?? null }
+}
+
+export async function searchThreadOccurrences(threadId: string, searchTerm: string, cursor: string | null = null): Promise<{ data: ThreadSearchOccurrence[]; nextCursor: string | null }> {
+  const page = await callRpc<{ data: ThreadSearchOccurrence[]; nextCursor?: string | null }>('thread/searchOccurrences', { threadId, searchTerm, cursor, limit: 50 })
+  if (!Array.isArray(page?.data)) throw new Error('Invalid native occurrence response')
+  return { data: page.data, nextCursor: page.nextCursor ?? null }
+}
+
+export async function getSearchTurnMessages(threadId: string, cursor: string): Promise<UiMessage[]> {
+  const page = await callRpc<{ data: Turn[] }>('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'asc', itemsView: 'full' })
+  if (!Array.isArray(page?.data)) throw new Error('Invalid native turn response')
+  return normalizeThreadMessagesV2({ thread: { turns: page.data } } as ThreadReadResponse).map((message) => ({ ...message, turnIndex: undefined }))
 }
 
 export async function configureTelegramBot(

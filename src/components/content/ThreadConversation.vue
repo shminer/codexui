@@ -1,16 +1,17 @@
 <template>
   <section class="conversation-root" @contextmenu.capture="onConversationContextMenu">
+    <ThreadSearchPanel v-if="activeThreadId && !readonly" :thread-id="activeThreadId" :messages="messages" @locate="onSearchLocate" @clear="clearSearchTarget" />
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
-      v-else-if="messages.length === 0 && pendingRequests.length === 0 && !liveOverlay"
+      v-else-if="renderableMessages.length === 0 && pendingRequests.length === 0 && !liveOverlay"
       class="conversation-empty"
     >
       No messages in this thread yet.
     </p>
 
     <ul v-else ref="conversationListRef" class="conversation-list" @scroll="onConversationScroll">
-      <li v-if="hasMoreAbove" class="conversation-load-more">
+      <li v-if="hasMoreAbove && !searchTargetId" class="conversation-load-more">
         <button
           type="button"
           class="load-more-button"
@@ -38,6 +39,8 @@
       <li
         v-else-if="message"
         class="conversation-item"
+        :class="{ 'is-search-target': message.id === searchTargetId }"
+        :data-message-id="message.id"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
@@ -990,6 +993,7 @@ import type { ListItem, MessageBlock, TableAlignment, TaskListItem } from './mes
 
 import CopyableOutputBlock from './CopyableOutputBlock.vue'
 import MessageBlockRenderer from './MessageBlockRenderer.vue'
+import ThreadSearchPanel from './ThreadSearchPanel.vue'
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
@@ -1395,6 +1399,9 @@ const emit = defineEmits<{
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
+const searchTargetId = ref('')
+const searchTurnMessages = ref<UiMessage[]>([])
+const searchWindowEnd = ref<number | undefined>(undefined)
 const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const messageCopy = createMessageCopyController({
@@ -2055,7 +2062,7 @@ const hiddenFileChangeMessageIds = computed(() => {
 })
 
 const renderableMessages = computed(() => filterRenderableThreadMessages(
-  props.messages,
+  [...searchTurnMessages.value.filter((message) => !props.messages.some((existing) => existing.id === message.id)), ...props.messages],
   hiddenGroupedCommandIds.value,
   hiddenFileChangeMessageIds.value,
 ))
@@ -2063,7 +2070,7 @@ const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderWindowStart.value,
   renderableMessages.value.length,
 ))
-const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value))
+const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value, searchWindowEnd.value))
 const visibleTimeline = computed<Array<UiMessage | null>>(() => {
   const rows: Array<UiMessage | null> = [...visibleMessages.value]
   if (!props.liveOverlay) return rows
@@ -4272,10 +4279,37 @@ function onPendingImageSettled(): void {
 }
 
 function jumpToLatest(): void {
+  searchWindowEnd.value = undefined
+  searchTargetId.value = ''
   autoFollowOutput.value = true
   renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
   enforceBottomState()
   scheduleBottomLock(4)
+}
+
+function clearSearchTarget(): void {
+  const wasSearching = Boolean(searchTargetId.value)
+  searchTargetId.value = ''
+  searchTurnMessages.value = []
+  searchWindowEnd.value = undefined
+  if (wasSearching) jumpToLatest()
+}
+
+async function locateMessage(itemId: string): Promise<void> {
+  const index = renderableMessages.value.findIndex((message) => message.id === itemId)
+  if (index < 0) return
+  autoFollowOutput.value = false
+  searchTargetId.value = itemId
+  renderWindowStart.value = Math.max(0, index - 5)
+  searchWindowEnd.value = renderWindowStart.value + 50
+  await nextTick()
+  conversationListRef.value?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(itemId)}"]`)?.scrollIntoView({ block: 'center' })
+}
+
+async function onSearchLocate(value: { threadId: string; itemId: string; messages: UiMessage[] }): Promise<void> {
+  if (value.threadId !== props.activeThreadId) return
+  searchTurnMessages.value = value.messages
+  await locateMessage(value.itemId)
 }
 
 async function loadMoreAbove(): Promise<void> {
@@ -4312,6 +4346,7 @@ async function loadMoreAbove(): Promise<void> {
 
 defineExpose({
   jumpToLatest,
+  locateMessage,
 })
 
 function bindPendingImageHandlers(): void {
@@ -4445,6 +4480,7 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    clearSearchTarget()
     messageCopy.reset()
     autoFollowOutput.value = true
     modalImageUrl.value = ''
@@ -4462,6 +4498,7 @@ watch(
 function onConversationScroll(): void {
   const container = conversationListRef.value
   if (!container || props.isLoading) return
+  if (searchTargetId.value) return
   autoFollowOutput.value = isAtBottom(container)
   if (hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
     void loadMoreAbove()
