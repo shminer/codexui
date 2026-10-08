@@ -137,6 +137,7 @@ function parseUserMessageContent(
   const textChunks: string[] = []
   const images: string[] = []
   const skills: Array<{ name: string; path: string }> = []
+  const skillPaths = new Set<string>()
   const rawBlocks: UiMessage[] = []
 
   for (const [index, block] of content.entries()) {
@@ -153,7 +154,11 @@ function parseUserMessageContent(
       const name = typeof block.name === 'string' ? block.name.trim() : ''
       const path = typeof block.path === 'string' ? block.path.trim() : ''
       if (name && path) {
-        skills.push({ name, path })
+        const key = normalizePathForComparison(path)
+        if (!skillPaths.has(key)) {
+          skillPaths.add(key)
+          skills.push({ name, path })
+        }
       }
     }
 

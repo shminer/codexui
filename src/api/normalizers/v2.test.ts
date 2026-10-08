@@ -88,6 +88,25 @@ describe('normalizeThreadMessagesV2', () => {
     expect(messages[0].isUnhandled).toBeUndefined()
   })
 
+  it('deduplicates skills by path per message while preserving the first name and order', () => {
+    const content = [
+      { type: 'skill' as const, name: 'first', path: '/skills/a/SKILL.md' },
+      { type: 'skill' as const, name: 'first', path: '/skills/b/SKILL.md' },
+      { type: 'skill' as const, name: 'alias', path: '/skills/a/SKILL.md' },
+      { type: 'skill' as const, name: 'windows', path: 'C:\\skills\\a\\SKILL.md' },
+      { type: 'skill' as const, name: 'windows alias', path: 'c:/skills/a/skill.md' },
+    ]
+    const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([
+      { type: 'userMessage', id: 'first', content },
+      { type: 'userMessage', id: 'second', content },
+    ]))
+    expect(messages).toHaveLength(2)
+    for (const message of messages) {
+      expect(message.skills).toEqual([content[0], content[1], content[3]].map(({ name, path }) => ({ name, path })))
+      expect(message.isUnhandled).toBeUndefined()
+    }
+  })
+
   it('decodes escaped heartbeat instructions without exposing raw XML', () => {
     const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
       type: 'userMessage',
