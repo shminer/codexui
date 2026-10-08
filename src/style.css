@@ -1,6 +1,27 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github-dark.css";
 
+.thread-feature-modes { display: flex; gap: 4px; padding: 8px; }
+.thread-feature-modes button { flex: 1; padding: 5px 8px; border-radius: 4px; color: #666; font-size: 12px; }
+.thread-feature-modes button[aria-pressed='true'] { background: #e4e4e7; color: #18181b; }
+.thread-library { padding: 8px; min-width: 0; }
+.thread-library-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #e4e4e7; }
+.thread-library-link { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 9px 4px; text-align: left; font-size: 13px; }
+.thread-library-link span { overflow-wrap: anywhere; }
+.thread-library-link time, .thread-feature-status { font-size: 12px; color: #71717a; }
+.thread-feature-icon { width: 30px; height: 30px; flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; }
+.thread-feature-icon svg { width: 18px; height: 18px; }
+.thread-feature-icon:hover, .thread-library-link:hover { background: #f4f4f5; }
+.thread-feature-icon:disabled { opacity: .4; }
+.thread-feature-action { padding: 6px 10px; font-size: 12px; text-decoration: underline; }
+.thread-feature-error { color: #be123c; font-size: 12px; overflow-wrap: anywhere; }
+:root.dark .thread-feature-modes button { color: #a1a1aa; }
+:root.dark .thread-feature-modes button[aria-pressed='true'] { background: #3f3f46; color: #fafafa; }
+:root.dark .thread-library-row { border-color: #3f3f46; }
+:root.dark .thread-feature-icon:hover, :root.dark .thread-library-link:hover { background: #27272a; }
+:root.dark .thread-feature-status, :root.dark .thread-library-link time { color: #a1a1aa; }
+:root.dark .thread-feature-error { color: #fda4af; }
+
 :root.dark {
   color-scheme: dark;
 }

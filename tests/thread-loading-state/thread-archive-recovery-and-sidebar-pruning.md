@@ -11,13 +11,15 @@ Deleting a thread recovers from Codex `no rollout found` archive failures and re
 
 #### Steps
 1. In light theme, create a new empty thread from the sidebar.
-2. Open that thread's menu and choose `Delete thread`.
+2. Open that thread's menu and choose `Archive thread`.
 3. Confirm the thread disappears from the sidebar without a `no rollout found` error.
 4. Rename another visible thread, then delete it.
 5. Confirm the renamed thread disappears immediately and does not reappear after sidebar refresh/background pagination.
 6. Call `thread/list` with `archived:false` through `/codex-api/rpc` and confirm the deleted thread ids are absent.
 7. Call `thread/list` with `archived:true` and confirm the deleted thread ids are present.
 8. Switch to dark theme and repeat steps 1-5.
+9. Select `Archived` in the sidebar. Load additional pages if needed and locate the archived thread.
+10. Restore it, confirm it disappears from this list without changing the open thread, then select `Active` and refresh.
 
 #### Expected Results
 - Empty or not-yet-materialized threads are archived after CodexUI sets a fallback name and retries.
@@ -25,6 +27,8 @@ Deleting a thread recovers from Codex `no rollout found` archive failures and re
 - The sidebar prunes archived ids from its accumulated paginated list before refreshing.
 - Older unarchived threads may appear as the list refills, but archived threads do not remain visible.
 - Behavior is consistent in light and dark themes.
+- Archived threads have a paginated flat list; restoring persists after refresh and makes the thread visible in its original active project.
+- Failed listing/restoration shows an error and allows retry; duplicate restore clicks do not issue duplicate requests.
 
 #### Rollback/Cleanup
-- None.
+- Restore disposable archived threads or archive restored test threads as appropriate.

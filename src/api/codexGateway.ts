@@ -887,9 +887,9 @@ function readThreadSubagents(payload: ThreadReadResponse): UiSubagent[] {
   return [...subagents.values()]
 }
 
-async function getThreadGroupsPageV2(cursor: string | null, limit: number): Promise<ThreadGroupsPage> {
+async function getThreadGroupsPageV2(cursor: string | null, limit: number, archived = false): Promise<ThreadGroupsPage> {
   const payload = await callRpc<ThreadListResponse>('thread/list', {
-    archived: false,
+    archived,
     limit,
     sortKey: 'updated_at',
     modelProviders: [],
@@ -1011,9 +1011,10 @@ export async function getThreadGroups(): Promise<UiProjectGroup[]> {
 export async function getThreadGroupsPage(
   cursor: string | null = null,
   limit = INITIAL_THREAD_LIST_LIMIT,
+  archived = false,
 ): Promise<ThreadGroupsPage> {
   try {
-    return await getThreadGroupsPageV2(cursor, limit)
+    return await getThreadGroupsPageV2(cursor, limit, archived)
   } catch (error) {
     throw normalizeCodexApiError(error, 'Failed to load thread groups', 'thread/list')
   }
@@ -1741,6 +1742,10 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
 
 export async function archiveThread(threadId: string): Promise<void> {
   await callRpc('thread/archive', { threadId })
+}
+
+export async function unarchiveThread(threadId: string): Promise<void> {
+  await callRpc('thread/unarchive', { threadId })
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {

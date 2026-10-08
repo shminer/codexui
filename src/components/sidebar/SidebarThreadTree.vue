@@ -38,7 +38,7 @@
                   class="thread-delete-button"
                   type="button"
                   :data-confirming="isInlineDeleteConfirming(thread.id)"
-                  :title="isInlineDeleteConfirming(thread.id) ? 'Confirm delete' : t('Delete thread')"
+                  :title="isInlineDeleteConfirming(thread.id) ? 'Confirm archive' : t('Archive thread')"
                   @click.stop="onInlineDeleteClick(thread.id)"
                 >
                   <span v-if="isInlineDeleteConfirming(thread.id)" class="thread-delete-confirm-label">Confirm</span>
@@ -205,7 +205,7 @@
                 class="thread-delete-button"
                 type="button"
                 :data-confirming="isInlineDeleteConfirming(thread.id)"
-                :title="isInlineDeleteConfirming(thread.id) ? 'Confirm delete' : t('Delete thread')"
+                :title="isInlineDeleteConfirming(thread.id) ? 'Confirm archive' : t('Archive thread')"
                 @click.stop="onInlineDeleteClick(thread.id)"
               >
                 <span v-if="isInlineDeleteConfirming(thread.id)" class="thread-delete-confirm-label">Confirm</span>
@@ -409,7 +409,7 @@
                       class="thread-delete-button"
                       type="button"
                       :data-confirming="isInlineDeleteConfirming(thread.id)"
-                      :title="isInlineDeleteConfirming(thread.id) ? 'Confirm delete' : t('Delete thread')"
+                      :title="isInlineDeleteConfirming(thread.id) ? 'Confirm archive' : t('Archive thread')"
                       @click.stop="onInlineDeleteClick(thread.id)"
                     >
                       <span v-if="isInlineDeleteConfirming(thread.id)" class="thread-delete-confirm-label">Confirm</span>
@@ -537,7 +537,7 @@
                   class="thread-delete-button"
                   type="button"
                   :data-confirming="isInlineDeleteConfirming(thread.id)"
-                  :title="isInlineDeleteConfirming(thread.id) ? 'Confirm delete' : t('Delete thread')"
+                  :title="isInlineDeleteConfirming(thread.id) ? 'Confirm archive' : t('Archive thread')"
                   @click.stop="onInlineDeleteClick(thread.id)"
                 >
                   <span v-if="isInlineDeleteConfirming(thread.id)" class="thread-delete-confirm-label">Confirm</span>
@@ -639,7 +639,7 @@
           {{ t('Rename thread') }}
         </button>
         <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
-          {{ t('Delete thread') }}
+          {{ t('Archive thread') }}
         </button>
       </div>
     </Teleport>
@@ -668,8 +668,8 @@
 
     <Teleport to="body">
       <div v-if="deleteThreadDialogVisible" class="rename-thread-overlay" @click.self="closeDeleteThreadDialog">
-        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Delete thread">
-          <h3 class="rename-thread-title">{{ deleteThreadHasAutomation ? 'Archive chat and remove automations?' : 'Delete thread?' }}</h3>
+        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Archive thread">
+          <h3 class="rename-thread-title">{{ deleteThreadHasAutomation ? 'Archive chat and remove automations?' : 'Archive thread?' }}</h3>
           <p class="rename-thread-subtitle">
             <template v-if="deleteThreadHasAutomation">
               This will archive the thread "{{ deleteThreadTitle }}" and remove the attached heartbeat automations.
@@ -681,7 +681,7 @@
           <div class="rename-thread-actions">
             <button class="rename-thread-button" type="button" @click="closeDeleteThreadDialog">Cancel</button>
             <button class="rename-thread-button rename-thread-button-danger" type="button" @click="submitDeleteThread">
-              {{ deleteThreadHasAutomation ? 'Archive and remove' : 'Delete' }}
+              {{ deleteThreadHasAutomation ? 'Archive and remove' : 'Archive' }}
             </button>
           </div>
         </div>

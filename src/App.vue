@@ -83,10 +83,15 @@
             </span>
           </button>
 
+          <div v-if="!isSidebarCollapsed" class="thread-feature-modes" role="group" aria-label="Thread list">
+            <button type="button" :aria-pressed="!showArchivedThreads" @click="showArchivedThreads = false">{{ t('Active') }}</button>
+            <button type="button" :aria-pressed="showArchivedThreads" @click="showArchivedThreads = true">{{ t('Archived') }}</button>
+          </div>
+          <ThreadLibrary v-if="!isSidebarCollapsed && showArchivedThreads" @select="onSelectThread" @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
-            v-if="!isSidebarCollapsed"
+            v-if="!isSidebarCollapsed && !showArchivedThreads"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
             :search-matched-thread-ids="serverMatchedThreadIds"
@@ -1227,6 +1232,7 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
+import ThreadLibrary from './components/sidebar/ThreadLibrary.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
@@ -1540,6 +1546,7 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
 const isSidebarCollapsed = ref(loadSidebarCollapsed())
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
+const showArchivedThreads = ref(false)
 const sidebarScrollableRef = ref<HTMLElement | null>(null)
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const settingsAreaRef = ref<HTMLElement | null>(null)
