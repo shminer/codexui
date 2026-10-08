@@ -16,6 +16,7 @@ describe('native thread search', () => {
   it('only downgrades explicit unsupported errors, not authentication, timeout or network failures', () => {
     expect(isNativeHistoryUnsupported(new Error('Method not found: thread/search'))).toBe(true)
     expect(isNativeHistoryUnsupported(new Error('Thread search is not supported by this storage'))).toBe(true)
+    expect(isNativeHistoryUnsupported(new Error('thread/items/list requires SQLite storage'))).toBe(true)
     expect(isNativeHistoryUnsupported(new Error('Search timed out'))).toBe(false)
     expect(isNativeHistoryUnsupported(new CodexApiError('storage unavailable', { code: 'network_error' }))).toBe(false)
     expect(isNativeHistoryUnsupported(new CodexApiError('method not found', { code: 'http_error', status: 403 }))).toBe(false)

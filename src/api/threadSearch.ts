@@ -16,5 +16,5 @@ export function isNativeHistoryUnsupported(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   if (error instanceof CodexApiError && (error.code === 'network_error' || error.status === 401 || error.status === 403)) return false
   if (/timeout|timed out|authentication|unauthorized/iu.test(error.message)) return false
-  return /method not found|unknown (?:method|variant)|unsupported method|unrecognized method|(?:search|pagination).{0,80}(?:not supported|requires.{0,30}(?:sqlite|storage|state))|(?:sqlite|storage|state db).{0,80}(?:not supported|not enabled|disabled|unavailable)/iu.test(error.message)
+  return /method not found|unknown (?:method|variant)|unsupported method|unrecognized method|(?:search|pagination|thread\/(?:items|turns)\/list).{0,80}(?:not supported|requires.{0,30}(?:sqlite|storage|state))|(?:sqlite|storage|state db).{0,80}(?:not supported|not enabled|disabled|unavailable)/iu.test(error.message)
 }

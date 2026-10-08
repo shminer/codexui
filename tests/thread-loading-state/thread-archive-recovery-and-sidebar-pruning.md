@@ -19,6 +19,7 @@ Deleting a thread recovers from Codex `no rollout found` archive failures and re
 7. Call `thread/list` with `archived:true` and confirm the deleted thread ids are present.
 8. Switch to dark theme and repeat steps 1-5.
 9. Select `Archived` in the sidebar. Load additional pages if needed and locate the archived thread.
+   Open its title and page through its read-only preview. Confirm no `thread/resume` or `thread/unarchive` is sent until Restore is clicked; close with Escape and confirm focus returns.
 10. Restore it, confirm it disappears from this list without changing the open thread, then select `Active` and refresh.
 
 #### Expected Results

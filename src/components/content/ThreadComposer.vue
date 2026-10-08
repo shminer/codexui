@@ -614,6 +614,7 @@ export type SubmitPayload = {
 export type ThreadComposerExposed = {
   hydrateDraft: (payload: ComposerDraftPayload) => void
   appendTextToDraft: (text: string) => void
+  addFileAttachment: (path: string, label?: string) => void
   hasUnsavedDraft: () => boolean
 }
 
@@ -2024,6 +2025,7 @@ onMounted(() => {
 defineExpose<ThreadComposerExposed>({
   hydrateDraft,
   appendTextToDraft,
+  addFileAttachment,
   hasUnsavedDraft: () => hasUnsavedDraft.value,
 })
 

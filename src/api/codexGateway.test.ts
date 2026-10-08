@@ -648,7 +648,7 @@ describe('getThreadDetail', () => {
     vi.unstubAllGlobals()
   })
 
-  it('returns direct subagents in first-spawn order with their latest status', async () => {
+  it('retains collaboration participants from partial history, including agent-to-agent messages', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       result: {
         thread: {
@@ -713,7 +713,7 @@ describe('getThreadDetail', () => {
 
     const detail = await getThreadDetail('parent-thread')
 
-    expect(detail.subagents).toEqual([
+    expect(detail.subagents).toMatchObject([
       {
         threadId: 'agent-a',
         prompt: 'Inspect the gateway',
@@ -726,7 +726,10 @@ describe('getThreadDetail', () => {
         status: 'failed',
         message: 'No permission',
       },
+      { threadId: 'agent-orphan', status: 'running' },
+      { threadId: 'agent-child', status: 'running' },
     ])
+    expect(detail.subagents[0].communications?.map((event) => event.id)).toEqual(['spawn-1', 'wait-1', 'nested-spawn'])
   })
 
   it('returns direct subagents from current subAgentActivity payloads', async () => {
@@ -815,7 +818,7 @@ describe('getThreadDetail', () => {
 
     const detail = await getThreadDetail('parent-thread')
 
-    expect(detail.subagents).toEqual([
+    expect(detail.subagents).toMatchObject([
       {
         threadId: 'agent-a',
         prompt: '',
@@ -831,13 +834,13 @@ describe('getThreadDetail', () => {
       {
         threadId: 'agent-c',
         prompt: '',
-        status: 'pendingInit',
+        status: 'unknown',
         message: '/root/agent-c',
       },
       {
         threadId: 'agent-d',
         prompt: '',
-        status: 'pendingInit',
+        status: 'unknown',
         message: '',
       },
     ])

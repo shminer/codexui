@@ -39,6 +39,17 @@ describe('normalizeThreadGroupsV2', () => {
 })
 
 describe('normalizeThreadMessagesV2', () => {
+  it('keeps generated image saved paths for the current thread resource list', () => {
+    const items = [
+      { type: 'imageGeneration', id: 'generated', result: 'data:image/png;base64,AAAA', savedPath: '/tmp/result.png' },
+      { type: 'imageGeneration', id: 'saved-only', savedPath: '/tmp/saved.png' },
+      { type: 'imageView', id: 'sanitized', path: '/tmp/cache.png', savedPath: '/tmp/original.png' },
+    ] as unknown as ThreadReadResponse['thread']['turns'][number]['items']
+    const messages = normalizeThreadMessagesV2(threadReadResponseWithContent(items))
+    expect(messages.map((message) => message.fileAttachments?.[0]?.path)).toEqual(['/tmp/result.png', '/tmp/saved.png', '/tmp/original.png'])
+    expect(messages[1]?.images).toEqual(['/codex-local-image?path=%2Ftmp%2Fsaved.png'])
+  })
+
   it('preserves the message timestamp supplied by thread history', () => {
     const response = threadReadResponseWithContent([{
       type: 'agentMessage',

@@ -5,7 +5,7 @@
     <p v-if="metadataError" class="thread-feature-error" role="alert">{{ metadataError }} <button type="button" @click="ensureMetadata()">Retry</button></p>
     <p v-if="error" class="thread-feature-error" role="alert">{{ error }}</p>
     <div v-for="thread in visibleThreads" :key="thread.id" class="thread-library-row">
-      <button class="thread-library-link" type="button" @click="$emit('select', thread)">
+      <button class="thread-library-link" type="button" @click="archived ? previewThread = thread : $emit('select', thread)">
         <span>{{ thread.title }}</span>
         <time :datetime="thread.updatedAtIso">{{ new Date(thread.updatedAtIso).toLocaleDateString() }}</time>
         <small v-if="thread.inProgress">Running</small>
@@ -16,6 +16,7 @@
     <p v-if="!loading && !loadingMetadata && !error && !visibleThreads.length" class="thread-feature-status">{{ query.trim() ? 'No results' : 'No archived threads' }}</p>
     <button v-if="nextCursor || error" class="thread-feature-action" type="button" :disabled="loading" @click="load()">{{ error ? 'Retry' : 'Load more' }}</button>
     <p v-if="loading" class="thread-feature-status" role="status">Loading...</p>
+    <ThreadArchivePreview v-if="previewThread" :key="previewThread.id" :thread="previewThread" @close="previewThread = null" />
   </section>
 </template>
 
@@ -25,6 +26,7 @@ import { getThreadGroupsPage, searchThreads, unarchiveThread } from '../../api/c
 import { isNativeHistoryUnsupported, titleMatchRank } from '../../api/threadSearch'
 import type { UiThread } from '../../types/codex'
 import IconTablerArchive from '../icons/IconTablerArchive.vue'
+import ThreadArchivePreview from './ThreadArchivePreview.vue'
 
 const emit = defineEmits<{ select: [thread: UiThread]; restored: [] }>()
 const props = withDefaults(defineProps<{
@@ -34,6 +36,7 @@ const props = withDefaults(defineProps<{
   loadActiveMetadata?: () => Promise<void>
 }>(), { archived: true, query: '', activeThreads: () => [] })
 const threads = ref<UiThread[]>([])
+const previewThread = ref<UiThread | null>(null)
 const nativeThreads = ref<UiThread[]>([])
 const nextCursor = ref<string | null>(null)
 const titleCursor = ref<string | null>(null)

@@ -9,28 +9,31 @@
 2. Start or resume a turn that spawns two direct subagents.
 3. Reopen a parent thread whose persisted history contains `subAgentActivity` items and verify the right-side Agents panel lists each direct agent once in activity order.
 4. Verify the right-side Agents panel appears while the parent turn is running and lists newly started agents without reloading the parent thread.
-5. Wait for one agent to reach a terminal status and confirm it disappears while running or initializing agents remain visible.
-6. Select an agent and verify its task/status preview and complete read-only thread content load.
+5. Wait for one agent to reach a terminal status and confirm it moves to History while running or initializing agents remain in Running.
+6. Select an agent and verify its task/status preview and read-only recent thread content load; load earlier messages on demand.
 7. Confirm the agent detail wraps inside the sidebar without being clipped, including command output, code, changed-file diff, and collapsed Thinking summaries.
 8. Drag the sidebar's left separator left and right, then focus it and repeat with Left/Right and Home/End; confirm the sidebar grows and shrinks while the parent conversation uses the remaining width.
 9. Use the content header's top-right Agents control to collapse the sidebar completely, confirm the parent conversation reclaims the width, then use the same control to reopen it and confirm the selected agent detail is unchanged.
 10. Refresh the page and switch between parent threads, confirming the last sidebar width and collapsed state persist.
 11. Confirm Fork, edit/rollback, implement-plan, and file undo/redo controls remain absent from the selected agent detail.
 12. While the selected subagent is thinking, confirm only the streamed reasoning summary is shown; raw reasoning text is not rendered.
-13. Switch to another parent thread, wait for the first parent's subagent to finish, then return to the first parent and confirm the terminal agent remains absent without a full thread-list reload.
-14. Wait for a selected subagent to finish while its parent remains selected and confirm its detail closes, the terminal agent disappears, and no new detail request starts.
+13. Switch to another parent thread, wait for the first parent's subagent to finish, then return to the first parent and confirm the terminal agent appears in History without a full thread-list reload.
+14. Wait for a selected subagent to finish while its parent remains selected and confirm its detail stays open and refreshes once for the terminal result.
 15. Repeat steps 6-10 at 768x1024 and confirm the desktop sidebar remains in layout without horizontal viewport overflow.
 16. Resize to 375x812, open the Agents button at the content header's top-right, then resize back to at least 768px; confirm the sheet returns to the in-layout desktop sidebar instead of remaining teleported or disappearing.
 17. Return to 375x812, open the top-right Agents button, and repeat steps 6 and 11-14 in the bottom sheet; confirm no desktop separator or desktop collapse control appears.
 18. Close the mobile sheet by its close button and by tapping the backdrop.
 19. Repeat the desktop and mobile checks in light and dark themes.
-20. Open a parent thread with only terminal subagents and confirm neither a desktop panel nor mobile Agents button is shown.
+20. Open a parent thread with only terminal subagents and confirm the Agents entry remains available and History retains the completed tasks.
+21. Open a parent whose agents occur only outside the recent history window. Use Load history and Load older collaboration; verify partial/loaded states, no duplicated agents or event IDs, and no automatic full-history scan.
+22. Inspect Collaboration for spawn, sendMessage/sendInput, wait and close events, including agent-to-agent sender/receiver IDs and state messages. Confirm the parent itself is not listed as a child and no send/control actions appear.
+23. Delay an agent history/detail response, switch parent threads or detail rows, then release it. Confirm no old result or stuck loading indicator appears in the new view; empty history remains viewable on mobile.
 
 #### Expected Results
-- Only direct subagents from the active parent thread are listed.
-- Only `running` and `pendingInit` subagents remain listed; terminal, unknown, and missing statuses disappear immediately.
+- Collaboration participants from the active parent thread are listed, including known agent-to-agent communications.
+- Running lists `running` and `pendingInit`; History retains terminal and unknown statuses. Completed tasks and selected details remain accessible.
 - Persisted and realtime `subAgentActivity` items populate the panel without extra thread-list requests.
-- Subagent details are fetched only after their row is selected.
+- Subagent details are fetched only after their row is selected, with one refresh on transition to a terminal status. Older messages and collaboration pages load on demand.
 - Desktop uses a resizable, fully collapsible right-side panel with a default width of 480px; its toggle and the mobile sheet entry stay at the top-right, opposite the left sidebar control.
 - The preferred desktop width and collapsed state persist without adding requests or reloads.
 - Agent detail content shrinks or scrolls within the sidebar instead of extending beyond its clipped boundary.

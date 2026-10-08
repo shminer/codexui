@@ -1,11 +1,11 @@
 <template>
   <Teleport to="#thread-subagent-header-target">
     <button
-      v-if="activeAgents.length > 0 && (!isMobile || !mobileSheetOpen)"
+      v-if="parentThreadId && (!isMobile || !mobileSheetOpen)"
       type="button"
       class="subagent-header-trigger"
-      :aria-label="`Show ${activeAgents.length} agents`"
-      :title="`Show ${activeAgents.length} agents`"
+      :aria-label="`Show ${allAgents.length} agents`"
+      :title="`Show ${allAgents.length} agents`"
       @click="toggleSubagentPanel"
     >
       <IconTablerLayoutSidebarFilled v-if="isMobile || desktopPanelCollapsed" class="subagent-header-trigger-icon" />
@@ -15,7 +15,7 @@
 
   <Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">
     <div
-      v-if="activeAgents.length > 0"
+      v-if="allAgents.length > 0 || historyOpened"
       ref="desktopHostRef"
       class="subagent-panel-host"
       :class="{ 'is-desktop-collapsed': !isMobile && desktopPanelCollapsed }"
@@ -57,7 +57,7 @@
               <p class="subagent-panel-title">{{ selectedAgent ? `Agent ${selectedAgentIndex + 1}` : 'Agents' }}</p>
               <p v-if="selectedAgent" class="subagent-detail-status" :data-status="selectedAgent.status">{{ selectedAgent.status }}</p>
             </div>
-            <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ activeAgents.length }}</span>
+            <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ allAgents.length }}</span>
             <button
               v-if="isMobile && mobileSheetOpen"
               type="button"
@@ -70,9 +70,13 @@
             </button>
           </header>
 
+          <div v-if="!selectedAgent" class="thread-feature-modes" role="group" aria-label="Agent status">
+            <button type="button" :aria-pressed="agentView === 'running'" @click="agentView = 'running'">Running ({{ activeAgents.length }})</button>
+            <button type="button" :aria-pressed="agentView === 'history'" @click="agentView = 'history'; if (!historyStarted) loadHistory()">History ({{ allAgents.length - activeAgents.length }})</button>
+          </div>
           <div v-if="!selectedAgent" class="subagent-list">
             <button
-              v-for="(agent, index) in activeAgents"
+              v-for="(agent, index) in visibleAgents"
               :key="agent.threadId"
               type="button"
               class="subagent-row"
@@ -86,12 +90,26 @@
               <span class="subagent-row-status">{{ agent.status }}</span>
               <span class="subagent-row-preview">{{ agent.message || agent.prompt || 'No task details' }}</span>
             </button>
+            <p v-if="!visibleAgents.length" class="thread-feature-status">No agents</p>
+            <p v-if="historyError" class="thread-feature-error" role="alert">{{ historyError }}</p>
+            <p v-if="historyUnsupported" class="thread-feature-status">Loaded collaboration only</p>
+            <button v-if="!historyComplete && !historyUnsupported" class="thread-feature-action" type="button" :disabled="historyLoading" @click="loadHistory">{{ historyLoading ? 'Loading...' : historyStarted ? 'Load older collaboration' : 'Load history' }}</button>
+            <button v-if="historyUnsupported" class="thread-feature-action" type="button" @click="historyUnsupported = false; loadHistory()">Retry</button>
           </div>
 
           <template v-else>
             <p v-if="selectedAgent.prompt" class="subagent-detail-prompt">{{ selectedAgent.prompt }}</p>
+            <details v-if="selectedAgent.communications?.length" class="subagent-communications">
+              <summary>Collaboration ({{ selectedAgent.communications.length }})</summary>
+              <div v-for="event in selectedAgent.communications" :key="event.id" class="subagent-communication">
+                <strong>{{ event.tool }} · {{ event.status }}</strong>
+                <small>{{ event.senderThreadId }} -&gt; {{ event.receiverThreadIds.join(', ') }}</small>
+                <pre v-if="event.prompt">{{ event.prompt }}</pre>
+                <template v-for="(state, id) in event.agentsStates" :key="id"><small>{{ id }} · {{ state.status }}</small><pre v-if="state.message">{{ state.message }}</pre></template>
+              </div>
+            </details>
             <p v-if="loadingThreadId === selectedAgent.threadId" class="subagent-detail-loading">Loading agent thread...</p>
-            <p v-if="detailError" class="subagent-detail-error">{{ detailError }}</p>
+            <p v-if="detailError" class="subagent-detail-error">{{ detailError }} <button type="button" @click="selectAgent(selectedAgent.threadId, true)">Retry</button></p>
             <ThreadConversation
               v-if="selectedDetail"
               class="subagent-conversation"
@@ -102,6 +120,9 @@
               :active-thread-id="selectedAgent.threadId"
               :cwd="cwd"
               :readonly="true"
+              :has-more-persisted-above="selectedDetail.hasMoreOlder"
+              :is-loading-persisted-above="loadingOlder"
+              :load-earlier-messages="loadAgentOlderMessages"
             />
           </template>
         </section>
@@ -112,7 +133,9 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { getThreadDetail, type UiSubagent } from '../../api/codexGateway'
+import { getOlderThreadMessages, getThreadCollaborationPage, getThreadDetail, type UiSubagent } from '../../api/codexGateway'
+import { mergeSubagents } from '../../agentCollaboration'
+import { isNativeHistoryUnsupported } from '../../api/threadSearch'
 import { useMobile } from '../../composables/useMobile'
 import type { UiLiveOverlay } from '../../types/codex'
 import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
@@ -133,6 +156,7 @@ import {
 } from './threadSubagentPanelState'
 
 const props = defineProps<{
+  parentThreadId: string
   agents: UiSubagent[]
   cwd: string
   liveOverlayForThread: (threadId: string) => UiLiveOverlay | null
@@ -161,12 +185,25 @@ const loadingThreadId = ref('')
 const detailError = ref('')
 const selectedDetail = ref<Awaited<ReturnType<typeof getThreadDetail>> | null>(null)
 let detailRequestId = 0
+let historyRequestId = 0
+const historyAgents = ref<UiSubagent[]>([])
+const historyCursor = ref<string | null>(null)
+const historyStarted = ref(false)
+const historyComplete = ref(false)
+const historyOpened = ref(false)
+const historyLoading = ref(false)
+const historyUnsupported = ref(false)
+const historyError = ref('')
+const loadingOlder = ref(false)
+const agentView = ref<'running' | 'history'>('running')
 let desktopPanelResizeGesture: DesktopPanelResizeGesture | null = null
 let desktopLayoutResizeObserver: ResizeObserver | null = null
 
-const activeAgents = computed(() => props.agents.filter((agent) => isActiveSubagentStatus(agent.status)))
-const selectedAgent = computed(() => activeAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
-const selectedAgentIndex = computed(() => activeAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
+const allAgents = computed(() => mergeSubagents(historyAgents.value, props.agents))
+const activeAgents = computed(() => allAgents.value.filter((agent) => isActiveSubagentStatus(agent.status)))
+const visibleAgents = computed(() => allAgents.value.filter((agent) => agentView.value === 'running' ? isActiveSubagentStatus(agent.status) : !isActiveSubagentStatus(agent.status)))
+const selectedAgent = computed(() => allAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
+const selectedAgentIndex = computed(() => allAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
 const selectedLiveOverlay = computed(() => selectedAgent.value ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
@@ -198,8 +235,31 @@ function toggleDesktopPanel(): void {
 }
 
 function toggleSubagentPanel(): void {
+  const openingEmptyPanel = !allAgents.value.length && !historyOpened.value
+  if (openingEmptyPanel) { historyOpened.value = true; desktopPanelCollapsed.value = false }
   if (isMobile.value) mobileSheetOpen.value = true
-  else toggleDesktopPanel()
+  else if (!openingEmptyPanel) toggleDesktopPanel()
+  if ((isMobile.value || !desktopPanelCollapsed.value) && !historyStarted.value) void loadHistory()
+}
+
+async function loadHistory(): Promise<void> {
+  if (historyLoading.value || historyComplete.value || historyUnsupported.value || !props.parentThreadId) return
+  const request = ++historyRequestId
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    const page = await getThreadCollaborationPage(props.parentThreadId, historyCursor.value)
+    if (request !== historyRequestId) return
+    if (page.nextCursor && page.nextCursor === historyCursor.value) throw new Error('Repeated collaboration cursor')
+    historyAgents.value = mergeSubagents(page.data, historyAgents.value)
+    historyCursor.value = page.nextCursor
+    historyStarted.value = true
+    historyComplete.value = !page.nextCursor
+  } catch (failure) {
+    if (request !== historyRequestId) return
+    if (isNativeHistoryUnsupported(failure)) historyUnsupported.value = true
+    else historyError.value = failure instanceof Error ? failure.message : 'Failed to load collaboration'
+  } finally { if (request === historyRequestId) historyLoading.value = false }
 }
 
 function closeMobileSheet(): void {
@@ -316,14 +376,18 @@ function onDesktopResizerKeyDown(event: KeyboardEvent): void {
   saveDesktopPanelWidth()
 }
 
-async function selectAgent(threadId: string): Promise<void> {
-  if (!activeAgents.value.some((agent) => agent.threadId === threadId)) return
-  if (selectedThreadId.value !== threadId) selectedDetail.value = null
+async function selectAgent(threadId: string, force = false): Promise<void> {
+  if (!allAgents.value.some((agent) => agent.threadId === threadId)) return
+  if (selectedThreadId.value !== threadId) {
+    selectedDetail.value = null
+    loadingOlder.value = false
+  }
   selectedThreadId.value = threadId
   detailError.value = ''
-  if (selectedDetail.value) return
+  if (selectedDetail.value && !force) return
 
   const requestId = ++detailRequestId
+  loadingOlder.value = false
   loadingThreadId.value = threadId
   try {
     const detail = await getThreadDetail(threadId)
@@ -339,23 +403,56 @@ async function selectAgent(threadId: string): Promise<void> {
   }
 }
 
+async function loadAgentOlderMessages(threadId: string): Promise<void> {
+  const detail = selectedDetail.value
+  if (!detail || loadingOlder.value || selectedThreadId.value !== threadId) return
+  const turnId = detail.messages.find((message) => message.turnId)?.turnId
+  if (!turnId) return
+  const request = detailRequestId
+  loadingOlder.value = true
+  try {
+    const page = await getOlderThreadMessages(threadId, turnId)
+    if (request !== detailRequestId || selectedThreadId.value !== threadId || !selectedDetail.value) return
+    const ids = new Set(selectedDetail.value.messages.map((message) => message.id))
+    selectedDetail.value.messages = [...page.messages.filter((message) => !ids.has(message.id)), ...selectedDetail.value.messages]
+    selectedDetail.value.hasMoreOlder = page.hasMoreOlder
+  } catch (failure) {
+    if (request === detailRequestId) detailError.value = failure instanceof Error ? failure.message : 'Failed to load older agent messages'
+  } finally { if (request === detailRequestId) loadingOlder.value = false }
+}
+
 function closeDetail(): void {
   detailRequestId += 1
   selectedThreadId.value = ''
   detailError.value = ''
   loadingThreadId.value = ''
   selectedDetail.value = null
+  loadingOlder.value = false
 }
 
 watch(
-  activeAgents,
+  allAgents,
   (agents) => {
-    if (agents.length === 0) mobileSheetOpen.value = false
     if (selectedThreadId.value && !agents.some((agent) => agent.threadId === selectedThreadId.value)) {
       closeDetail()
     }
   },
 )
+
+watch(() => [selectedAgent.value?.threadId, selectedAgent.value?.status], ([threadId, status], previous) => {
+  if (threadId && threadId === previous?.[0] && status !== previous?.[1] && !isActiveSubagentStatus(status)) void selectAgent(threadId, true)
+})
+
+watch(() => props.parentThreadId, () => {
+  historyRequestId += 1
+  mobileSheetOpen.value = false
+  closeDetail()
+  historyAgents.value = []
+  historyCursor.value = null
+  historyStarted.value = historyComplete.value = historyOpened.value = historyLoading.value = historyUnsupported.value = false
+  historyError.value = ''
+  agentView.value = 'running'
+})
 
 watch(desktopHostRef, (host) => {
   observeDesktopLayout(host)
@@ -367,6 +464,8 @@ watch(isMobile, (mobile) => {
 })
 
 onBeforeUnmount(() => {
+  historyRequestId += 1
+  detailRequestId += 1
   stopDesktopResizeGesture()
   desktopLayoutResizeObserver?.disconnect()
 })

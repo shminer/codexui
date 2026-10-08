@@ -15,6 +15,8 @@ import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js
 import { authorizeGitDirectory, handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { readRecentThreadTurns } from './recentThreadTurns.js'
+import { collectSubagents } from '../agentCollaboration.js'
+import { normalizeHistoryEntry, projectHistoryResources, readThreadHistoryEntries } from './threadHistoryProjection.js'
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import {
   getRandomFreeKey,
@@ -7345,6 +7347,16 @@ export function createCodexBridgeMiddleware(options: {
 } = {}): CodexBridgeMiddleware {
   const securityPolicy = options.securityPolicy ?? PERMISSIVE_SECURITY_POLICY
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor } = getSharedBridgeState()
+  const itemPageRequests = new Map<string, Promise<unknown>>()
+  function readItemPage(threadId: string, cursor: string | null): Promise<unknown> {
+    const key = JSON.stringify([threadId, cursor])
+    const existing = itemPageRequests.get(key)
+    if (existing) return existing
+    const request = appServer.rpc('thread/items/list', { threadId, cursor, limit: 50, sortDirection: 'desc' })
+      .finally(() => { itemPageRequests.delete(key) })
+    itemPageRequests.set(key, request)
+    return request
+  }
   if (securityPolicy.backgroundIntegrationsEnabled) {
     void initializeSkillsSyncOnStartup(appServer)
     void readTelegramBridgeConfig()
@@ -7894,6 +7906,13 @@ export function createCodexBridgeMiddleware(options: {
           }
 		          throw error
 		        }
+        if (body.method === 'thread/turns/list') {
+          const page = asRecord(rpcResult)
+          const threadId = readNonEmptyString(asRecord(body.params)?.threadId)
+          const wrapper = { thread: { id: threadId, path: appServer.getThreadSessionPath(threadId), turns: page?.data } }
+          const normalized = await mergeSessionMetadataIntoThreadResult(await sanitizeThreadTurnsInlinePayloads('thread/read', wrapper))
+          rpcResult = { ...page, data: asRecord(asRecord(normalized)?.thread)?.turns }
+        }
         if (body.method === 'thread/list') appServer.rememberThreadPaths(rpcResult)
         const trimmedResult = trimThreadTurnsInRpcResult(body.method, rpcResult)
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
@@ -7916,6 +7935,52 @@ export function createCodexBridgeMiddleware(options: {
         }
 
         setJson(res, 200, { result })
+        return
+      }
+
+      if (req.method === 'GET' && (url.pathname === '/codex-api/thread-resources' || url.pathname === '/codex-api/thread-collaboration' || url.pathname === '/codex-api/thread-resource-source')) {
+        if (!securityPolicy.isRpcMethodAllowed('thread/items/list')) {
+          setJson(res, 403, { error: 'History item reads are disabled by the active security policy.' })
+          return
+        }
+        const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        if (!threadId) { setJson(res, 400, { error: 'Missing threadId' }); return }
+        if (url.pathname === '/codex-api/thread-resource-source') {
+          const turnId = url.searchParams.get('turnId')?.trim() ?? ''
+          const itemId = url.searchParams.get('itemId')?.trim() ?? ''
+          if (!turnId || !itemId) { setJson(res, 400, { error: 'Missing source turn or item' }); return }
+          let cursor: string | null = null
+          const seenCursors = new Set<string>()
+          // ponytail: scan only the selected turn until the protocol supports direct item reads.
+          do {
+            if (res.destroyed) return
+            const page = asRecord(await appServer.rpc('thread/items/list', { threadId, turnId, cursor, limit: 50, sortDirection: 'asc' }))
+            const entries = readThreadHistoryEntries(page?.data)
+            const entry = entries.find((row) => row.item.id === itemId && row.turnId === turnId)
+            if (entry) {
+              const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', { thread: { turns: [{ id: turnId, items: [entry.item] }] } })
+              const turns = asRecord(asRecord(sanitized)?.thread)?.turns
+              const turn = Array.isArray(turns) ? asRecord(turns[0]) : null
+              const items = Array.isArray(turn?.items) ? turn.items : []
+              const item = asRecord(items[0])
+              setJson(res, 200, { data: normalizeHistoryEntry({ turnId, item: item ?? entry.item }) })
+              return
+            }
+            const next = typeof page?.nextCursor === 'string' ? page.nextCursor : null
+            if (next && seenCursors.has(next)) throw new Error('Repeated source item cursor')
+            if (next) seenCursors.add(next)
+            cursor = next
+          } while (cursor)
+          setJson(res, 404, { error: 'Source message no longer exists.' })
+          return
+        }
+        const cursor = url.searchParams.get('cursor') || null
+        const page = asRecord(await readItemPage(threadId, cursor))
+        const entries = readThreadHistoryEntries(page?.data)
+        const data = url.pathname === '/codex-api/thread-resources'
+          ? projectHistoryResources(entries, url.searchParams.get('cwd') ?? '')
+          : collectSubagents([...entries].reverse(), threadId)
+        setJson(res, 200, { data, nextCursor: typeof page?.nextCursor === 'string' ? page.nextCursor : null })
         return
       }
 

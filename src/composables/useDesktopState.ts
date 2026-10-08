@@ -48,7 +48,8 @@ import {
   type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
-import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
+import { normalizeFileChangeStatus, toUiFileChanges, toUiImageView } from '../api/normalizers/v2'
+import { collectSubagents, mergeSubagents } from '../agentCollaboration'
 import type {
   CollaborationModeKind,
   CollaborationModeOption,
@@ -4351,56 +4352,11 @@ export function useDesktopState() {
     return null
   }
 
-  function toLocalImageUrl(path: string): string {
-    return `/codex-local-image?path=${encodeURIComponent(path)}`
-  }
-
-  function toImageGenerationUrl(value: string): string {
-    const trimmed = value.trim()
-    if (!trimmed) return ''
-    if (
-      trimmed.startsWith('data:') ||
-      trimmed.startsWith('http://') ||
-      trimmed.startsWith('https://') ||
-      trimmed.startsWith('/codex-local-image?')
-    ) {
-      return trimmed
-    }
-    const compact = trimmed.replace(/\s+/gu, '')
-    if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)) return ''
-    return `data:image/png;base64,${compact}`
-  }
-
   function readCompletedImageView(notification: RpcNotification): UiMessage | null {
     if (notification.method !== 'item/completed') return null
     const params = asRecord(notification.params)
     const item = asRecord(params?.item)
-    if (!item) return null
-    const id = readString(item.id)
-    if (!id) return null
-    if (item.type === 'imageView') {
-      const path = readString(item.path)
-      if (!path) return null
-      return {
-        id,
-        role: 'assistant',
-        text: '',
-        images: [toLocalImageUrl(path)],
-        messageType: 'imageView',
-      }
-    }
-    if (item.type !== 'imageGeneration' && item.type !== 'image_generation') return null
-    const result = readString(item.result)
-    const imageUrl = result ? toImageGenerationUrl(result) : ''
-    if (!imageUrl) return null
-    return {
-      id,
-      role: 'assistant',
-      text: '',
-      images: [imageUrl],
-      messageType: 'imageView',
-
-    }
+    return item ? toUiImageView(item) : null
   }
 
   function readCommandExecutionStarted(notification: RpcNotification): UiMessage | null {
@@ -4560,84 +4516,16 @@ export function useDesktopState() {
     return false
   }
 
-  function mergeSubagentNotification(parentThreadId: string, notification: RpcNotification): void {
-    if (parentThreadId !== selectedThreadId.value) return
+  function mergeSubagentNotification(eventThreadId: string, notification: RpcNotification): void {
+    const parentThreadId = selectedThreadId.value
+    if (!parentThreadId || (eventThreadId !== parentThreadId && !(subagentsByParentThreadId.value[parentThreadId] ?? []).some((agent) => agent.threadId === eventThreadId))) return
     if (notification.method !== 'item/started' && notification.method !== 'item/completed') return
-
     const params = asRecord(notification.params)
-    const item = asRecord(params?.item)
-    if (item?.type === 'subAgentActivity') {
-      const threadId = readString(item.agentThreadId).trim()
-      const agentPath = readString(item.agentPath).trim()
-      const kind = readString(item.kind)
-      if (!threadId) return
-
-      const existing = subagentsByParentThreadId.value[parentThreadId] ?? []
-      const next = existing.map((agent) => ({ ...agent }))
-      const index = next.findIndex((agent) => agent.threadId === threadId)
-      if (index === -1) {
-        next.push({
-          threadId,
-          prompt: '',
-          status: kind === 'started' ? 'running' : kind === 'interrupted' ? 'shutdown' : 'pendingInit',
-          message: agentPath,
-        })
-      } else {
-        const agent = next[index]
-        if (!agent.message && agentPath) agent.message = agentPath
-        if (kind === 'started') agent.status = 'running'
-        if (kind === 'interrupted') agent.status = 'shutdown'
-      }
-      subagentsByParentThreadId.value = {
-        ...subagentsByParentThreadId.value,
-        [parentThreadId]: next,
-      }
-      return
-    }
-
-    if (
-      !item ||
-      item.type !== 'collabAgentToolCall' ||
-      readString(item.senderThreadId) !== parentThreadId
-    ) return
-
-    const receiverThreadIds = Array.isArray(item.receiverThreadIds)
-      ? item.receiverThreadIds.map((value) => readString(value).trim()).filter(Boolean)
-      : []
-    if (receiverThreadIds.length === 0) return
-
-    const prompt = readString(item.prompt).trim()
-    const agentStates = asRecord(item.agentsStates) ?? {}
-    const existing = subagentsByParentThreadId.value[parentThreadId] ?? []
-    const next = existing.map((agent) => ({ ...agent }))
-    const indexByThreadId = new Map(next.map((agent, index) => [agent.threadId, index]))
-
-    for (const threadId of receiverThreadIds) {
-      const state = asRecord(agentStates[threadId])
-      const index = indexByThreadId.get(threadId)
-      if (index === undefined && item.tool !== 'spawnAgent') continue
-      if (index === undefined) {
-        indexByThreadId.set(threadId, next.length)
-        next.push({
-          threadId,
-          prompt,
-          status: readString(state?.status) || 'pendingInit',
-          message: readString(state?.message),
-        })
-        continue
-      }
-
-      const agent = next[index]
-      if (!agent.prompt && prompt) agent.prompt = prompt
-      if (state) {
-        agent.status = readString(state.status) || agent.status
-        agent.message = readString(state.message)
-      }
-    }
-
+    const incoming = collectSubagents([{ item: params?.item, turnId: readString(params?.turnId) }], parentThreadId)
+    if (!incoming.length) return
     subagentsByParentThreadId.value = {
       ...subagentsByParentThreadId.value,
-      [parentThreadId]: next,
+      [parentThreadId]: mergeSubagents(subagentsByParentThreadId.value[parentThreadId] ?? [], incoming),
     }
   }
 
@@ -5589,7 +5477,7 @@ export function useDesktopState() {
         && previousPersisted.some((message) => message.turnId && !quickTurnIds?.has(message.turnId))
       subagentsByParentThreadId.value = {
         ...subagentsByParentThreadId.value,
-        [threadId]: detail.subagents ?? [],
+        [threadId]: mergeSubagents(subagentsByParentThreadId.value[threadId] ?? [], detail.subagents ?? []),
       }
       const retainLocalInProgress =
         inProgressById.value[threadId] === true &&

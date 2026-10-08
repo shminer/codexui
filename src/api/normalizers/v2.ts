@@ -17,7 +17,7 @@ import type {
   UiProjectGroup,
   UiThread,
 } from '../../types/codex'
-import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
+import { getPathLeafName, normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
@@ -115,6 +115,21 @@ function parseHeartbeatEnvelope(value: string): { automationId: string; currentT
     automationId: readHeartbeatField(trimmed, 'automation_id'),
     currentTimeIso,
     instructions,
+  }
+}
+
+export function toUiImageView(item: Record<string, unknown>): UiMessage | null {
+  if (item.type !== 'imageView' && item.type !== 'imageGeneration' && item.type !== 'image_generation') return null
+  if (typeof item.id !== 'string' || !item.id) return null
+  const savedPath = typeof item.savedPath === 'string' ? item.savedPath.trim() : ''
+  const path = typeof item.path === 'string' ? item.path.trim() : ''
+  const image = item.type === 'imageView'
+    ? (path ? toLocalImageUrl(path) : '')
+    : (typeof item.result === 'string' ? toImageGenerationUrl(item.result) : '') || (savedPath ? toLocalImageUrl(savedPath) : '')
+  if (!image) return null
+  return {
+    id: item.id, role: 'assistant', text: '', images: [image], messageType: 'imageView',
+    fileAttachments: savedPath ? [{ path: savedPath, label: getPathLeafName(savedPath) }] : undefined,
   }
 }
 
@@ -447,34 +462,11 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     return messages
   }
 
-  if (item.type === 'imageView') {
-    const path = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!path) return []
-    return [
-      {
-        id: item.id,
-        role: 'assistant',
-        text: '',
-        images: [toLocalImageUrl(path)],
-        messageType: 'imageView',
-      },
-    ]
-  }
-
   {
     const rawItem = item as unknown as Record<string, unknown>
-    if (rawItem.type === 'imageGeneration' || rawItem.type === 'image_generation') {
-      const result = typeof rawItem.result === 'string' ? toImageGenerationUrl(rawItem.result) : ''
-      if (!result) return []
-      return [
-        {
-          id: item.id,
-          role: 'assistant',
-          text: '',
-          images: [result],
-          messageType: 'imageView',
-        },
-      ]
+    if (rawItem.type === 'imageView' || rawItem.type === 'imageGeneration' || rawItem.type === 'image_generation') {
+      const image = toUiImageView(rawItem)
+      return image ? [image] : []
     }
   }
 

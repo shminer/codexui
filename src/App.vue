@@ -980,9 +980,11 @@
                       @fork-thread="onForkThreadFromMessage"
                       @edit-message="onEditMessage"
                       @implement-plan="onImplementPlan"
+                      @reference-resource="onReferenceResource"
                       @respond-server-request="onRespondServerRequest" />
                   </div>
                   <ThreadSubagentPanel
+                    :parent-thread-id="composerThreadContextId"
                     :agents="selectedThreadSubagents"
                     :cwd="composerCwd"
                     :live-overlay-for-thread="getLiveOverlayForThread"
@@ -1235,6 +1237,7 @@ import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ThreadLibrary from './components/sidebar/ThreadLibrary.vue'
+import type { UiThreadResource } from './threadResources'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
@@ -2741,6 +2744,11 @@ async function onRemoveAccount(storageId: string): Promise<void> {
 
 function onArchiveThread(threadId: string): void {
   void archiveThreadById(threadId)
+}
+
+function onReferenceResource(resource: UiThreadResource): void {
+  if (resource.path) threadComposerRef.value?.addFileAttachment(resource.path, resource.label)
+  else if (resource.url) threadComposerRef.value?.appendTextToDraft(resource.url)
 }
 
 async function onForkThread(threadId: string): Promise<void> {

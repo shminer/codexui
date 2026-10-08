@@ -16,6 +16,29 @@
 .thread-feature-action { padding: 6px 10px; font-size: 12px; text-decoration: underline; }
 .thread-feature-error { color: #be123c; font-size: 12px; overflow-wrap: anywhere; }
 .thread-search-tools { flex: 0 0 auto; padding: 4px 8px; min-width: 0; border-bottom: 1px solid #e4e4e7; }
+.thread-conversation-tools { display: flex; align-items: flex-start; flex: 0 0 auto; min-width: 0; border-bottom: 1px solid #e4e4e7; }
+.thread-conversation-tools .thread-search-tools { flex: 1; border: none; }
+.thread-resources-toolbar { position: relative; flex: 0 0 auto; padding: 4px 8px; }
+.thread-resources-panel { position: absolute; z-index: 40; right: 8px; top: 100%; width: min(420px, calc(100vw - 48px)); max-height: min(55vh, 480px); overflow: auto; background: #fff; color: #18181b; border: 1px solid #d4d4d8; border-radius: 6px; padding: 8px; box-shadow: 0 4px 16px #0002; }
+.thread-resource-row { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #e4e4e7; padding: 4px 0; }
+.thread-resource-name { min-width: 0; flex: 1; font-size: 13px; overflow-wrap: anywhere; color: #166534; }
+.thread-resource-download { transform: rotate(180deg); }
+:root.dark .thread-conversation-tools, :root.dark .thread-resource-row { border-color: #3f3f46; }
+:root.dark .thread-resources-panel { background: #18181b; color: #f4f4f5; border-color: #52525b; }
+:root.dark .thread-resource-name { color: #86efac; }
+.subagent-communications { margin: 6px 12px; max-height: 220px; overflow: auto; flex: 0 0 auto; font-size: 12px; }
+.subagent-communication { border-bottom: 1px solid #e4e4e7; padding: 8px 0; }
+.subagent-communication small { display: block; overflow-wrap: anywhere; color: #71717a; }
+.subagent-communication pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 4px 0; }
+:root.dark .subagent-communication { border-color: #3f3f46; }
+:root.dark .subagent-communication small { color: #a1a1aa; }
+.thread-history-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 12px; background: #0008; }
+.thread-history-dialog { display: flex; flex-direction: column; min-width: 0; width: min(900px, 100%); height: min(85dvh, 900px); background: #fff; color: #18181b; border: 1px solid #d4d4d8; border-radius: 6px; overflow: hidden; }
+.thread-history-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e4e4e7; }
+.thread-history-dialog > header strong { font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.thread-history-dialog > .conversation-root { flex: 1; min-height: 0; }
+:root.dark .thread-history-dialog { background: #18181b; color: #f4f4f5; border-color: #52525b; }
+:root.dark .thread-history-dialog > header { border-color: #3f3f46; }
 .thread-search-bar { display: flex; align-items: center; gap: 4px; min-height: 30px; }
 .thread-search-bar input { flex: 1; min-width: 0; font-size: 13px; padding: 4px 6px; outline-offset: 2px; }
 .thread-search-bar .thread-feature-status { white-space: nowrap; }

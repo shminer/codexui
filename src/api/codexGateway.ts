@@ -20,7 +20,9 @@ import type {
   ThreadStartResponse,
   Turn,
 } from './appServerDtos'
-import { extractErrorMessage, normalizeCodexApiError } from './codexErrors'
+import { CodexApiError, extractErrorMessage, normalizeCodexApiError } from './codexErrors'
+import type { UiThreadResource } from '../threadResources'
+import { collectSubagents, type UiSubagent } from '../agentCollaboration'
 import {
   readActiveTurnIdFromResponse,
   normalizeThreadGroupsV2,
@@ -826,73 +828,10 @@ export type ThreadTurnPage = {
   turnIndexByTurnId: ThreadTurnIndexById
 }
 
-export type UiSubagent = {
-  threadId: string
-  prompt: string
-  status: string
-  message: string
-}
+export type { UiSubagent } from '../agentCollaboration'
 
 function readThreadSubagents(payload: ThreadReadResponse): UiSubagent[] {
-  const subagents = new Map<string, UiSubagent>()
-  const parentThreadId = payload.thread.id
-  const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
-
-  for (const turn of turns) {
-    for (const item of turn.items) {
-      const itemRecord = asRecord(item)
-      if (itemRecord?.type === 'subAgentActivity') {
-        const threadId = readString(itemRecord.agentThreadId)?.trim() ?? ''
-        const agentPath = readString(itemRecord.agentPath)?.trim() ?? ''
-        const kind = readString(itemRecord.kind)
-        if (!threadId) continue
-
-        const existing = subagents.get(threadId)
-        if (!existing) {
-          subagents.set(threadId, {
-            threadId,
-            prompt: '',
-            status: kind === 'started' ? 'running' : kind === 'interrupted' ? 'shutdown' : 'pendingInit',
-            message: agentPath,
-          })
-        } else {
-          if (!existing.message && agentPath) existing.message = agentPath
-          if (kind === 'started') existing.status = 'running'
-          if (kind === 'interrupted') existing.status = 'shutdown'
-        }
-        continue
-      }
-
-      if (item.type !== 'collabAgentToolCall' || item.senderThreadId !== parentThreadId) continue
-
-      const prompt = item.prompt?.trim() ?? ''
-      for (const receiverThreadId of item.receiverThreadIds) {
-        const threadId = receiverThreadId.trim()
-        if (!threadId) continue
-
-        const existing = subagents.get(threadId)
-        const state = item.agentsStates[threadId]
-        if (!existing && item.tool !== 'spawnAgent') continue
-        if (existing) {
-          if (!existing.prompt && prompt) existing.prompt = prompt
-          if (state) {
-            existing.status = state.status
-            existing.message = state.message?.trim() ?? ''
-          }
-          continue
-        }
-
-        subagents.set(threadId, {
-          threadId,
-          prompt,
-          status: state?.status ?? 'pendingInit',
-          message: state?.message?.trim() ?? '',
-        })
-      }
-    }
-  }
-
-  return [...subagents.values()]
+  return collectSubagents((Array.isArray(payload.thread.turns) ? payload.thread.turns : []).flatMap((turn) => turn.items.map((item) => ({ item, turnId: turn.id }))), payload.thread.id)
 }
 
 async function getThreadGroupsPageV2(cursor: string | null, limit: number, archived = false): Promise<ThreadGroupsPage> {
@@ -3759,6 +3698,26 @@ export async function getSearchTurnMessages(threadId: string, cursor: string): P
   const page = await callRpc<{ data: Turn[] }>('thread/turns/list', { threadId, cursor, limit: 1, sortDirection: 'asc', itemsView: 'full' })
   if (!Array.isArray(page?.data)) throw new Error('Invalid native turn response')
   return normalizeThreadMessagesV2({ thread: { turns: page.data } } as ThreadReadResponse).map((message) => ({ ...message, turnIndex: undefined }))
+}
+
+async function readThreadProjection<T>(pathname: string, params: Record<string, string>): Promise<{ data: T[]; nextCursor: string | null }> {
+  const response = await fetch(`${pathname}?${new URLSearchParams(params)}`)
+  const payload = await response.json() as { data?: T[]; nextCursor?: string | null; error?: string }
+  if (!response.ok) throw new CodexApiError(payload.error || 'Failed to load thread history', { code: 'http_error', status: response.status })
+  if (!Array.isArray(payload.data)) throw new Error('Invalid thread history projection')
+  return { data: payload.data, nextCursor: payload.nextCursor ?? null }
+}
+
+export function getThreadResourcePage(threadId: string, cwd: string, cursor: string | null = null) {
+  return readThreadProjection<UiThreadResource>('/codex-api/thread-resources', { threadId, cwd, ...(cursor ? { cursor } : {}) })
+}
+
+export function getThreadCollaborationPage(threadId: string, cursor: string | null = null) {
+  return readThreadProjection<UiSubagent>('/codex-api/thread-collaboration', { threadId, ...(cursor ? { cursor } : {}) })
+}
+
+export async function getThreadResourceSource(threadId: string, turnId: string, itemId: string): Promise<UiMessage[]> {
+  return (await readThreadProjection<UiMessage>('/codex-api/thread-resource-source', { threadId, turnId, itemId })).data
 }
 
 export async function configureTelegramBot(

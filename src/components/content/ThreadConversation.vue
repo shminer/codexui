@@ -1,6 +1,9 @@
 <template>
   <section class="conversation-root" @contextmenu.capture="onConversationContextMenu">
-    <ThreadSearchPanel v-if="activeThreadId && !readonly" :thread-id="activeThreadId" :messages="messages" @locate="onSearchLocate" @clear="clearSearchTarget" />
+    <div v-if="activeThreadId && !readonly" class="thread-conversation-tools">
+      <ThreadSearchPanel :thread-id="activeThreadId" :messages="messages" @locate="onSearchLocate" @clear="clearSearchTarget" />
+      <ThreadResourcesPanel :thread-id="activeThreadId" :cwd="cwd" :messages="messages" @reference="emit('referenceResource', $event)" @locate="onSearchLocate" />
+    </div>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
@@ -979,6 +982,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { updateThreadFileChanges } from '../../api/codexGateway'
+import { findNextMarkdownLink, getBasename, normalizePathDots, normalizePathSeparators, parseFileReference, parseMarkdownLinkToken, resolveRelativePath, trimLinkWrappers } from '../../fileReferences'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard } from '../../utils/clipboard'
@@ -994,6 +998,8 @@ import type { ListItem, MessageBlock, TableAlignment, TaskListItem } from './mes
 import CopyableOutputBlock from './CopyableOutputBlock.vue'
 import MessageBlockRenderer from './MessageBlockRenderer.vue'
 import ThreadSearchPanel from './ThreadSearchPanel.vue'
+import ThreadResourcesPanel from './ThreadResourcesPanel.vue'
+import type { UiThreadResource } from '../../threadResources'
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
@@ -1395,6 +1401,7 @@ const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]
   editMessage: [text: string]
   implementPlan: [payload: { turnId: string }]
+  referenceResource: [resource: UiThreadResource]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
 }>()
 
@@ -1547,159 +1554,6 @@ type DiffViewerLine = {
   text: string
 }
 
-function isFilePath(value: string): boolean {
-  if (!value || /[\r\n]/u.test(value)) return false
-  if (value.endsWith('/') || value.endsWith('\\')) return false
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(value)) return false
-
-  const looksLikeUnixAbsolute = value.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(value)
-  const looksLikeRelative = value.startsWith('./') || value.startsWith('../') || value.startsWith('~/')
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute || looksLikeRelative) return true
-
-  const looksLikeBareFilename = /^[A-Za-z0-9._@() -]+\.[A-Za-z0-9]{1,12}$/u.test(value)
-  if (looksLikeBareFilename) return true
-
-  // Bare relative paths should look like actual path segments, not arbitrary prose containing "/".
-  return /^[A-Za-z0-9._@() -]+(?:[\\/][A-Za-z0-9._@() -]+)+$/u.test(value)
-}
-
-function getBasename(pathValue: string): string {
-  const normalized = pathValue.replace(/\\/gu, '/')
-  const name = normalized.split('/').filter(Boolean).pop()
-  return name || pathValue
-}
-
-function normalizePathSeparators(pathValue: string): string {
-  return pathValue.replace(/\\/gu, '/')
-}
-
-function normalizeFileUrlToPath(pathValue: string): string {
-  if (!pathValue.startsWith('file://')) return pathValue
-  let stripped = pathValue.replace(/^file:\/\//u, '')
-  try {
-    stripped = decodeURIComponent(stripped)
-  } catch {
-    // Keep best-effort path if decoding fails.
-  }
-  if (/^\/[A-Za-z]:\//u.test(stripped)) {
-    stripped = stripped.slice(1)
-  }
-  return stripped
-}
-
-function inferHomeFromCwd(cwd: string): string {
-  const normalized = normalizePathSeparators(cwd)
-  const userMatch = normalized.match(/^\/Users\/([^/]+)/u)
-  if (userMatch) return `/Users/${userMatch[1]}`
-  const homeMatch = normalized.match(/^\/home\/([^/]+)/u)
-  if (homeMatch) return `/home/${homeMatch[1]}`
-  return ''
-}
-
-function normalizePathDots(pathValue: string): string {
-  const normalized = normalizePathSeparators(pathValue)
-  if (!normalized) return normalized
-
-  let root = ''
-  let rest = normalized
-  const driveMatch = rest.match(/^([A-Za-z]:)(\/.*)?$/u)
-  if (driveMatch) {
-    root = `${driveMatch[1]}/`
-    rest = (driveMatch[2] ?? '').replace(/^\/+/u, '')
-  } else if (rest.startsWith('/')) {
-    root = '/'
-    rest = rest.slice(1)
-  }
-
-  const parts = rest.split('/').filter(Boolean)
-  const stack: string[] = []
-  for (const part of parts) {
-    if (part === '.') continue
-    if (part === '..') {
-      if (stack.length > 0) stack.pop()
-      continue
-    }
-    stack.push(part)
-  }
-
-  const joined = stack.join('/')
-  if (root) return `${root}${joined}`.replace(/\/+$/u, '') || root
-  return joined || normalized
-}
-
-function resolveRelativePath(pathValue: string, cwd: string): string {
-  const normalizedPath = normalizePathSeparators(normalizeFileUrlToPath(pathValue.trim()))
-  if (!normalizedPath) return ''
-
-  const looksLikeAbsolute = normalizedPath.startsWith('/') || /^[A-Za-z]:\//u.test(normalizedPath)
-  if (looksLikeAbsolute) return normalizePathDots(normalizedPath)
-
-  if (normalizedPath.startsWith('~/')) {
-    const homeBase = inferHomeFromCwd(cwd)
-    if (homeBase) {
-      return normalizePathDots(`${homeBase}/${normalizedPath.slice(2)}`)
-    }
-  }
-
-  const base = normalizePathSeparators(cwd.trim())
-  if (!base) return normalizePathDots(normalizedPath)
-  return normalizePathDots(`${base.replace(/\/+$/u, '')}/${normalizedPath}`)
-}
-
-function parseFileReference(value: string): { path: string; line: number | null } | null {
-  if (!value) return null
-
-  let pathValue = value.trim()
-  const wrapped = trimLinkWrappers(pathValue)
-  pathValue = wrapped.core.trim()
-  let line: number | null = null
-
-  const hashLineMatch = pathValue.match(/^(.*)#L(\d+)(?:C\d+)?$/u)
-  if (hashLineMatch) {
-    pathValue = hashLineMatch[1]
-    line = Number(hashLineMatch[2])
-  } else {
-    const colonLineMatch = pathValue.match(/^(.*):(\d+)(?::\d+)?$/u)
-    if (colonLineMatch) {
-      pathValue = colonLineMatch[1]
-      line = Number(colonLineMatch[2])
-    }
-  }
-
-  pathValue = normalizeFileUrlToPath(pathValue)
-  if (!isFilePath(pathValue)) return null
-  return { path: pathValue, line }
-}
-
-function trimLinkWrappers(value: string): { core: string; leading: string; trailing: string } {
-  let core = value
-  let leading = ''
-  let trailing = ''
-
-  const wrapperPairs: Record<string, string> = {
-    '(': ')',
-    '[': ']',
-    '{': '}',
-    '<': '>',
-    '"': '"',
-    '\'': '\'',
-    '`': '`',
-    '“': '”',
-    '‘': '’',
-  }
-
-  while (core.length > 0) {
-    const opening = core[0]
-    const closing = Object.prototype.hasOwnProperty.call(wrapperPairs, opening) ? wrapperPairs[opening] : ''
-    if (!closing || !core.endsWith(closing)) break
-    leading += opening
-    trailing += closing
-    core = core.slice(1, -1)
-  }
-
-  return { core, leading, trailing }
-}
 
 function countAsterisksBefore(value: string, endIndex: number, minIndex: number): number {
   let count = 0
@@ -1752,20 +1606,6 @@ function readAsteriskLinkWrapper(
   return null
 }
 
-function parseMarkdownLinkToken(value: string): { label: string; target: string } | null {
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('[') || !trimmed.endsWith(')')) return null
-  const labelCloseIndex = trimmed.indexOf(']')
-  if (labelCloseIndex <= 1) return null
-  if (trimmed[labelCloseIndex + 1] !== '(') return null
-  const labelRaw = trimmed.slice(1, labelCloseIndex).trim()
-  const targetRaw = trimmed.slice(labelCloseIndex + 2, -1).trim()
-  if (labelRaw.includes('\n') || targetRaw.includes('\n')) return null
-  const label = trimLinkWrappers(labelRaw).core.trim() || labelRaw
-  const target = trimLinkWrappers(targetRaw).core.trim()
-  if (!target) return null
-  return { label, target }
-}
 
 function toLocalThreadUrl(value: string): string | null {
   const match = value.trim().match(/^codex:\/\/threads\/([A-Za-z0-9-]+)$/u)
@@ -2061,11 +1901,20 @@ const hiddenFileChangeMessageIds = computed(() => {
   return next
 })
 
-const renderableMessages = computed(() => filterRenderableThreadMessages(
-  [...searchTurnMessages.value.filter((message) => !props.messages.some((existing) => existing.id === message.id)), ...props.messages],
-  hiddenGroupedCommandIds.value,
-  hiddenFileChangeMessageIds.value,
-))
+const renderableMessages = computed(() => {
+  let messages = props.messages
+  if (searchTurnMessages.value.length) {
+    const persistedIds = new Set(messages.map((message) => message.id))
+    messages = [...searchTurnMessages.value.filter((message) => !persistedIds.has(message.id)), ...messages]
+  }
+  const hiddenCommands = searchTargetId.value ? new Set(hiddenGroupedCommandIds.value) : hiddenGroupedCommandIds.value
+  const hiddenChanges = searchTargetId.value ? new Set(hiddenFileChangeMessageIds.value) : hiddenFileChangeMessageIds.value
+  if (searchTargetId.value) {
+    hiddenCommands.delete(searchTargetId.value)
+    hiddenChanges.delete(searchTargetId.value)
+  }
+  return filterRenderableThreadMessages(messages, hiddenCommands, hiddenChanges)
+})
 const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderWindowStart.value,
   renderableMessages.value.length,
@@ -2085,7 +1934,10 @@ function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummar
 }
 
 function readStandaloneFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
-  return standaloneFileChangeSummaryByMessageId.value[message.id] ?? null
+  const summary = standaloneFileChangeSummaryByMessageId.value[message.id]
+  if (summary) return summary
+  if (message.id !== searchTargetId.value || !isFileChangeMessage(message)) return null
+  return { changes: message.fileChanges ?? [], sourceMessageIds: [message.id], source: 'metadata', turnId: message.turnId ?? '' }
 }
 
 function fileChangeActionKey(summary: TurnFileChangeSummary | null): string {
@@ -2616,50 +2468,6 @@ function splitTextByFileUrls(
   let cursor = 0
   let scanFrom = 0
 
-  const findNextMarkdownLink = (
-    source: string,
-    fromIndex: number,
-  ): { start: number; end: number; token: string } | null => {
-    let linkStart = source.indexOf('[', fromIndex)
-    while (linkStart >= 0) {
-      const labelEnd = source.indexOf(']', linkStart + 1)
-      if (labelEnd < 0) return null
-      if (source[labelEnd + 1] !== '(') {
-        linkStart = source.indexOf('[', linkStart + 1)
-        continue
-      }
-
-      let depth = 1
-      let index = labelEnd + 2
-      let hasNewLine = false
-      while (index < source.length) {
-        const char = source[index]
-        if (char === '\n') {
-          hasNewLine = true
-          break
-        }
-        if (char === '(') depth += 1
-        if (char === ')') {
-          depth -= 1
-          if (depth === 0) {
-            const token = source.slice(linkStart, index + 1)
-            if (parseMarkdownLinkToken(token)) {
-              return { start: linkStart, end: index + 1, token }
-            }
-            break
-          }
-        }
-        index += 1
-      }
-
-      if (hasNewLine) {
-        linkStart = source.indexOf('[', linkStart + 1)
-        continue
-      }
-      linkStart = source.indexOf('[', linkStart + 1)
-    }
-    return null
-  }
 
   while (scanFrom < text.length) {
     const match = findNextMarkdownLink(text, scanFrom)
@@ -4279,6 +4087,7 @@ function onPendingImageSettled(): void {
 }
 
 function jumpToLatest(): void {
+  searchTurnMessages.value = []
   searchWindowEnd.value = undefined
   searchTargetId.value = ''
   autoFollowOutput.value = true
@@ -4296,13 +4105,16 @@ function clearSearchTarget(): void {
 }
 
 async function locateMessage(itemId: string): Promise<void> {
-  const index = renderableMessages.value.findIndex((message) => message.id === itemId)
-  if (index < 0) return
-  autoFollowOutput.value = false
+  const threadId = props.activeThreadId
+  const previousTarget = searchTargetId.value
   searchTargetId.value = itemId
+  const index = renderableMessages.value.findIndex((message) => message.id === itemId)
+  if (index < 0) { searchTargetId.value = previousTarget; return }
+  autoFollowOutput.value = false
   renderWindowStart.value = Math.max(0, index - 5)
   searchWindowEnd.value = renderWindowStart.value + 50
   await nextTick()
+  if (threadId !== props.activeThreadId) return
   conversationListRef.value?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(itemId)}"]`)?.scrollIntoView({ block: 'center' })
 }
 

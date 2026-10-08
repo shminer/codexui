@@ -36,3 +36,5 @@ Return to the [manual test index](../../tests.md).
 | [Missing thread route errors render in chat](missing-thread-route-errors-render-in-chat.md) |
 | [Non-thread startup selection priming](non-thread-startup-selection-priming.md) |
 | [Direct subagent panel and reasoning summaries](direct-subagent-panel-and-reasoning-summaries.md) |
+| [Native thread and in-thread search](native-thread-search.md) |
+| [Current thread resources](current-thread-resources.md) |
