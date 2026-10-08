@@ -273,9 +273,12 @@ export default defineConfig({
         server.middlewares.use(async (req, res, next) => {
           if (!req.url || (req.method !== "GET" && req.method !== "HEAD")) return next();
           const url = new URL(req.url, "http://localhost");
-          if (!url.pathname.startsWith("/codex-local-browse/")) return next();
+          if (url.pathname !== "/codex-local-open" && !url.pathname.startsWith("/codex-local-browse/")) return next();
 
-          const localPath = decodeBrowsePath(url.pathname.slice("/codex-local-browse".length));
+          const openingFile = url.pathname === "/codex-local-open";
+          const localPath = openingFile
+            ? normalizeLocalPath(url.searchParams.get("path") ?? "")
+            : decodeBrowsePath(url.pathname.slice("/codex-local-browse".length));
           const newProjectName = url.searchParams.get("newProjectName") ?? "";
           if (!localPath || !isAbsolute(localPath)) {
             res.statusCode = 400;
@@ -287,6 +290,25 @@ export default defineConfig({
           try {
             const fileStat = await stat(localPath);
             res.setHeader("Cache-Control", "private, no-store");
+            if (openingFile) {
+              const preview = new Set([".html", ".htm", ".svg", ".pdf", ...Object.keys(IMAGE_CONTENT_TYPES)]);
+              if (fileStat.isFile() && !preview.has(extname(localPath).toLowerCase()) && await isTextEditableFile(localPath)) {
+                if (fileStat.size > 10 * 1024 * 1024) {
+                  res.statusCode = 413;
+                  res.setHeader("Content-Type", "application/json");
+                  res.end(JSON.stringify({ error: "File exceeds the 10 MB editor limit." }));
+                  return;
+                }
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "text/html; charset=utf-8");
+                res.end(await createTextEditorHtml(localPath));
+                return;
+              }
+              res.statusCode = 302;
+              res.setHeader("Location", `/codex-local-browse${localPath.split("/").map(encodeURIComponent).join("/")}`);
+              res.end();
+              return;
+            }
             if (fileStat.isDirectory()) {
               const html = await createDirectoryListingHtml(localPath, { newProjectName });
               res.statusCode = 200;

@@ -2,14 +2,14 @@
 
 #### Prerequisites/Setup
 - Existing local server; disposable C/C++, Markdown, HTML with relative CSS, image and binary files under an allowed root.
-- Include a filename with spaces, Chinese characters, `#`, `%` and `?`; check both editable and safe read-only modes.
+- Include a filename with spaces, Chinese characters, `#`, `%`, the literal sequence `%20` and `?`; check both editable and safe read-only modes.
 
 #### Steps
 1. In TestChat send a unique marker and links to the files, then click each real message link and directory filename.
 2. Confirm source/Markdown opens in the editor, C/C++ has syntax highlighting, and Raw opens the unchanged file.
 3. Save a disposable edit in writable mode; refresh and confirm persistence. In read-only mode confirm Save is disabled and direct PUT remains rejected.
 4. Confirm HTML relative assets and image preview still work. Try an out-of-root path and a source file larger than 10 MB.
-5. Repeat in light and dark themes. Record TestChat `hrefOk`, `titleOk`, `textOk` and screenshot evidence.
+5. Repeat in light and dark themes, including an app preference opposite to the OS theme. Keep the editor tab open, change the app preference in the main tab, and confirm both editor chrome and code theme update. Record TestChat `hrefOk`, `titleOk`, `textOk` and screenshot evidence.
 
 #### Expected Results
 - Text opens in the editor; preview/raw routes preserve HTML assets. Special characters identify the correct file.

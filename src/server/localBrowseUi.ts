@@ -78,8 +78,8 @@ export function normalizeLocalPath(rawPath: string): string {
   return trimmed
 }
 
+// Only raw URL pathnames need decoding; Express route parameters are already decoded.
 export function decodeBrowsePath(rawPath: string): string {
-  if (!rawPath) return ''
   try {
     return decodeURIComponent(rawPath)
   } catch {
@@ -394,13 +394,11 @@ export async function createTextEditorHtml(localPath: string, options: { readOnl
     .ace_marker-layer .ace_selection { background: rgba(140, 194, 255, 0.3) !important; }
     .meta { opacity: 0.9; font-size: 12px; overflow-wrap: anywhere; }
     button:disabled { opacity: .5; cursor: default; }
-    @media (prefers-color-scheme: light) {
-      body, .toolbar { background: #fff; color: #222; }
-      button, a { background: #f5f5f5; color: #222; border-color: #ccc; }
-      #status { color: #176b48; }
-      .ace_editor, .ace_gutter { background: #fff !important; color: #222 !important; }
-      .ace_marker-layer .ace_active-line { background: #f0f0f0 !important; }
-    }
+    :root.light body, :root.light .toolbar { background: #fff; color: #222; }
+    :root.light button, :root.light a { background: #f5f5f5; color: #222; border-color: #ccc; }
+    :root.light #status { color: #176b48; }
+    :root.light .ace_editor, :root.light .ace_gutter { background: #fff !important; color: #222 !important; }
+    :root.light .ace_marker-layer .ace_active-line { background: #f0f0f0 !important; }
   </style>
 </head>
 <body>
@@ -421,9 +419,16 @@ export async function createTextEditorHtml(localPath: string, options: { readOnl
     const editor = ace.edit('editor');
     editor.setReadOnly(${options.readOnly === true});
     const theme = matchMedia('(prefers-color-scheme: dark)');
-    function applyTheme() { editor.setTheme(theme.matches ? 'ace/theme/tomorrow_night' : 'ace/theme/textmate'); }
+    function applyTheme() {
+      let preference = 'system';
+      try { preference = localStorage.getItem('codex-web-local.dark-mode.v1') || 'system'; } catch {}
+      const dark = preference === 'dark' || (preference !== 'light' && theme.matches);
+      document.documentElement.classList.toggle('light', !dark);
+      editor.setTheme(dark ? 'ace/theme/tomorrow_night' : 'ace/theme/textmate');
+    }
     applyTheme();
     theme.addEventListener('change', applyTheme);
+    window.addEventListener('storage', applyTheme);
     editor.session.setMode('ace/mode/${escapeHtml(language)}');
     editor.setValue(${safeContentLiteral}, -1);
     editor.setOptions({
