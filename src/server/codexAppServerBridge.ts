@@ -7236,6 +7236,8 @@ export function filterClientRpcMethodsForPlatform(methods: string[], platform: N
 class MethodCatalog {
   private methodCache: string[] | null = null
   private notificationCache: string[] | null = null
+  private loading: Promise<void> | null = null
+  private commandKey = ''
 
   private async runGenerateSchemaCommand(outDir: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
@@ -7245,7 +7247,7 @@ class MethodCatalog {
         return
       }
 
-      const invocation = getSpawnInvocation(codexResolution.command, ['app-server', 'generate-json-schema', '--out', outDir])
+      const invocation = getSpawnInvocation(codexResolution.command, ['app-server', 'generate-json-schema', '--experimental', '--out', outDir])
       const process = spawn(invocation.command, invocation.args, {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: getCodexSpawnEnv(codexResolution),
@@ -7313,38 +7315,38 @@ class MethodCatalog {
     return Array.from(methods).sort((a, b) => a.localeCompare(b))
   }
 
-  async listMethods(): Promise<string[]> {
-    if (this.methodCache) {
-      return this.methodCache
+  private async load(): Promise<void> {
+    const key = JSON.stringify(resolveCodexCommandResolution()?.command) ?? ''
+    if (key !== this.commandKey) {
+      if (this.loading) await this.loading
+      this.commandKey = key
+      this.methodCache = null
+      this.notificationCache = null
     }
+    if (this.methodCache && this.notificationCache) return
+    if (!this.loading) {
+      this.loading = (async () => {
+        const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
+        try {
+          await this.runGenerateSchemaCommand(outDir)
+          this.methodCache = this.extractMethodsFromClientRequest(JSON.parse(await readFile(join(outDir, 'ClientRequest.json'), 'utf8')))
+          this.notificationCache = this.extractMethodsFromServerNotification(JSON.parse(await readFile(join(outDir, 'ServerNotification.json'), 'utf8')))
+        } finally {
+          await rm(outDir, { recursive: true, force: true })
+        }
+      })().finally(() => { this.loading = null })
+    }
+    await this.loading
+  }
 
-    const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
-    await this.runGenerateSchemaCommand(outDir)
-
-    const clientRequestPath = join(outDir, 'ClientRequest.json')
-    const raw = await readFile(clientRequestPath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    const methods = this.extractMethodsFromClientRequest(parsed)
-
-    this.methodCache = methods
-    return methods
+  async listMethods(): Promise<string[]> {
+    await this.load()
+    return this.methodCache!
   }
 
   async listNotificationMethods(): Promise<string[]> {
-    if (this.notificationCache) {
-      return this.notificationCache
-    }
-
-    const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
-    await this.runGenerateSchemaCommand(outDir)
-
-    const serverNotificationPath = join(outDir, 'ServerNotification.json')
-    const raw = await readFile(serverNotificationPath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    const methods = this.extractMethodsFromServerNotification(parsed)
-
-    this.notificationCache = methods
-    return methods
+    await this.load()
+    return this.notificationCache!
   }
 }
 
@@ -7363,7 +7365,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v2'
+const SHARED_BRIDGE_VERSION = 'experimental-search-v3'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
