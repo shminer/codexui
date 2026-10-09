@@ -23,7 +23,7 @@ import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 
-const props = defineProps<{ threadId: string; message: UiMessage; condensed?: boolean; recoverableHistory?: boolean; historySource?: ThreadHistorySource }>()
+const props = withDefaults(defineProps<{ threadId: string; message: UiMessage; condensed?: boolean; recoverableHistory?: boolean; historySource?: ThreadHistorySource }>(), { recoverableHistory: true })
 const detail = ref<Awaited<ReturnType<typeof getThreadCommandOutputPage>> | null>(null)
 const loading = ref(false)
 const copying = ref(false)

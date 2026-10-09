@@ -1415,7 +1415,7 @@ function getCommandsForWorked(messages: UiMessage[], workedIndex: number): UiMes
   return result.reverse()
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   messages: UiMessage[]
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
@@ -1433,7 +1433,7 @@ const props = defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
-}>()
+}>(), { recoverableHistory: true })
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]

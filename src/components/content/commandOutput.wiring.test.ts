@@ -1,7 +1,14 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { compileScript, parse } from 'vue/compiler-sfc'
 
 describe('command output detail lifetime', () => {
+  it.each(['ThreadConversation.vue', 'CommandOutput.vue'])('enables source recovery when %s callers omit the boolean prop', async (filename) => {
+    const source = await readFile(new URL(`./${filename}`, import.meta.url), 'utf8')
+    const { descriptor } = parse(source, { filename })
+    const compiled = compileScript(descriptor, { id: 'history-default' })
+    expect(compiled.content).toContain('recoverableHistory: { type: Boolean, required: false, default: true }')
+  })
   it('renders bounded previews and replaces one detail page instead of accumulating pages', async () => {
     const source = await readFile(new URL('./CommandOutput.vue', import.meta.url), 'utf8')
     expect(source).toContain('limitCommandExecutionOutput(props.message.commandExecution)')

@@ -11,7 +11,8 @@ describe('ThreadConversation edit-message in-progress wiring', () => {
 
     expect(conversationSource).toContain('canEditMessage?: boolean')
     expect(conversationSource).toContain("return (props.canEditMessage ?? !props.readonly) && message.role === 'user' && message.text.trim().length > 0")
-    expect(conversationSource).toContain("emit('editMessage', message.text)")
+    expect(conversationSource).toContain('const full = await readCompleteMessage(message)')
+    expect(conversationSource).toContain("emit('editMessage', full.text)")
     expect(conversationUsage).toContain(':can-edit-message="!selectedThreadPendingRequest"')
     expect(conversationUsage).toContain('@edit-message="onEditMessage"')
     expect(conversationUsage).not.toContain(':is-turn-in-progress=')
