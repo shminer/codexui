@@ -8,7 +8,8 @@ export function isCopyableUserMessage(message: UiMessage): boolean {
 
 export function createMessageCopyController(options: {
   getThreadId: () => string
-  getResponseText: (messageId: string) => string | undefined
+  getResponseText: (messageId: string) => string | undefined | Promise<string | undefined>
+  hasResponseText?: (messageId: string) => boolean
 }) {
   const expandedUserMessageId = ref('')
   const copiedMessageId = ref('')
@@ -29,14 +30,21 @@ export function createMessageCopyController(options: {
 
   function showCopyMessageButton(message: UiMessage): boolean {
     if (message.role === 'user') return isCopyableUserMessage(message) && expandedUserMessageId.value === message.id
+    if (options.hasResponseText) return options.hasResponseText(message.id)
     return typeof options.getResponseText(message.id) === 'string'
   }
 
   async function copyMessage(message: UiMessage): Promise<void> {
-    const content = message.role === 'user' ? message.text : options.getResponseText(message.id) ?? ''
-    if (!content) return
     const threadIdAtStart = options.getThreadId()
     const generationAtStart = ++copyGeneration
+    let content: string
+    try {
+      const requested = message.role === 'user' ? message.text : options.getResponseText(message.id)
+      content = (typeof requested === 'string' ? requested : await requested) ?? ''
+    } catch {
+      return
+    }
+    if (!content || generationAtStart !== copyGeneration || options.getThreadId() !== threadIdAtStart) return
     if (message.role === 'user') copiedMessageId.value = ''
 
     let copied = false

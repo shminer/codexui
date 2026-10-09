@@ -28,6 +28,8 @@ const gatewayMocks = vi.hoisted(() => ({
   getThreadSummary: vi.fn(),
   getRecentThreadDetail: vi.fn(),
   getOlderThreadMessages: vi.fn(),
+  getNewerThreadMessages: vi.fn(),
+  getLatestThreadMessages: vi.fn(),
   getThreadGroupsPage: vi.fn(),
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
@@ -182,6 +184,7 @@ afterEach(() => {
     cleanup()
   }
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('recent thread preview', () => {
@@ -480,7 +483,7 @@ describe('turn token throughput', () => {
   })
 
   it('restores completed summaries for earlier turns after reload', async () => {
-    const { emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     emit(tokenUsageNotification('thread-1', 'previous-turn', 1_000, 100))
     emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
     emit({
@@ -502,6 +505,7 @@ describe('turn token throughput', () => {
       params: { threadId: 'thread-1', durationMs: 5_000, turn: { id: 'turn-2', status: 'completed' } },
     })
 
+    state.stopPolling()
     expect(window.localStorage.getItem('codex-web-local.turn-summaries.v1')).toContain('turn-1')
     gatewayMocks.resumeThread.mockResolvedValueOnce({
       messages: [
@@ -3762,5 +3766,331 @@ describe('side memory event races', () => {
     finish({ inProgress: true })
     await load
     expect(state.isSideConversationInProgress.value).toBe(false)
+  })
+})
+
+describe('bounded thread working sets', () => {
+  function page(start: number, count: number, hasMoreNewer = false) {
+    const messages = Array.from({ length: count }, (_, offset) => ({
+      id: `message-${start + offset}`, role: 'user' as const, text: `Question ${start + offset}`,
+      turnId: `turn-${start + offset}`, turnIndex: start + offset,
+    }))
+    return {
+      messages, startTurnIndex: start, nextTurnIndex: start + count,
+      inProgress: false, activeTurnId: '', hasMoreOlder: start > 0, hasMoreNewer,
+      turnIndexByTurnId: Object.fromEntries(messages.map((message) => [message.turnId, message.turnIndex])),
+    }
+  }
+
+  beforeEach(() => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({ messages: [], historyExcluded: true, turnIndexByTurnId: {}, subagents: [] })
+    gatewayMocks.getThreadDetail.mockResolvedValue({ ...page(20, 10), model: '', modelProvider: '', subagents: [] })
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(page(20, 20))
+  })
+
+  it('retains only twenty complete turns across long sequences of silent refreshes', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    for (let start = 30; start <= 300; start += 10) {
+      gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(start, 10), model: '', modelProvider: '', subagents: [] })
+      await state.loadMessages('bounded', { silent: true, force: true })
+    }
+    expect(state.messages.value).toHaveLength(20)
+    expect(state.messages.value[0].turnIndex).toBe(290)
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(309)
+    expect(state.hasMoreOlderMessages.value).toBe(true)
+    state.stopPolling()
+  })
+
+  it('slides both directions without accumulating history and replaces it when returning to latest', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(0, 10))
+    await state.loadOlderMessages()
+    expect(state.messages.value.map((message) => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index))
+    expect(state.hasMoreNewerMessages.value).toBe(true)
+
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(30, 10), model: '', modelProvider: '', subagents: [] })
+    await state.loadMessages('bounded', { silent: true, force: true })
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(19)
+
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(20, 10, true))
+    await state.loadNewerMessages()
+    expect(gatewayMocks.getNewerThreadMessages).toHaveBeenCalledWith('bounded', 'turn-19')
+    expect(state.messages.value[0].turnIndex).toBe(10)
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(29)
+    await state.loadLatestMessages()
+    expect(state.messages.value[0].turnIndex).toBe(20)
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(39)
+    expect(state.hasMoreNewerMessages.value).toBe(false)
+    state.stopPolling()
+  })
+
+  it('reloads evicted inactive bodies instead of treating an empty cache as loaded', async () => {
+    const state = useDesktopState()
+    for (let index = 0; index < 5; index += 1) {
+      state.primeSelectedThread(`thread-${index}`)
+      await state.loadMessages(`thread-${index}`)
+    }
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(5)
+    state.primeSelectedThread('thread-0')
+    await state.ensureThreadMessagesLoaded('thread-0')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(6)
+    expect(state.messages.value).toHaveLength(10)
+    state.stopPolling()
+  })
+
+  it('invalidates an oversized inactive result before the load marks its empty body loaded', async () => {
+    const state = useDesktopState()
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    state.primeSelectedThread('oversized')
+    const loading = state.loadMessages('oversized')
+    await flushMicrotasks()
+    state.primeSelectedThread('other')
+    const oversized = page(0, 1)
+    oversized.messages[0].text = 'x'.repeat(512 * 1024)
+    finish({ ...oversized, model: '', modelProvider: '', subagents: [] })
+    await loading
+    state.primeSelectedThread('oversized')
+    await state.ensureThreadMessagesLoaded('oversized')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(2)
+    expect(state.messages.value).toHaveLength(10)
+    state.stopPolling()
+  })
+
+  it('waits out an evicted in-flight request and reloads the selected thread once', async () => {
+    const state = useDesktopState()
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    state.primeSelectedThread('old')
+    const oldLoad = state.loadMessages('old')
+    await flushMicrotasks()
+    for (let index = 0; index < 4; index += 1) {
+      state.primeSelectedThread(`thread-${index}`)
+      await state.loadMessages(`thread-${index}`)
+    }
+    state.primeSelectedThread('old')
+    const restoring = state.loadMessages('old')
+    finish({ ...page(0, 1), model: '', modelProvider: '', subagents: [] })
+    await oldLoad
+    await restoring
+    expect(state.messages.value).toHaveLength(10)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(6)
+    state.stopPolling()
+  })
+
+  it('keeps the old reading window when latest hydration fails', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new Error('offline'))
+    await expect(state.loadLatestMessages()).rejects.toThrow('offline')
+    expect(state.messages.value[0].turnIndex).toBe(10)
+    expect(state.isLoadingNewerMessages.value).toBe(false)
+    state.stopPolling()
+  })
+
+  it('batches live command deltas while keeping a bounded tail and flushes completion immediately', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    vi.useFakeTimers()
+    const params = { threadId: 'thread-1', turnId: 'turn-1' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-1' } } })
+    emit({ method: 'item/started', params: { ...params, item: { id: 'cmd', type: 'commandExecution', command: 'long command' } } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: 'x'.repeat(100_000) } })
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput).toBe('')
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution).toMatchObject({
+      aggregatedOutput: 'x'.repeat(65_536), outputOffset: 34_464, outputTotalLength: 100_000, outputTruncated: true,
+    })
+    for (let index = 0; index < 10; index += 1) {
+      emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: 'y' } })
+    }
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.outputTotalLength).toBe(100_000)
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution).toMatchObject({
+      outputOffset: 34_474, outputTotalLength: 100_010,
+    })
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput.endsWith('y'.repeat(10))).toBe(true)
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: 'z'.repeat(200_000) } })
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution).toMatchObject({
+      aggregatedOutput: 'z'.repeat(65_536), outputOffset: 234_474, outputTotalLength: 300_010,
+    })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: 'tail' } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'cmd', type: 'commandExecution', command: 'long command', aggregatedOutput: `${'x'.repeat(100_000)}${'y'.repeat(10)}${'z'.repeat(200_000)}tail`, status: 'completed', exitCode: 0 } } })
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput.endsWith('tail')).toBe(true)
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.status).toBe('completed')
+    state.stopPolling()
+  })
+
+  it('advances the live turn watermark even when loaded turns have no renderable messages', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({
+      ...page(50, 10), messages: [], model: '', modelProvider: '', subagents: [],
+    })
+    await state.loadMessages('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'next-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'next-turn' } } })
+    emit({ method: 'item/started', params: { ...params, item: { id: 'next-command', type: 'commandExecution', command: 'pwd' } } })
+    expect(state.messages.value.find(message => message.id === 'next-command')?.turnIndex).toBe(60)
+    state.stopPolling()
+  })
+
+  it('coalesces token persistence and flushes the latest usage on pagehide', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const callbacks = new Map<string, () => void>()
+    window.addEventListener = vi.fn((event: string, handler: EventListenerOrEventListenerObject) => { callbacks.set(event, handler as () => void) }) as typeof window.addEventListener
+    window.removeEventListener = vi.fn()
+    state.stopPolling()
+    state.startPolling()
+    const key = 'codex-web-local.thread-token-usage.v1'
+    emit(tokenUsageNotification('thread-1', 'turn-1', 100, 10))
+    emit(tokenUsageNotification('thread-1', 'turn-1', 200, 20))
+    expect(window.localStorage.getItem(key)).toBeNull()
+    vi.advanceTimersByTime(500)
+    expect(JSON.parse(window.localStorage.getItem(key) ?? '{}')['thread-1'].total.outputTokens).toBe(200)
+    emit(tokenUsageNotification('thread-1', 'turn-1', 300, 30))
+    callbacks.get('pagehide')?.()
+    expect(JSON.parse(window.localStorage.getItem(key) ?? '{}')['thread-1'].total.outputTokens).toBe(300)
+    state.stopPolling()
+  })
+
+  it('advances older cursors through turns with no renderable messages', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({ ...page(10, 10), messages: [] })
+    await state.loadOlderMessages()
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({ ...page(0, 10), messages: [] })
+    await state.loadOlderMessages()
+    expect(gatewayMocks.getOlderThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
+      ['bounded', 'turn-20'], ['bounded', 'turn-10'],
+    ])
+    expect(state.hasMoreOlderMessages.value).toBe(false)
+    expect(state.messages.value).toHaveLength(10)
+    state.stopPolling()
+  })
+
+  it('advances newer cursors through turns with no renderable messages', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(0, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({ ...page(20, 10, true), messages: [] })
+    await state.loadNewerMessages()
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({ ...page(30, 10, true), messages: [] })
+    await state.loadNewerMessages()
+    expect(gatewayMocks.getNewerThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
+      ['bounded', 'turn-19'], ['bounded', 'turn-29'],
+    ])
+    expect(state.messages.value).toHaveLength(20)
+    state.stopPolling()
+  })
+
+  it('does not let an old idle latest response clear a newly started command', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.loadMessages('thread-1')
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const loading = state.loadLatestMessages()
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'new-turn' } } })
+    emit({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'new-turn', item: { id: 'new-command', type: 'commandExecution', command: 'still running' } } })
+    finish(page(20, 10))
+    await loading
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    expect(state.messages.value.find(message => message.id === 'new-command')?.commandExecution?.status).toBe('inProgress')
+    state.stopPolling()
+  })
+
+  it.each(['detail', 'latest'] as const)('flushes pending agent deltas before %s hydration deduplicates them', async (kind) => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.loadMessages('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'turn-30' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-30' } } })
+    let finish: (value: unknown) => void = () => {}
+    const api = kind === 'detail' ? gatewayMocks.getThreadDetail : gatewayMocks.getLatestThreadMessages
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const loading = kind === 'detail' ? state.loadMessages('thread-1', { force: true }) : state.loadLatestMessages()
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: 'partial answer' } })
+    finish({
+      ...page(30, 1), model: '', modelProvider: '', subagents: [], inProgress: true, activeTurnId: 'turn-30',
+      messages: [{ id: 'reply', role: 'assistant', text: 'partial answer', turnId: 'turn-30', turnIndex: 30, messageType: 'agentMessage' }],
+    })
+    await loading
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value.filter(message => message.id === 'reply')).toHaveLength(1)
+    state.stopPolling()
+  })
+
+  it('does not revive pending reasoning after idle hydration or agent output', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.loadMessages('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'turn-30' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-30' } } })
+    emit({ method: 'item/reasoning/summaryTextDelta', params: { ...params, itemId: 'reasoning', delta: 'old reasoning' } })
+    await state.loadMessages('thread-1', { force: true })
+    vi.advanceTimersByTime(50)
+    expect(state.selectedLiveOverlay.value?.reasoningText ?? '').toBe('')
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-30' } } })
+    emit({ method: 'item/reasoning/summaryTextDelta', params: { ...params, itemId: 'reasoning', delta: 'superseded reasoning' } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: 'answer' } })
+    vi.advanceTimersByTime(50)
+    expect(state.selectedLiveOverlay.value?.reasoningText ?? '').toBe('')
+    state.stopPolling()
+  })
+
+  it('keeps a locally pending send running when an earlier idle latest snapshot arrives', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.loadMessages('thread-1')
+    let finishLatest: (value: unknown) => void = () => {}
+    let finishSend: (value: string) => void = () => {}
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise(resolve => { finishLatest = resolve }))
+    gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve }))
+    const loading = state.loadLatestMessages()
+    const sending = state.sendMessageToSelectedThread('new question')
+    await flushMicrotasks()
+    finishLatest(page(20, 10))
+    await loading
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    finishSend('turn-30')
+    await sending
+    state.stopPolling()
+  })
+
+  it('exposes return-to-latest as soon as a new turn starts while reading history', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.loadMessages('thread-1')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    expect(state.hasMoreNewerMessages.value).toBe(false)
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'new-turn' } } })
+    expect(state.hasMoreNewerMessages.value).toBe(true)
+    state.stopPolling()
+  })
+
+  it('selects a verified fork before admitting a turn larger than the inactive cache budget', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    const oversized = page(0, 1)
+    oversized.messages[0].text = 'x'.repeat(512 * 1024)
+    gatewayMocks.forkThread.mockResolvedValueOnce({ threadId: 'large-fork', cwd: '/tmp/project', model: '' })
+    gatewayMocks.renameThread.mockResolvedValueOnce(undefined)
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...oversized, model: '', modelProvider: '', subagents: [] })
+    expect(await state.forkThreadFromTurn('thread-1', 'turn-0')).toBe('large-fork')
+    expect(state.selectedThreadId.value).toBe('large-fork')
+    expect(state.messages.value[0]?.text).toHaveLength(512 * 1024)
+    state.stopPolling()
   })
 })

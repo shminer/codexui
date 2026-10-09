@@ -977,6 +977,10 @@
                       :has-more-persisted-above="hasMoreOlderMessages"
                       :is-loading-persisted-above="isLoadingOlderMessages"
                       :load-earlier-messages="loadOlderMessages"
+                      :has-more-persisted-below="hasMoreNewerMessages"
+                      :is-loading-persisted-below="isLoadingNewerMessages"
+                      :load-later-messages="loadNewerMessages"
+                      :load-latest-messages="loadLatestMessages"
                       @fork-thread="onForkThreadFromMessage"
                       @edit-message="onEditMessage"
                       @implement-plan="onImplementPlan"
@@ -1413,11 +1417,13 @@ const {
   accountRateLimitSnapshots,
   messages,
   hasMoreOlderMessages,
+  hasMoreNewerMessages,
   isLoadingThreads,
   ensureThreadSearchMetadata,
   registerThreadSummary,
   isLoadingMessages,
   isLoadingOlderMessages,
+  isLoadingNewerMessages,
   isSendingMessage,
   isInterruptingTurn,
   isSelectedThreadInterruptPending,
@@ -1428,6 +1434,8 @@ const {
   selectThread,
   ensureThreadMessagesLoaded,
   loadOlderMessages,
+  loadNewerMessages,
+  loadLatestMessages,
   setThreadTerminalOpen,
   toggleSelectedThreadTerminal,
   archiveThreadById,

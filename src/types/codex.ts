@@ -115,6 +115,9 @@ export type CommandExecutionData = {
   cwd: string | null
   status: 'inProgress' | 'completed' | 'failed' | 'declined' | 'interrupted'
   aggregatedOutput: string
+  outputTruncated?: boolean
+  outputOffset?: number
+  outputTotalLength?: number
   exitCode: number | null
 }
 

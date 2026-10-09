@@ -26,6 +26,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { UiMessage } from '../../types/codex'
+import { limitThreadCommandOutputs } from '../../commandOutput'
 import { getThreadResourcePage, getThreadResourceSource } from '../../api/codexGateway'
 import { isNativeHistoryUnsupported } from '../../api/threadSearch'
 import { mergeThreadResources, projectMessageResources, type UiThreadResource } from '../../threadResources'
@@ -104,7 +105,8 @@ async function locate(resource: UiThreadResource): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    const messages = props.messages.some((message) => message.id === resource.itemId) ? [] : await getThreadResourceSource(props.threadId, resource.turnId, resource.itemId)
+    const messages = props.messages.some((message) => message.id === resource.itemId)
+      ? [] : limitThreadCommandOutputs(await getThreadResourceSource(props.threadId, resource.turnId, resource.itemId))
     if (request !== generation) return
     emit('locate', { threadId: props.threadId, itemId: resource.itemId, messages })
     open.value = false

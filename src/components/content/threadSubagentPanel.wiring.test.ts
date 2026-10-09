@@ -44,6 +44,8 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toMatch(/watch\(\s*allAgents,[\s\S]*closeDetail\(\)/u)
     expect(source).toContain('const selectedAgent = computed(() => allAgents.value.find(')
     expect(source).toContain('getThreadCollaborationPage(props.parentThreadId, historyCursor.value)')
+    expect(source).toContain('!loadingOlder.value && !loadingNewer.value && !agentWindowLoading.value')
+    expect(source).toContain('useThreadHistoryWindow(selectedThreadId)')
     expect(source).not.toContain('void selectAgent(threadId)')
     expect(source).toContain('<Teleport to="#thread-subagent-header-target">')
     expect(source).toContain('class="subagent-header-trigger"')

@@ -54,6 +54,7 @@
             :active-thread-id="threadId"
             :cwd="cwd"
             :readonly="true"
+            :recoverable-history="false"
           />
         </div>
 

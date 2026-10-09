@@ -39,6 +39,25 @@ afterEach(() => {
 })
 
 describe('message copy interaction', () => {
+  it('does not read full response text while rendering copy controls', async () => {
+    const getResponseText = vi.fn().mockResolvedValue('Full response')
+    controller = createMessageCopyController({ getThreadId: () => threadId, hasResponseText: () => true, getResponseText })
+    expect(controller.showCopyMessageButton(assistant)).toBe(true)
+    expect(getResponseText).not.toHaveBeenCalled()
+    await controller.copyMessage(assistant)
+    expect(copyTextToClipboard).toHaveBeenCalledWith('Full response')
+  })
+
+  it('discards an asynchronous source read after the thread is reset', async () => {
+    let finish!: (text: string) => void
+    controller = createMessageCopyController({ getThreadId: () => threadId, hasResponseText: () => true, getResponseText: () => new Promise<string>((resolve) => { finish = resolve }) })
+    const pending = controller.copyMessage(assistant)
+    controller.reset()
+    finish('Late full response')
+    await pending
+    expect(copyTextToClipboard).not.toHaveBeenCalled()
+  })
+
   it('opens, closes, and switches the active user message without edit capability', () => {
     const other = { ...user, id: 'user-2' }
     expect(controller.showCopyMessageButton(user)).toBe(false)

@@ -14,7 +14,10 @@ describe('ThreadConversation user message copy', () => {
     expect(source).toContain('.user-message-copy-toggle:focus')
     expect(source).toContain("import { createMessageCopyController, isCopyableUserMessage } from './messageCopyController'")
     expect(source).toContain('getThreadId: () => props.activeThreadId')
-    expect(source).toContain('getResponseText: (messageId) => copyableResponseContentByAnchorId.value[messageId]')
+    expect(source).toContain('hasResponseText: (messageId) => copyableResponseAnchorIds.value.has(messageId)')
+    expect(source).toContain('getResponseText: buildCopyableResponseContent')
+    expect(source).not.toContain('copyableResponseContentByAnchorId')
+    expect(source).toContain("if (summary.source === 'metadata' && summary.changes.length > 0) ids.add(id)")
     expect(source).toContain('@click="copyMessage(message)"')
   })
 

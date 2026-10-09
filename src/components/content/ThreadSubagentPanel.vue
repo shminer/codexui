@@ -109,7 +109,7 @@
               </div>
             </details>
             <p v-if="loadingThreadId === selectedAgent.threadId" class="subagent-detail-loading">Loading agent thread...</p>
-            <p v-if="detailError" class="subagent-detail-error">{{ detailError }} <button type="button" @click="selectAgent(selectedAgent.threadId, true)">Retry</button></p>
+            <p v-if="detailError" class="subagent-detail-error">{{ detailError }} <button type="button" @click="retryAgentWindow">Retry</button></p>
             <ThreadConversation
               v-if="selectedDetail"
               class="subagent-conversation"
@@ -123,6 +123,10 @@
               :has-more-persisted-above="selectedDetail.hasMoreOlder"
               :is-loading-persisted-above="loadingOlder"
               :load-earlier-messages="loadAgentOlderMessages"
+              :has-more-persisted-below="selectedDetail.hasMoreNewer"
+              :is-loading-persisted-below="loadingNewer"
+              :load-later-messages="loadAgentNewerMessages"
+              :load-latest-messages="loadAgentLatestMessages"
             />
           </template>
         </section>
@@ -133,7 +137,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { getOlderThreadMessages, getThreadCollaborationPage, getThreadDetail, type UiSubagent } from '../../api/codexGateway'
+import { getThreadCollaborationPage, type UiSubagent } from '../../api/codexGateway'
+import { useThreadHistoryWindow } from '../../composables/useThreadHistoryWindow'
 import { mergeSubagents } from '../../agentCollaboration'
 import { isNativeHistoryUnsupported } from '../../api/threadSearch'
 import { useMobile } from '../../composables/useMobile'
@@ -182,8 +187,12 @@ const desktopLayoutWidth = ref(typeof window === 'undefined' ? Number.POSITIVE_I
 const desktopPanelCollapsed = ref(loadDesktopPanelCollapsed())
 const selectedThreadId = ref('')
 const loadingThreadId = ref('')
-const detailError = ref('')
-const selectedDetail = ref<Awaited<ReturnType<typeof getThreadDetail>> | null>(null)
+const {
+  detail: selectedDetail, error: detailError, loadingOlder, loadingNewer,
+  loading: agentWindowLoading,
+  loadLatest: loadAgentLatestMessages, loadOlder: loadAgentOlderMessages,
+  loadNewer: loadAgentNewerMessages, reset: resetAgentWindow, retry: retryAgentHistory,
+} = useThreadHistoryWindow(selectedThreadId)
 let detailRequestId = 0
 let historyRequestId = 0
 const historyAgents = ref<UiSubagent[]>([])
@@ -194,7 +203,6 @@ const historyOpened = ref(false)
 const historyLoading = ref(false)
 const historyUnsupported = ref(false)
 const historyError = ref('')
-const loadingOlder = ref(false)
 const agentView = ref<'running' | 'history'>('running')
 let desktopPanelResizeGesture: DesktopPanelResizeGesture | null = null
 let desktopLayoutResizeObserver: ResizeObserver | null = null
@@ -390,9 +398,8 @@ async function selectAgent(threadId: string, force = false): Promise<void> {
   loadingOlder.value = false
   loadingThreadId.value = threadId
   try {
-    const detail = await getThreadDetail(threadId)
+    await loadAgentLatestMessages()
     if (requestId !== detailRequestId || selectedThreadId.value !== threadId) return
-    selectedDetail.value = detail
   } catch (error) {
     if (requestId !== detailRequestId || selectedThreadId.value !== threadId) return
     detailError.value = error instanceof Error ? error.message : 'Failed to load agent thread.'
@@ -403,31 +410,18 @@ async function selectAgent(threadId: string, force = false): Promise<void> {
   }
 }
 
-async function loadAgentOlderMessages(threadId: string): Promise<void> {
-  const detail = selectedDetail.value
-  if (!detail || loadingOlder.value || selectedThreadId.value !== threadId) return
-  const turnId = detail.messages.find((message) => message.turnId)?.turnId
-  if (!turnId) return
-  const request = detailRequestId
-  loadingOlder.value = true
-  try {
-    const page = await getOlderThreadMessages(threadId, turnId)
-    if (request !== detailRequestId || selectedThreadId.value !== threadId || !selectedDetail.value) return
-    const ids = new Set(selectedDetail.value.messages.map((message) => message.id))
-    selectedDetail.value.messages = [...page.messages.filter((message) => !ids.has(message.id)), ...selectedDetail.value.messages]
-    selectedDetail.value.hasMoreOlder = page.hasMoreOlder
-  } catch (failure) {
-    if (request === detailRequestId) detailError.value = failure instanceof Error ? failure.message : 'Failed to load older agent messages'
-  } finally { if (request === detailRequestId) loadingOlder.value = false }
-}
-
 function closeDetail(): void {
   detailRequestId += 1
+  resetAgentWindow()
   selectedThreadId.value = ''
   detailError.value = ''
   loadingThreadId.value = ''
   selectedDetail.value = null
   loadingOlder.value = false
+}
+
+async function retryAgentWindow(): Promise<void> {
+  try { await retryAgentHistory() } catch { /* The history window exposes the error. */ }
 }
 
 watch(
@@ -440,7 +434,9 @@ watch(
 )
 
 watch(() => [selectedAgent.value?.threadId, selectedAgent.value?.status], ([threadId, status], previous) => {
-  if (threadId && threadId === previous?.[0] && status !== previous?.[1] && !isActiveSubagentStatus(status)) void selectAgent(threadId, true)
+  if (threadId && threadId === previous?.[0] && status !== previous?.[1] && !isActiveSubagentStatus(status)
+    && !loadingOlder.value && !loadingNewer.value && !agentWindowLoading.value
+    && !selectedDetail.value?.hasMoreNewer) void selectAgent(threadId, true)
 })
 
 watch(() => props.parentThreadId, () => {

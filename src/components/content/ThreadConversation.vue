@@ -7,7 +7,7 @@
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
-      v-else-if="renderableMessages.length === 0 && pendingRequests.length === 0 && !liveOverlay"
+      v-else-if="renderableMessages.length === 0 && pendingRequests.length === 0 && !liveOverlay && !hasMoreAbove && !hasMoreBelow && !historyLoadError"
       class="conversation-empty"
     >
       No messages in this thread yet.
@@ -65,13 +65,13 @@
               <span class="cmd-status">{{ commandGroupSummaryStatus(message) }}</span>
             </button>
             <div
-              v-if="getGroupedCommandsForLatest(message).length > 0"
+              v-if="getGroupedCommandsForLatest(message).length > 0 && isCommandGroupExpanded(message)"
               class="cmd-group-wrap"
               :class="{ 'cmd-group-visible': isCommandGroupExpanded(message) }"
             >
               <div class="cmd-group-inner">
                 <div
-                  v-for="cmd in getCommandBlockForLatest(message)"
+                  v-for="cmd in getCommandPage(getCommandBlockForLatest(message), message.id)"
                   :key="`grouped-cmd-${cmd.id}`"
                   class="worked-cmd-item"
                 >
@@ -92,21 +92,22 @@
                     <span class="cmd-status">{{ commandStatusLabel(cmd) }}</span>
                   </button>
                   <div
+                    v-if="isCommandExpanded(cmd)"
                     class="cmd-output-wrap"
                     :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
                   >
                     <div class="cmd-output-inner">
-                      <pre
-                        class="cmd-output"
-                        :class="{ 'cmd-output-condensed': isCommandOutputCondensed(cmd) }"
-                        v-text="cmd.commandExecution?.aggregatedOutput || '(no output)'"
-                      ></pre>
+                      <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" />
                     </div>
                   </div>
                 </div>
+                <div v-if="getCommandBlockForLatest(message).length > COMMAND_PAGE_SIZE" class="command-page-tools">
+                  <button type="button" title="Earlier commands" aria-label="Earlier commands" :disabled="commandPageStart(getCommandBlockForLatest(message), message.id) === 0" @click="moveCommandPage(getCommandBlockForLatest(message), message.id, -1)"><IconTablerChevronLeft /></button>
+                  <button type="button" title="Later commands" aria-label="Later commands" :disabled="commandPageStart(getCommandBlockForLatest(message), message.id) + COMMAND_PAGE_SIZE >= getCommandBlockForLatest(message).length" @click="moveCommandPage(getCommandBlockForLatest(message), message.id, 1)"><IconTablerChevronRight /></button>
+                </div>
               </div>
             </div>
-            <template v-else>
+            <template v-if="getGroupedCommandsForLatest(message).length === 0">
               <button
                 type="button"
                 class="cmd-row"
@@ -124,15 +125,12 @@
                 <span class="cmd-status">{{ commandStatusLabel(message) }}</span>
               </button>
               <div
+                v-if="isCommandExpanded(message)"
                 class="cmd-output-wrap"
                 :class="{ 'cmd-output-visible': isCommandExpanded(message) }"
               >
                 <div class="cmd-output-inner">
-                  <pre
-                    class="cmd-output"
-                    :class="{ 'cmd-output-condensed': isCommandOutputCondensed(message) }"
-                    v-text="message.commandExecution?.aggregatedOutput || '(no output)'"
-                  ></pre>
+                  <CommandOutput :thread-id="activeThreadId" :message="message" :condensed="isCommandOutputCondensed(message)" :recoverable-history="recoverableHistory" />
                 </div>
               </div>
             </template>
@@ -325,7 +323,7 @@
                   </button>
                   <div v-if="isWorkedExpanded(message)" class="worked-details">
                     <div
-                      v-for="cmd in getCommandsForWorked(messages, messages.indexOf(message))"
+                      v-for="cmd in getCommandPage(getCommandsForWorked(messages, messages.indexOf(message)), message.id)"
                       :key="`worked-cmd-${cmd.id}`"
                       class="worked-cmd-item"
                     >
@@ -346,17 +344,18 @@
                         <span class="cmd-status">{{ commandStatusLabel(cmd) }}</span>
                       </button>
                       <div
+                        v-if="isCommandExpanded(cmd)"
                         class="cmd-output-wrap"
                         :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
                       >
                         <div class="cmd-output-inner">
-                          <pre
-                            class="cmd-output"
-                            :class="{ 'cmd-output-condensed': isCommandOutputCondensed(cmd) }"
-                            v-text="cmd.commandExecution?.aggregatedOutput || '(no output)'"
-                          ></pre>
+                          <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" />
                         </div>
                       </div>
+                    </div>
+                    <div v-if="getCommandsForWorked(messages, messages.indexOf(message)).length > COMMAND_PAGE_SIZE" class="command-page-tools">
+                      <button type="button" title="Earlier commands" aria-label="Earlier commands" :disabled="commandPageStart(getCommandsForWorked(messages, messages.indexOf(message)), message.id) === 0" @click="moveCommandPage(getCommandsForWorked(messages, messages.indexOf(message)), message.id, -1)"><IconTablerChevronLeft /></button>
+                      <button type="button" title="Later commands" aria-label="Later commands" :disabled="commandPageStart(getCommandsForWorked(messages, messages.indexOf(message)), message.id) + COMMAND_PAGE_SIZE >= getCommandsForWorked(messages, messages.indexOf(message)).length" @click="moveCommandPage(getCommandsForWorked(messages, messages.indexOf(message)), message.id, 1)"><IconTablerChevronRight /></button>
                     </div>
                   </div>
                 </div>
@@ -400,7 +399,7 @@
                   v-else
                   class="message-text-flow"
                   @click="onUserMessageTextClick(message, $event)"
-                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
+                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion, hasStreamingMarkdown]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -811,6 +810,10 @@
         </div>
       </li>
       </template>
+      <li v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more">
+        <button type="button" class="load-more-button" :disabled="isLoadingMore || isLoadingPersistedBelow" @click="loadMoreBelow">{{ isLoadingMore || isLoadingPersistedBelow ? 'Loading…' : 'Load later messages' }}</button>
+      </li>
+      <li v-if="historyLoadError" class="conversation-history-error" role="status">{{ historyLoadError }}</li>
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
     </ul>
 
@@ -820,6 +823,7 @@
       class="jump-to-latest-button"
       title="Jump to latest"
       aria-label="Jump to latest output"
+      :disabled="isLoadingLatest || isLoadingMore"
       @click="jumpToLatest"
     >
       <IconTablerArrowUp class="icon-svg jump-to-latest-icon" />
@@ -988,20 +992,27 @@ import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard } from '../../utils/clipboard'
 import { createMessageCopyController, isCopyableUserMessage } from './messageCopyController'
 import {
+  clampThreadRenderWindow,
   clampThreadRenderWindowStart,
-  earlierThreadRenderWindowStart,
+  earlierThreadRenderWindow,
   filterRenderableThreadMessages,
+  laterThreadRenderWindow,
   latestThreadRenderWindowStart,
+  THREAD_RENDER_HISTORY_LIMIT,
 } from './threadConversationWindow'
+import { BoundedRenderCache } from './boundedRenderCache'
 import type { ListItem, MessageBlock, TableAlignment, TaskListItem } from './messageBlockTypes'
 
 import CopyableOutputBlock from './CopyableOutputBlock.vue'
+import CommandOutput from './CommandOutput.vue'
 import MessageBlockRenderer from './MessageBlockRenderer.vue'
 import ThreadSearchPanel from './ThreadSearchPanel.vue'
 import ThreadResourcesPanel from './ThreadResourcesPanel.vue'
 import type { UiThreadResource } from '../../threadResources'
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
+import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
+import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
@@ -1014,6 +1025,8 @@ const collapsedAutoCommandIds = ref<Set<string>>(new Set())
 const expandedCommandGroupIds = ref<Set<string>>(new Set())
 const expandedWorkedIds = ref<Set<string>>(new Set())
 const expandedFileChangeSummaryIds = ref<Set<string>>(new Set())
+const COMMAND_PAGE_SIZE = 30
+const commandPageStarts = ref<Record<string, number>>({})
 const activeDiffViewerSummary = ref<TurnFileChangeSummary | null>(null)
 const activeDiffViewerChangeKey = ref('')
 const isDiffViewerFileListOpen = ref(false)
@@ -1264,6 +1277,20 @@ function getCommandBlockForLatest(message: UiMessage): UiMessage[] {
   return [...getGroupedCommandsForLatest(message), message]
 }
 
+function commandPageStart(commands: UiMessage[], groupId: string): number {
+  return Math.min(commandPageStarts.value[groupId] ?? Math.max(0, commands.length - COMMAND_PAGE_SIZE), Math.max(0, commands.length - COMMAND_PAGE_SIZE))
+}
+
+function getCommandPage(commands: UiMessage[], groupId: string): UiMessage[] {
+  const start = commandPageStart(commands, groupId)
+  return commands.slice(start, start + COMMAND_PAGE_SIZE)
+}
+
+function moveCommandPage(commands: UiMessage[], groupId: string, direction: number): void {
+  const start = Math.max(0, Math.min(commands.length - COMMAND_PAGE_SIZE, commandPageStart(commands, groupId) + direction * COMMAND_PAGE_SIZE))
+  commandPageStarts.value = { ...commandPageStarts.value, [groupId]: start }
+}
+
 function toggleCommandGroup(message: UiMessage): void {
   const groupedCommands = getGroupedCommandsForLatest(message)
   if (groupedCommands.length === 0) return
@@ -1271,6 +1298,7 @@ function toggleCommandGroup(message: UiMessage): void {
   if (next.has(message.id)) next.delete(message.id)
   else next.add(message.id)
   expandedCommandGroupIds.value = next
+  if (!next.has(message.id)) delete commandPageStarts.value[message.id]
 }
 
 function isCommandGroupExpanded(message: UiMessage): boolean {
@@ -1278,8 +1306,7 @@ function isCommandGroupExpanded(message: UiMessage): boolean {
 }
 
 function commandGroupSummaryLabel(message: UiMessage): string {
-  const commands = getCommandBlockForLatest(message)
-  const count = commands.length
+  const count = getGroupedCommandsForLatest(message).length + 1
   const latestCommand = message.commandExecution?.command?.trim() || '(command)'
   const countLabel = count === 1 ? '1 command' : `${count} commands`
   return `${countLabel} · latest: ${latestCommand}`
@@ -1294,6 +1321,7 @@ function toggleWorkedExpand(message: UiMessage): void {
   if (next.has(message.id)) next.delete(message.id)
   else next.add(message.id)
   expandedWorkedIds.value = next
+  if (!next.has(message.id)) delete commandPageStarts.value[message.id]
 }
 
 function isWorkedExpanded(message: UiMessage): boolean {
@@ -1377,10 +1405,10 @@ function getCommandsForWorked(messages: UiMessage[], workedIndex: number): UiMes
   const result: UiMessage[] = []
   for (let i = workedIndex - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.messageType === 'commandExecution') result.unshift(m)
+    if (m.messageType === 'commandExecution') result.push(m)
     else if (m.role === 'user' || m.messageType === 'worked') break
   }
-  return result
+  return result.reverse()
 }
 
 const props = defineProps<{
@@ -1392,9 +1420,14 @@ const props = defineProps<{
   cwd: string
   readonly?: boolean
   canEditMessage?: boolean
+  recoverableHistory?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
+  hasMorePersistedBelow?: boolean
+  isLoadingPersistedBelow?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
+  loadLaterMessages?: (threadId: string) => Promise<void>
+  loadLatestMessages?: (threadId: string) => Promise<void>
 }>()
 
 const emit = defineEmits<{
@@ -1413,7 +1446,8 @@ const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const messageCopy = createMessageCopyController({
   getThreadId: () => props.activeThreadId,
-  getResponseText: (messageId) => copyableResponseContentByAnchorId.value[messageId],
+  hasResponseText: (messageId) => copyableResponseAnchorIds.value.has(messageId),
+  getResponseText: buildCopyableResponseContent,
 })
 const { expandedUserMessageId, copiedMessageId: copiedResponseAnchorId, toggleUserMessageCopy, onUserMessageTextClick, showCopyMessageButton, copyMessage } = messageCopy
 const fileChangeActionState = ref<Record<string, 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone'>>({})
@@ -1475,10 +1509,10 @@ type MarkdownHtmlCacheEntry = {
   html: string
 }
 
-const messageBlockCache = new Map<string, MessageBlockCacheEntry>()
-const inlineSegmentCache = new Map<string, InlineSegment[]>()
-const markdownHtmlCache = new Map<string, MarkdownHtmlCacheEntry>()
-const highlightHtmlCache = new Map<string, string>()
+const messageBlockCache = new BoundedRenderCache<string, MessageBlockCacheEntry>()
+const inlineSegmentCache = new BoundedRenderCache<string, InlineSegment[]>()
+const markdownHtmlCache = new BoundedRenderCache<string, MarkdownHtmlCacheEntry>()
+const highlightHtmlCache = new BoundedRenderCache<string, string>()
 
 function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: number): V {
   if (cache.has(key)) cache.delete(key)
@@ -1494,10 +1528,43 @@ function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: n
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 200
 
 const renderWindowStart = ref(0)
+const renderWindowEnd = ref<number | undefined>(undefined)
 const isLoadingMore = ref(false)
+const isLoadingLatest = ref(false)
+const historyLoadError = ref('')
+let navigationGeneration = 0
+const streamingSnapshots = ref(new Map<string, UiMessage>())
+const hasStreamingMarkdown = computed(() => props.messages.some((message) => (message.messageType ?? '').endsWith('.live')))
+let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
+let lastStreamRenderAt = 0
+
+function flushStreamingMarkdown(): void {
+  streamRenderTimer = null
+  lastStreamRenderAt = Date.now()
+  streamingSnapshots.value = new Map(props.messages
+    .filter((message) => (message.messageType ?? '').endsWith('.live'))
+    .map((message) => [message.id, { ...message }]))
+}
+
+watch(() => props.messages, () => {
+  if (!hasStreamingMarkdown.value) {
+    if (streamRenderTimer) clearTimeout(streamRenderTimer)
+    streamRenderTimer = null
+    streamingSnapshots.value = new Map()
+    return
+  }
+  if (streamRenderTimer) return
+  const remaining = 100 - (Date.now() - lastStreamRenderAt)
+  if (remaining <= 0) flushStreamingMarkdown()
+  else streamRenderTimer = setTimeout(flushStreamingMarkdown, remaining)
+}, { immediate: true })
+
+const displayMessages = computed(() => props.messages.map((message) =>
+  (message.messageType ?? '').endsWith('.live') ? streamingSnapshots.value.get(message.id) ?? message : message,
+))
 
 const showJumpToLatestButton = computed(
-  () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay)),
+  () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay) || props.hasMorePersistedBelow === true),
 )
 
 function ensureHighlightJsLoaded(): Promise<void> {
@@ -1691,47 +1758,39 @@ function buildCopyableMessageContent(message: UiMessage): string {
   return sections.join('\n\n').trim()
 }
 
-const copyableResponseContentByAnchorId = computed<Record<string, string>>(() => {
-  const groupedResponses = new Map<string, { anchorMessageId: string; parts: string[] }>()
+function responseKey(message: UiMessage): string {
+  return message.turnId ? `turn:${message.turnId}` : typeof message.turnIndex === 'number' ? `index:${message.turnIndex}` : `message:${message.id}`
+}
 
+const copyableResponseAnchorIds = computed(() => {
+  const anchors = new Map<string, string>()
   for (const message of props.messages) {
     if (!isCopyableAssistantMessage(message)) continue
-
-    const content = buildCopyableMessageContent(message)
-    if (!content) continue
-
-    const responseKey = typeof message.turnIndex === 'number'
-      ? `turn:${message.turnIndex}`
-      : `message:${message.id}`
-    const existing = groupedResponses.get(responseKey)
-    if (existing) {
-      existing.anchorMessageId = message.id
-      existing.parts.push(content)
-      continue
-    }
-
-    groupedResponses.set(responseKey, {
-      anchorMessageId: message.id,
-      parts: [content],
-    })
+    if (!message.text && !message.plan && !message.fileAttachments?.length && !message.images?.length) continue
+    anchors.set(responseKey(message), message.id)
   }
-
-  const next: Record<string, string> = {}
-  for (const response of groupedResponses.values()) {
-    const content = response.parts.join('\n\n').trim()
-    if (!content) continue
-    next[response.anchorMessageId] = content
+  const ids = new Set(anchors.values())
+  for (const [id, summary] of Object.entries(anchoredFileChangeSummaryByAnchorId.value)) {
+    if (summary.source === 'metadata' && summary.changes.length > 0) ids.add(id)
   }
-
-  for (const [anchorMessageId, summary] of Object.entries(anchoredFileChangeSummaryByAnchorId.value)) {
-    if (summary.source !== 'metadata') continue
-    const fileChangeCopy = buildFileChangeCopyText(summary)
-    if (!fileChangeCopy) continue
-    const existing = next[anchorMessageId]?.trim()
-    next[anchorMessageId] = existing ? `${existing}\n\n${fileChangeCopy}` : fileChangeCopy
-  }
-  return next
+  return ids
 })
+
+function buildCopyableResponseContent(anchorMessageId: string): string | undefined {
+  const anchor = props.messages.find((message) => message.id === anchorMessageId)
+  if (!anchor || !copyableResponseAnchorIds.value.has(anchorMessageId)) return undefined
+  const key = responseKey(anchor)
+  const parts = props.messages
+    .filter((message) => isCopyableAssistantMessage(message) && responseKey(message) === key)
+    .map(buildCopyableMessageContent)
+    .filter(Boolean)
+  const summary = anchoredFileChangeSummaryByAnchorId.value[anchorMessageId]
+  if (summary?.source === 'metadata') {
+    const fileChangeCopy = buildFileChangeCopyText(summary)
+    if (fileChangeCopy) parts.push(fileChangeCopy)
+  }
+  return parts.join('\n\n').trim() || undefined
+}
 
 const forkableTurnIdByAnchorId = computed<Record<string, string>>(() => {
   const groupedTurns = new Map<string, { anchorMessageId: string; turnId: string }>()
@@ -1902,7 +1961,7 @@ const hiddenFileChangeMessageIds = computed(() => {
 })
 
 const renderableMessages = computed(() => {
-  let messages = props.messages
+  let messages = displayMessages.value
   if (searchTurnMessages.value.length) {
     const persistedIds = new Set(messages.map((message) => message.id))
     messages = [...searchTurnMessages.value.filter((message) => !persistedIds.has(message.id)), ...messages]
@@ -1919,7 +1978,12 @@ const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
   renderWindowStart.value,
   renderableMessages.value.length,
 ))
-const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindowStart.value, searchWindowEnd.value))
+const effectiveRenderWindow = computed(() => clampThreadRenderWindow(
+  effectiveRenderWindowStart.value,
+  searchWindowEnd.value ?? renderWindowEnd.value ?? renderableMessages.value.length,
+  renderableMessages.value.length,
+))
+const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindow.value.start, effectiveRenderWindow.value.end))
 const visibleTimeline = computed<Array<UiMessage | null>>(() => {
   const rows: Array<UiMessage | null> = [...visibleMessages.value]
   if (!props.liveOverlay) return rows
@@ -1928,6 +1992,7 @@ const visibleTimeline = computed<Array<UiMessage | null>>(() => {
   return rows
 })
 const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
+const hasMoreBelow = computed(() => effectiveRenderWindow.value.end < renderableMessages.value.length || props.hasMorePersistedBelow === true)
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
   return anchoredFileChangeSummaryByAnchorId.value[message.id] ?? null
@@ -2666,11 +2731,11 @@ function parseInlineSegmentsUncached(text: string): InlineSegment[] {
 function getInlineSegments(text: string): InlineSegment[] {
   const cached = inlineSegmentCache.get(text)
   if (cached) {
-    inlineSegmentCache.delete(text)
-    inlineSegmentCache.set(text, cached)
+    inlineSegmentCache.touch(text)
     return cached
   }
-  return setBoundedCacheEntry(inlineSegmentCache, text, parseInlineSegmentsUncached(text), INLINE_SEGMENT_CACHE_LIMIT)
+  const segments = parseInlineSegmentsUncached(text)
+  return hasStreamingMarkdown.value ? segments : setBoundedCacheEntry(inlineSegmentCache, text, segments, INLINE_SEGMENT_CACHE_LIMIT)
 }
 
 function toRenderableImageUrl(value: string): string {
@@ -3415,11 +3480,11 @@ function parseMessageBlocks(text: string): MessageBlock[] {
 function getMessageBlocks(message: UiMessage): MessageBlock[] {
   const cached = messageBlockCache.get(message.id)
   if (cached && cached.text === message.text && cached.cwd === props.cwd) {
-    messageBlockCache.delete(message.id)
-    messageBlockCache.set(message.id, cached)
+    messageBlockCache.touch(message.id)
     return cached.blocks
   }
   const blocks = parseMessageBlocks(message.text)
+  if ((message.messageType ?? '').endsWith('.live')) return blocks
   return setBoundedCacheEntry(
     messageBlockCache,
     message.id,
@@ -3464,11 +3529,11 @@ function renderHighlightedCodeAsHtmlUncached(language: string, value: string): s
 }
 
 function renderCachedHighlightedCodeAsHtml(language: string, value: string): string {
+  if (hasStreamingMarkdown.value || value.length > 64 * 1024) return escapeHtml(value)
   const cacheKey = `${highlightCacheVersion.value}\u0000${normalizeCodeLanguage(language)}\u0000${language}\u0000${value}`
   const cached = highlightHtmlCache.get(cacheKey)
   if (cached !== undefined) {
-    highlightHtmlCache.delete(cacheKey)
-    highlightHtmlCache.set(cacheKey, cached)
+    highlightHtmlCache.touch(cacheKey)
     return cached
   }
   return setBoundedCacheEntry(
@@ -3588,13 +3653,13 @@ function renderMarkdownBlocksAsHtml(text: string): string {
   const cacheKey = `${props.cwd}\u0000${highlightCacheVersion.value}\u0000${text}`
   const cached = markdownHtmlCache.get(cacheKey)
   if (cached && cached.text === text && cached.cwd === props.cwd && cached.highlightVersion === highlightCacheVersion.value) {
-    markdownHtmlCache.delete(cacheKey)
-    markdownHtmlCache.set(cacheKey, cached)
+    markdownHtmlCache.touch(cacheKey)
     return cached.html
   }
   const html = parseMessageBlocks(text)
     .map((block) => renderMessageBlockAsHtml(block))
     .join('')
+  if (hasStreamingMarkdown.value) return html
   return setBoundedCacheEntry(
     markdownHtmlCache,
     cacheKey,
@@ -4086,25 +4151,46 @@ function onPendingImageSettled(): void {
   scheduleBottomLock(3)
 }
 
-function jumpToLatest(): void {
-  searchTurnMessages.value = []
-  searchWindowEnd.value = undefined
-  searchTargetId.value = ''
-  autoFollowOutput.value = true
+function setLatestRenderWindow(): void {
   renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
-  enforceBottomState()
-  scheduleBottomLock(4)
+  renderWindowEnd.value = renderableMessages.value.length
+}
+
+async function jumpToLatest(): Promise<void> {
+  if (isLoadingLatest.value || isLoadingMore.value) return
+  const threadId = props.activeThreadId
+  const generation = ++navigationGeneration
+  isLoadingLatest.value = true
+  historyLoadError.value = ''
+  try {
+    if (props.hasMorePersistedBelow) {
+      if (!props.loadLatestMessages) throw new Error('Latest message loading is not available.')
+      await props.loadLatestMessages(threadId)
+    }
+    if (threadId !== props.activeThreadId || generation !== navigationGeneration) return
+    searchTurnMessages.value = []
+    searchWindowEnd.value = undefined
+    searchTargetId.value = ''
+    autoFollowOutput.value = true
+    setLatestRenderWindow()
+    await scheduleConversationScroll()
+  } catch (cause) {
+    if (threadId === props.activeThreadId && generation === navigationGeneration) {
+      historyLoadError.value = cause instanceof Error ? cause.message : 'Failed to load latest messages.'
+    }
+  } finally {
+    if (generation === navigationGeneration) isLoadingLatest.value = false
+  }
 }
 
 function clearSearchTarget(): void {
-  const wasSearching = Boolean(searchTargetId.value)
-  searchTargetId.value = ''
-  searchTurnMessages.value = []
-  searchWindowEnd.value = undefined
-  if (wasSearching) jumpToLatest()
+  if (searchTargetId.value) void jumpToLatest()
 }
 
 async function locateMessage(itemId: string): Promise<void> {
+  navigationGeneration += 1
+  isLoadingMore.value = false
+  isLoadingLatest.value = false
   const threadId = props.activeThreadId
   const previousTarget = searchTargetId.value
   searchTargetId.value = itemId
@@ -4124,37 +4210,66 @@ async function onSearchLocate(value: { threadId: string; itemId: string; message
   await locateMessage(value.itemId)
 }
 
-async function loadMoreAbove(): Promise<void> {
+type ConversationAnchor = { id: string; offset: number }
+
+function captureConversationAnchor(): ConversationAnchor | null {
   const container = conversationListRef.value
-  if (!container || !hasMoreAbove.value || isLoadingMore.value || props.isLoadingPersistedAbove === true) return
+  if (!container) return null
+  const top = container.getBoundingClientRect().top
+  for (const row of container.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    const bounds = row.getBoundingClientRect()
+    if (bounds.bottom > top && bounds.top < top + container.clientHeight) {
+      return { id: row.dataset.messageId!, offset: bounds.top - top }
+    }
+  }
+  return null
+}
+
+function restoreConversationAnchor(anchor: ConversationAnchor | null): void {
+  const container = conversationListRef.value
+  if (!container || !anchor) return
+  const row = container.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchor.id)}"]`)
+  if (row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset
+}
+
+async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> {
+  const container = conversationListRef.value
+  const hasMore = direction === 'earlier' ? hasMoreAbove.value : hasMoreBelow.value
+  if (!container || !hasMore || isLoadingMore.value || isLoadingLatest.value || props.isLoadingPersistedAbove || props.isLoadingPersistedBelow) return
 
   autoFollowOutput.value = false
   isLoadingMore.value = true
   const threadIdAtStart = props.activeThreadId
-
-  const prevScrollHeight = container.scrollHeight
-  const prevScrollTop = container.scrollTop
+  const generation = ++navigationGeneration
+  const anchor = captureConversationAnchor()
+  historyLoadError.value = ''
 
   try {
-    if (effectiveRenderWindowStart.value > 0) {
-      renderWindowStart.value = earlierThreadRenderWindowStart(
-        effectiveRenderWindowStart.value,
-        renderableMessages.value.length,
-      )
-    } else if (props.hasMorePersistedAbove === true) {
-      await props.loadEarlierMessages?.(threadIdAtStart)
+    if (direction === 'earlier' && effectiveRenderWindowStart.value === 0 && props.hasMorePersistedAbove) {
+      if (!props.loadEarlierMessages) throw new Error('Earlier message loading is not available.')
+      await props.loadEarlierMessages(threadIdAtStart)
+    } else if (direction === 'later' && effectiveRenderWindow.value.end >= renderableMessages.value.length && props.hasMorePersistedBelow) {
+      if (!props.loadLaterMessages) throw new Error('Later message loading is not available.')
+      await props.loadLaterMessages(threadIdAtStart)
     }
-
+    if (props.activeThreadId !== threadIdAtStart || generation !== navigationGeneration) return
+    const moveWindow = direction === 'earlier' ? earlierThreadRenderWindow : laterThreadRenderWindow
+    const window = moveWindow(effectiveRenderWindowStart.value, effectiveRenderWindow.value.end, renderableMessages.value.length)
+    renderWindowStart.value = window.start
+    renderWindowEnd.value = window.end
     await nextTick()
-
-    // Discard scroll restoration if the thread changed while we were awaiting.
-    if (props.activeThreadId === threadIdAtStart) {
-      container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight)
+    if (props.activeThreadId === threadIdAtStart && generation === navigationGeneration) restoreConversationAnchor(anchor)
+  } catch (cause) {
+    if (props.activeThreadId === threadIdAtStart && generation === navigationGeneration) {
+      historyLoadError.value = cause instanceof Error ? cause.message : 'Failed to load message history.'
     }
   } finally {
-    isLoadingMore.value = false
+    if (generation === navigationGeneration) isLoadingMore.value = false
   }
 }
+
+function loadMoreAbove(): Promise<void> { return moveHistoryWindow('earlier') }
+function loadMoreBelow(): Promise<void> { return moveHistoryWindow('later') }
 
 defineExpose({
   jumpToLatest,
@@ -4206,6 +4321,11 @@ watch(
   () => props.messages,
   async (next) => {
     if (props.isLoading) return
+    const threadId = props.activeThreadId
+    const anchor = autoFollowOutput.value ? null : captureConversationAnchor()
+    const previousRows = conversationListRef.value?.querySelectorAll<HTMLElement>('[data-message-id]')
+    const firstRenderedId = previousRows?.[0]?.dataset.messageId
+    const previousSize = Math.min(THREAD_RENDER_HISTORY_LIMIT, previousRows?.length || 50)
 
     const commandIds = new Set(
       next
@@ -4218,6 +4338,11 @@ watch(
       expandedCommandGroupIds.value,
       new Set(Object.keys(groupedCommandsByLatestId.value)),
     )
+    expandedWorkedIds.value = pruneCommandIdSet(expandedWorkedIds.value, new Set(next.filter((message) => message.messageType === 'worked').map((message) => message.id)))
+    const pageGroups = new Set([...expandedCommandGroupIds.value, ...expandedWorkedIds.value])
+    commandPageStarts.value = Object.fromEntries(Object.entries(commandPageStarts.value).filter(([id]) => pageGroups.has(id)))
+    const messageIds = new Set(next.map((message) => message.id))
+    failedMarkdownImages.value = new Set([...failedMarkdownImages.value].filter((key) => messageIds.has(key.slice(0, key.lastIndexOf(':')))))
     expandedFileChangeSummaryIds.value = pruneCommandIdSet(
       expandedFileChangeSummaryIds.value,
       new Set([
@@ -4227,20 +4352,31 @@ watch(
     )
 
     if (autoFollowOutput.value) {
-      renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
+      setLatestRenderWindow()
     } else {
-      renderWindowStart.value = clampThreadRenderWindowStart(
-        renderWindowStart.value,
-        renderableMessages.value.length,
-      )
+      const retainedStart = firstRenderedId ? renderableMessages.value.findIndex((message) => message.id === firstRenderedId) : -1
+      const anchorIndex = anchor ? renderableMessages.value.findIndex((message) => message.id === anchor.id) : -1
+      const previousAnchorIndex = anchor && previousRows ? Array.from(previousRows).findIndex((row) => row.dataset.messageId === anchor.id) : -1
+      renderWindowStart.value = retainedStart >= 0
+        ? retainedStart
+        : anchorIndex >= 0 && previousAnchorIndex >= 0
+          ? Math.max(0, anchorIndex - previousAnchorIndex)
+          : clampThreadRenderWindowStart(renderWindowStart.value, renderableMessages.value.length)
+      renderWindowEnd.value = Math.min(renderableMessages.value.length, renderWindowStart.value + previousSize)
+      if (searchTargetId.value) searchWindowEnd.value = renderWindowStart.value + 50
     }
 
     await scheduleConversationScroll()
+    if (threadId === props.activeThreadId && !autoFollowOutput.value) restoreConversationAnchor(anchor)
   },
 )
 
+watch(streamingSnapshots, () => {
+  if (!props.isLoading) void scheduleConversationScroll()
+})
+
 watch(
-  () => props.messages.some((message) => message.text.includes('```')),
+  () => !highlightJsModule.value && visibleMessages.value.some((message) => message.text.includes('```')),
   (hasCodeBlocks) => {
     if (!hasCodeBlocks || highlightJsModule.value) return
     void ensureHighlightJsLoaded()
@@ -4284,24 +4420,45 @@ watch(
   () => props.isLoading,
   async (loading) => {
     if (loading) return
-    renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
+    if (autoFollowOutput.value) setLatestRenderWindow()
     await scheduleConversationScroll()
   },
+  { immediate: true },
 )
 
 watch(
   () => props.activeThreadId,
   async () => {
-    clearSearchTarget()
+    navigationGeneration += 1
+    searchTargetId.value = ''
+    searchTurnMessages.value = []
+    searchWindowEnd.value = undefined
+    clearRenderCaches()
+    expandedCommandIds.value = new Set()
+    collapsedAutoCommandIds.value = new Set()
+    expandedCommandGroupIds.value = new Set()
+    expandedWorkedIds.value = new Set()
+    expandedFileChangeSummaryIds.value = new Set()
+    commandPageStarts.value = {}
+    failedMarkdownImages.value = new Set()
+    closeDiffViewer()
+    toolQuestionAnswers.value = {}
+    toolQuestionOtherAnswers.value = {}
+    mcpElicitationAnswers.value = {}
+    if (streamRenderTimer) clearTimeout(streamRenderTimer)
+    streamRenderTimer = null
+    flushStreamingMarkdown()
     messageCopy.reset()
     autoFollowOutput.value = true
     modalImageUrl.value = ''
     isLoadingMore.value = false
+    isLoadingLatest.value = false
+    historyLoadError.value = ''
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
     // Apply immediately for cached threads where isLoading never toggles.
-    renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
+    setLatestRenderWindow()
     await scheduleConversationScroll()
   },
   { flush: 'post' },
@@ -4309,11 +4466,13 @@ watch(
 
 function onConversationScroll(): void {
   const container = conversationListRef.value
-  if (!container || props.isLoading) return
+  if (!container || props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
   if (searchTargetId.value) return
-  autoFollowOutput.value = isAtBottom(container)
+  autoFollowOutput.value = isAtBottom(container) && !hasMoreBelow.value
   if (hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
     void loadMoreAbove()
+  } else if (hasMoreBelow.value && container.scrollHeight - container.scrollTop - container.clientHeight < LOAD_MORE_SCROLL_THRESHOLD_PX) {
+    void loadMoreBelow()
   }
 }
 
@@ -4349,6 +4508,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  navigationGeneration += 1
+  if (streamRenderTimer) clearTimeout(streamRenderTimer)
   clearRenderCaches()
   if (conversationScrollFrame) {
     cancelAnimationFrame(conversationScrollFrame)
@@ -4386,6 +4547,23 @@ onBeforeUnmount(() => {
 
 .conversation-load-more {
   @apply flex justify-center py-3 m-0;
+}
+
+.conversation-history-error {
+  @apply m-0 px-4 py-2 text-xs text-rose-600 dark:text-rose-400;
+}
+
+.command-page-tools {
+  @apply flex justify-between gap-2 py-1 text-xs text-zinc-500;
+}
+
+.command-page-tools button {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded disabled:opacity-40;
+}
+
+.command-page-tools svg {
+  width: 16px;
+  height: 16px;
 }
 
 .load-more-button {

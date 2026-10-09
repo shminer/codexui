@@ -1,5 +1,28 @@
 export const THREAD_RENDER_WINDOW_SIZE = 50
 export const THREAD_RENDER_LOAD_CHUNK = 30
+export const THREAD_RENDER_HISTORY_LIMIT = 100
+
+export type ThreadRenderWindow = { start: number; end: number }
+
+export function clampThreadRenderWindow(start: number, end: number, messageCount: number): ThreadRenderWindow {
+  const count = Math.max(0, Math.floor(messageCount))
+  if (count === 0) return { start: 0, end: 0 }
+  const boundedStart = clampThreadRenderWindowStart(start, count)
+  const boundedEnd = Math.min(count, Math.max(boundedStart + 1, Number.isFinite(end) ? Math.floor(end) : count))
+  return { start: boundedStart, end: Math.min(boundedEnd, boundedStart + THREAD_RENDER_HISTORY_LIMIT) }
+}
+
+export function earlierThreadRenderWindow(start: number, end: number, messageCount: number): ThreadRenderWindow {
+  const current = clampThreadRenderWindow(start, end, messageCount)
+  const nextStart = earlierThreadRenderWindowStart(current.start, messageCount)
+  return { start: nextStart, end: Math.min(current.end, nextStart + THREAD_RENDER_HISTORY_LIMIT) }
+}
+
+export function laterThreadRenderWindow(start: number, end: number, messageCount: number): ThreadRenderWindow {
+  const current = clampThreadRenderWindow(start, end, messageCount)
+  const nextEnd = Math.min(Math.max(0, Math.floor(messageCount)), current.end + THREAD_RENDER_LOAD_CHUNK)
+  return { start: Math.max(current.start, nextEnd - THREAD_RENDER_HISTORY_LIMIT), end: nextEnd }
+}
 
 export function filterRenderableThreadMessages<T extends { id: string }>(
   messages: readonly T[],
