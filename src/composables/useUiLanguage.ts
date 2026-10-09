@@ -38,6 +38,8 @@ const zhCN: Record<string, string> = {
   'Dark': '深色',
   'Light': '浅色',
   'Chat width': '聊天宽度',
+  'Maximum width': '最大宽度',
+  'Reset to default': '恢复默认',
   'Provider': '提供方',
   'Choose the API provider for the Codex backend': '选择 Codex 后端使用的 API 提供方',
   'OpenRouter API key': 'OpenRouter API Key',

@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [聊天宽度滑块与 Markdown 表格](chat-width-slider-and-markdown-tables.md) |
 | [codexui 1.1.0 页面品牌与标题](codexui-branding-and-titles.md) |
 | [Revert PR 131 project recency and mobile move mode](revert-pr-131-project-recency-and-mobile-move-mode.md) |
 | [Feature: Dark theme for worktree runtime selector and Skills Hub](dark-theme-for-worktree-runtime-selector-and-skills-hub.md) |

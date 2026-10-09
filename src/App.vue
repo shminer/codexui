@@ -253,10 +253,28 @@
                   @update:model-value="setUiLanguage($event as 'en' | 'zh-CN')"
                 />
               </div>
-              <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.chatWidth" @click="cycleChatWidth">
-                <span class="sidebar-settings-label">{{ t('Chat width') }}</span>
-                <span class="sidebar-settings-value">{{ chatWidthLabel }}</span>
-              </button>
+              <div class="sidebar-settings-row sidebar-settings-width" :title="SETTINGS_HELP.chatWidth">
+                <div class="sidebar-settings-width-header">
+                  <label class="sidebar-settings-label" for="chat-width">{{ t('Chat width') }}</label>
+                  <output class="sidebar-settings-value" for="chat-width">{{ chatWidth }} px</output>
+                </div>
+                <input
+                  id="chat-width"
+                  class="sidebar-settings-width-slider"
+                  type="range"
+                  :min="CHAT_WIDTH_MIN"
+                  :max="CHAT_WIDTH_MAX"
+                  :step="CHAT_WIDTH_STEP"
+                  :value="chatWidth"
+                  :aria-valuetext="`${chatWidth} px`"
+                  @input="chatWidth = normalizeChatWidth(($event.target as HTMLInputElement).valueAsNumber)"
+                  @change="saveChatWidthPref(chatWidth)"
+                />
+                <div class="sidebar-settings-width-header">
+                  <span class="sidebar-settings-width-hint">{{ t('Maximum width') }}</span>
+                  <button class="sidebar-settings-width-reset" type="button" @click="resetChatWidth">{{ t('Reset to default') }}</button>
+                </div>
+              </div>
               <a
                 v-if="hasVisibleFeedbackError"
                 class="sidebar-settings-row sidebar-settings-feedback-row"
@@ -1301,6 +1319,7 @@ import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, Telegra
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
+import { CHAT_WIDTH_MIN, CHAT_WIDTH_MAX, CHAT_WIDTH_STEP, CHAT_WIDTH_DEFAULT, loadChatWidthPref, saveChatWidthPref, normalizeChatWidth } from './chatWidth'
 
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadSideConversation = defineAsyncComponent(() => import('./components/content/ThreadSideConversation.vue'))
@@ -1325,8 +1344,6 @@ const SETTINGS_HELP = {
   chatWidth: t('Choose how wide the conversation column and composer can grow on desktop screens.'),
 } as const
 
-type ChatWidthMode = 'standard' | 'wide' | 'extra-wide'
-
 type TerminalHeaderQuickCommand = {
   label: string
   value: string
@@ -1347,30 +1364,6 @@ type DirectoryTryItemPayload = {
   skillPath?: string
   prompt?: string
   attachedSkills?: Array<{ name: string; path: string }>
-}
-
-type ChatWidthPreset = {
-  label: string
-  columnMax: string
-  cardMax: string
-}
-
-const CHAT_WIDTH_PRESETS: Record<ChatWidthMode, ChatWidthPreset> = {
-  standard: {
-    label: 'Standard',
-    columnMax: '45rem',
-    cardMax: '76ch',
-  },
-  wide: {
-    label: 'Wide',
-    columnMax: '72rem',
-    cardMax: '88ch',
-  },
-  'extra-wide': {
-    label: 'Extra wide',
-    columnMax: '96rem',
-    cardMax: '96ch',
-  },
 }
 
 const {
@@ -1622,12 +1615,11 @@ const SEND_WITH_ENTER_KEY = 'codex-web-local.send-with-enter.v1'
 const IN_PROGRESS_SEND_MODE_KEY = 'codex-web-local.in-progress-send-mode.v1'
 const DARK_MODE_KEY = 'codex-web-local.dark-mode.v1'
 
-const CHAT_WIDTH_KEY = 'codex-web-local.chat-width.v1'
 const MOBILE_RESUME_RELOAD_MIN_HIDDEN_MS = 400
 const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
 const inProgressSendMode = ref<'steer' | 'queue'>(loadInProgressSendModePref())
 const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
-const chatWidth = ref<ChatWidthMode>(loadChatWidthPref())
+const chatWidth = ref(loadChatWidthPref())
 const projectZipProgressText = computed(() => {
   const { loaded, total } = projectZipExportStatus.value
   const loadedLabel = formatByteCount(loaded)
@@ -2074,7 +2066,6 @@ const existingFolderFilteredEntries = computed(() => {
   )
 })
 const darkModeMediaQuery = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
-const chatWidthLabel = computed(() => t(CHAT_WIDTH_PRESETS[chatWidth.value].label))
 const terminalShortcutLabel = computed(() => {
   if (typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)) {
     return '⌘J'
@@ -2105,14 +2096,13 @@ const terminalHeaderDropdownOptions = computed(() => [
   ...terminalHeaderQuickCommands.value.map((command) => ({ label: command.label, value: command.value })),
 ])
 const contentStyle = computed(() => {
-  const preset = CHAT_WIDTH_PRESETS[chatWidth.value]
   const keyboardInset = Math.max(
     0,
     layoutViewportHeight.value - visualViewportHeight.value - visualViewportOffsetTop.value,
   )
   return {
-    '--chat-column-max': preset.columnMax,
-    '--chat-card-max': preset.cardMax,
+    '--chat-column-max': `${chatWidth.value}px`,
+    '--chat-card-max': `${chatWidth.value}px`,
     '--visual-viewport-height': visualViewportHeight.value > 0 ? `${visualViewportHeight.value}px` : '100dvh',
     '--visual-viewport-offset-top': `${Math.max(0, visualViewportOffsetTop.value)}px`,
     '--virtual-keyboard-inset': `${keyboardInset}px`,
@@ -4383,12 +4373,6 @@ function loadInProgressSendModePref(): 'steer' | 'queue' {
   return 'queue'
 }
 
-function loadChatWidthPref(): ChatWidthMode {
-  if (typeof window === 'undefined') return 'standard'
-  const value = window.localStorage.getItem(CHAT_WIDTH_KEY)
-  return value === 'standard' || value === 'wide' || value === 'extra-wide' ? value : 'standard'
-}
-
 function toggleSendWithEnter(): void {
   sendWithEnter.value = !sendWithEnter.value
   window.localStorage.setItem(SEND_WITH_ENTER_KEY, sendWithEnter.value ? '1' : '0')
@@ -4407,11 +4391,9 @@ function cycleDarkMode(): void {
   applyDarkMode()
 }
 
-function cycleChatWidth(): void {
-  const order: ChatWidthMode[] = ['standard', 'wide', 'extra-wide']
-  const idx = order.indexOf(chatWidth.value)
-  chatWidth.value = order[(idx + 1) % order.length]
-  window.localStorage.setItem(CHAT_WIDTH_KEY, chatWidth.value)
+function resetChatWidth(): void {
+  chatWidth.value = CHAT_WIDTH_DEFAULT
+  saveChatWidthPref(chatWidth.value)
 }
 
 async function onProviderChange(provider: string): Promise<void> {
@@ -5609,6 +5591,26 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .sidebar-settings-row--select {
   @apply cursor-default items-center gap-2;
+}
+
+.sidebar-settings-width {
+  @apply flex-col items-stretch gap-2 cursor-default;
+}
+
+.sidebar-settings-width-header {
+  @apply flex items-center justify-between gap-2;
+}
+
+.sidebar-settings-width-slider {
+  @apply w-full min-w-0 h-6 cursor-pointer accent-sky-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600;
+}
+
+.sidebar-settings-width-hint {
+  @apply text-xs text-zinc-500;
+}
+
+.sidebar-settings-width-reset {
+  @apply rounded px-1 py-0.5 text-xs text-sky-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600;
 }
 
 .sidebar-settings-language-dropdown {

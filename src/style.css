@@ -115,6 +115,18 @@
   @apply border-zinc-700;
 }
 
+:root.dark .sidebar-settings-width-slider {
+  @apply accent-sky-400 focus-visible:outline-sky-400;
+}
+
+:root.dark .sidebar-settings-width-hint {
+  @apply text-zinc-400;
+}
+
+:root.dark .sidebar-settings-width-reset {
+  @apply text-sky-300 focus-visible:outline-sky-400;
+}
+
 :root.dark .sidebar-settings-context-value {
   @apply text-zinc-300;
 }
@@ -843,6 +855,36 @@
 
 :root.dark .message-inline-code {
   @apply bg-transparent text-inherit;
+}
+
+/* Shared by template-rendered messages and v-html plan content. */
+.message-table-wrap {
+  @apply w-full min-w-0 max-w-full overflow-x-auto;
+}
+
+.message-table {
+  @apply w-full min-w-full table-auto border-separate border-spacing-0 overflow-hidden rounded-xl border border-slate-300 bg-white text-sm text-slate-800;
+}
+
+.message-table-head-cell,
+.message-table-cell {
+  @apply min-w-32 border-b border-l border-slate-300 px-3 py-2 align-top text-left whitespace-pre-wrap;
+  line-height: 1.6;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.message-table-head-cell:first-child,
+.message-table-cell:first-child {
+  @apply border-l-0;
+}
+
+.message-table-head-cell {
+  @apply bg-slate-100 font-semibold text-slate-900;
+}
+
+.message-table-body-row:last-child .message-table-cell {
+  @apply border-b-0;
 }
 
 :root.dark .message-table {

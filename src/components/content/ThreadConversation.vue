@@ -4862,7 +4862,7 @@ onBeforeUnmount(() => {
 }
 
 .message-card {
-  @apply max-w-[min(var(--chat-card-max,76ch),100%)] px-0 py-0 bg-transparent border-none rounded-none;
+  @apply min-w-0 max-w-[min(var(--chat-card-max,76ch),100%)] px-0 py-0 bg-transparent border-none rounded-none;
 }
 
 .reasoning-summary-card {
@@ -4882,7 +4882,7 @@ onBeforeUnmount(() => {
 }
 
 .plan-card {
-  @apply flex max-w-[min(var(--chat-card-max,76ch),100%)] flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-slate-900;
+  @apply flex min-w-0 max-w-[min(var(--chat-card-max,76ch),100%)] flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-slate-900;
 }
 
 .plan-card-header {
@@ -4902,7 +4902,7 @@ onBeforeUnmount(() => {
 }
 
 .plan-card-markdown {
-  @apply flex flex-col gap-2;
+  @apply flex min-w-0 flex-col gap-2;
 }
 
 .plan-card-markdown :deep(.message-text),
@@ -5128,33 +5128,6 @@ onBeforeUnmount(() => {
 
 .message-task-checkbox {
   @apply mt-0.5 text-sm leading-none text-slate-500 select-none;
-}
-
-.message-table-wrap {
-  @apply w-full overflow-x-auto;
-}
-
-.message-table {
-  @apply min-w-full border-separate border-spacing-0 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm text-slate-800;
-}
-
-.message-table-head-cell,
-.message-table-cell {
-  @apply border-b border-l border-slate-200 px-3 py-2 align-top whitespace-pre-wrap break-words;
-  overflow-wrap: anywhere;
-}
-
-.message-table-head-cell:first-child,
-.message-table-cell:first-child {
-  @apply border-l-0;
-}
-
-.message-table-head-cell {
-  @apply bg-slate-100 font-semibold text-slate-900;
-}
-
-.message-table-body-row:last-child .message-table-cell {
-  @apply border-b-0;
 }
 
 .message-bold-text {
