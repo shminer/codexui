@@ -5563,6 +5563,8 @@ type BackendQueuedTurn = {
   message: StoredQueuedMessage
 }
 
+type QueueDrainScope = { deleted: boolean }
+
 type ThreadQueueStateUpdate<T> = {
   nextState: ThreadQueueState
   result: T
@@ -6282,6 +6284,7 @@ export class AppServerProcess {
   private stopping = false
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
+  private readonly threadDeletionListeners = new Set<(threadId: string) => Promise<void>>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
   private readonly activeTurnIds = new Map<string, string>()
   private readonly pendingTurnStarts = new Map<string, Set<Promise<unknown>>>()
@@ -6444,7 +6447,11 @@ export class AppServerProcess {
 
   private emitNotification(notification: { method: string; params: unknown }): void {
     const nThreadId = this.extractThreadIdFromParams(notification.params)
-    if (notification.method === 'thread/deleted' && nThreadId) this.forgetDeletedThread(nThreadId)
+    if (notification.method === 'thread/deleted' && nThreadId) {
+      void this.forgetDeletedThread(nThreadId).catch((error) => {
+        console.warn('[thread-delete] Failed to clear the message queue', error)
+      })
+    }
     this.recordStreamEvent(notification)
     this.captureItemFromNotification(notification)
     if (nThreadId) {
@@ -6643,7 +6650,7 @@ export class AppServerProcess {
     }
   }
 
-  forgetDeletedThread(threadId: string): void {
+  forgetDeletedThread(threadId: string): Promise<void> {
     for (const scope of this.threadReadScopes.get(threadId) ?? []) scope.deleted = true
     this.lastThreadReadSnapshotByThreadId.delete(threadId)
     this.threadTurnPageReadCacheByThreadId.delete(threadId)
@@ -6655,6 +6662,7 @@ export class AppServerProcess {
     this.activeTurnIds.delete(threadId)
     this.streamEvents.remove(threadId)
     for (const kind of ['snapshot', 'page', 'live']) this.threadCacheBudget.forget(`${kind}:${threadId}`)
+    return Promise.all([...this.threadDeletionListeners].map((listener) => listener(threadId))).then(() => undefined)
   }
 
   private retainThreadCache(kind: string, threadId: string, value: unknown, ttlMs: number, evict: () => void): void {
@@ -6973,7 +6981,7 @@ export class AppServerProcess {
     const threadId = readNonEmptyString(asRecord(params)?.threadId)
     if (method === 'thread/delete' && threadId) {
       const result = await request
-      this.forgetDeletedThread(threadId)
+      await this.forgetDeletedThread(threadId)
       return result
     }
     if (THREAD_READ_RPC_METHODS.has(method) && threadId) {
@@ -7020,6 +7028,11 @@ export class AppServerProcess {
     return () => {
       this.notificationListeners.delete(listener)
     }
+  }
+
+  onThreadDeleted(listener: (threadId: string) => Promise<void>): () => void {
+    this.threadDeletionListeners.add(listener)
+    return () => { this.threadDeletionListeners.delete(listener) }
   }
 
   async respondToServerRequest(payload: unknown): Promise<void> {
@@ -7108,12 +7121,16 @@ export class AppServerProcess {
 
 export class BackendQueueProcessor {
   private disposed = false
-  private readonly processingThreadIds = new Set<string>()
+  private queueScheduleRevision = 0
+  private readonly processingByThreadId = new Map<string, QueueDrainScope>()
+  private readonly queueCleanupByThreadId = new Map<string, Promise<void>>()
   private readonly queueDrainTimersByThreadId = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly queueDrainDueAtByThreadId = new Map<string, number>()
   private readonly unsubscribe: () => void
+  private readonly unsubscribeDeletion: () => void
 
   constructor(private readonly appServer: AppServerProcess) {
+    this.unsubscribeDeletion = appServer.onThreadDeleted((threadId) => this.forgetDeletedThread(threadId))
     this.unsubscribe = appServer.onNotification((notification) => {
       if (!isTurnCompletedNotification(notification)) return
       const threadId = extractThreadIdFromNotificationParams(notification.params)
@@ -7126,17 +7143,44 @@ export class BackendQueueProcessor {
   dispose(): void {
     this.disposed = true
     this.unsubscribe()
+    this.unsubscribeDeletion()
     for (const timer of this.queueDrainTimersByThreadId.values()) {
       clearTimeout(timer)
     }
     this.queueDrainTimersByThreadId.clear()
     this.queueDrainDueAtByThreadId.clear()
-    this.processingThreadIds.clear()
+    this.processingByThreadId.clear()
+  }
+
+  forgetDeletedThread(threadId: string): Promise<void> {
+    this.queueScheduleRevision += 1
+    const scope = this.processingByThreadId.get(threadId)
+    if (scope) scope.deleted = true
+    const timer = this.queueDrainTimersByThreadId.get(threadId)
+    if (timer) clearTimeout(timer)
+    this.queueDrainTimersByThreadId.delete(threadId)
+    this.queueDrainDueAtByThreadId.delete(threadId)
+    const existing = this.queueCleanupByThreadId.get(threadId)
+    if (existing) return existing
+    const cleanup = withThreadQueueStateUpdate((state) => {
+      const nextState = { ...state }
+      delete nextState[threadId]
+      return { nextState, result: undefined }
+    }).finally(() => { this.queueCleanupByThreadId.delete(threadId) })
+    this.queueCleanupByThreadId.set(threadId, cleanup)
+    return cleanup
   }
 
   async scheduleAllQueuedThreads(delayMs = 0): Promise<void> {
     try {
-      const state = await readThreadQueueState()
+      let revision: number
+      let state: ThreadQueueState
+      // A deletion can invalidate the startup snapshot while it is being read.
+      do {
+        revision = this.queueScheduleRevision
+        state = await readThreadQueueState()
+      } while (!this.disposed && revision !== this.queueScheduleRevision)
+      if (this.disposed) return
       for (const threadId of Object.keys(state)) {
         this.scheduleThreadQueueDrain(threadId, delayMs)
       }
@@ -7146,7 +7190,7 @@ export class BackendQueueProcessor {
   }
 
   scheduleThreadQueueDrain(threadId: string, delayMs = 5000): void {
-    if (!threadId || this.disposed) return
+    if (!threadId || this.disposed || this.processingByThreadId.get(threadId)?.deleted || this.queueCleanupByThreadId.has(threadId)) return
     const normalizedDelayMs = Math.max(0, delayMs)
     const nextDueAt = Date.now() + normalizedDelayMs
     const existingDueAt = this.queueDrainDueAtByThreadId.get(threadId)
@@ -7168,40 +7212,42 @@ export class BackendQueueProcessor {
   }
 
   async processThreadQueue(threadId: string): Promise<void> {
-    if (this.disposed || this.processingThreadIds.has(threadId)) return
-    this.processingThreadIds.add(threadId)
+    if (this.disposed || this.processingByThreadId.has(threadId) || this.queueCleanupByThreadId.has(threadId)) return
+    const scope: QueueDrainScope = { deleted: false }
+    this.processingByThreadId.set(threadId, scope)
     try {
-      if (!await this.hasQueuedTurns(threadId) || this.disposed) return
+      if (!await this.hasQueuedTurns(threadId) || this.disposed || scope.deleted) return
       const canStart = await this.canStartQueuedTurn(threadId)
-      if (this.disposed) return
+      if (this.disposed || scope.deleted) return
       if (canStart !== true) {
         if (canStart === false && await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
         return
       }
-      const next = await this.popNextQueuedTurn(threadId)
+      const next = await this.popNextQueuedTurn(threadId, scope)
       if (!next) return
+      if (scope.deleted) return
       if (this.disposed) {
-        await this.restoreQueuedTurn(next)
+        await this.restoreQueuedTurn(next, scope)
         return
       }
       try {
-        await this.startQueuedTurn(next)
+        await this.startQueuedTurn(next, scope)
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
       } catch (error) {
-        await this.restoreQueuedTurn(next)
+        await this.restoreQueuedTurn(next, scope)
         throw error
       }
     } catch (error) {
       // Missing/ephemeral threads cannot recover by polling persisted history.
-      if (!/ephemeral|thread.*not found|no rollout found/i.test(String(error)) && await this.hasQueuedTurns(threadId).catch(() => false)) {
+      if (!scope.deleted && !/ephemeral|thread.*not found|no rollout found/i.test(String(error)) && await this.hasQueuedTurns(threadId).catch(() => false)) {
         this.scheduleThreadQueueDrain(threadId)
       }
     } finally {
-      this.processingThreadIds.delete(threadId)
+      this.processingByThreadId.delete(threadId)
     }
   }
 
@@ -7226,8 +7272,9 @@ export class BackendQueueProcessor {
     return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status) === 'inProgress')
   }
 
-  private async popNextQueuedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
+  private async popNextQueuedTurn(threadId: string, scope: QueueDrainScope): Promise<BackendQueuedTurn | null> {
     return withThreadQueueStateUpdate((state) => {
+      if (scope.deleted) return { nextState: state, result: null }
       const queue = state[threadId]
       if (!queue || queue.length === 0) {
         return { nextState: state, result: null }
@@ -7244,8 +7291,10 @@ export class BackendQueueProcessor {
     })
   }
 
-  private async restoreQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
+  private async restoreQueuedTurn(turn: BackendQueuedTurn, scope: QueueDrainScope): Promise<void> {
+    if (scope.deleted) return
     await withThreadQueueStateUpdate((state) => {
+      if (scope.deleted) return { nextState: state, result: undefined }
       const queue = state[turn.threadId] ?? []
       return {
         nextState: {
@@ -7361,9 +7410,12 @@ export class BackendQueueProcessor {
     return params
   }
 
-  private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
+  private async startQueuedTurn(turn: BackendQueuedTurn, scope: QueueDrainScope): Promise<void> {
     const resumed = asRecord(await this.appServer.rpc('thread/resume', { threadId: turn.threadId, excludeTurns: true }))
-    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn, resumed))
+    if (this.disposed || scope.deleted) throw new Error('Queued turn was cancelled')
+    const params = await this.buildQueuedTurnParams(turn, resumed)
+    if (this.disposed || scope.deleted) throw new Error('Queued turn was cancelled')
+    await this.appServer.rpc('turn/start', params)
   }
 }
 

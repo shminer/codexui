@@ -75,6 +75,25 @@ afterEach(() => {
 })
 
 describe('app-server lifecycle cancellation', () => {
+  it('waits for queue cleanup before returning a successful deletion', async () => {
+    const { server, call } = readyServer()
+    const cleanup = deferred<void>()
+    const listener = vi.fn(() => cleanup.promise)
+    const unsubscribe = server.onThreadDeleted(listener)
+    call.mockResolvedValue({})
+    let completed = false
+    const request = server.rpc('thread/delete', { threadId: 'archived' }).then(() => { completed = true })
+    await flushMicrotasks()
+    expect(listener).toHaveBeenCalledExactlyOnceWith('archived')
+    expect(completed).toBe(false)
+    cleanup.resolve(undefined)
+    await request
+    expect(completed).toBe(true)
+    unsubscribe()
+    await server.forgetDeletedThread('archived')
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
   it('releases only the deleted thread caches after a confirmed native deletion', async () => {
     const { server, call } = readyServer()
     const snapshot = { thread: { id: 'archived', path: '/archive/session.jsonl', turns: [] } }

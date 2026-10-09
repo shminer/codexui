@@ -56,6 +56,8 @@ it('uses exclusive before/after anchors, latest windows, and explicit stale-wind
 })
 
 it.each(['/codex-api/thread-turn-page', '/codex-api/thread-live-state', '/codex-api/rpc'])('blocks stale history responses and cache writes after deletion (%s)', async (route) => {
+  directory = await mkdtemp(join(tmpdir(), 'codex-deleted-history-'))
+  vi.stubEnv('CODEX_HOME', directory)
   let started!: (process: AppServerProcess) => void
   const reading = new Promise<AppServerProcess>((resolve) => { started = resolve })
   let finish!: (result: unknown) => void
@@ -69,7 +71,7 @@ it.each(['/codex-api/thread-turn-page', '/codex-api/thread-live-state', '/codex-
     ? fetch(`${base}${route}`, { method: 'POST', body: JSON.stringify({ method: 'thread/read', params: { threadId: 'deleted', includeTurns: true } }) })
     : fetch(`${base}${route}?threadId=deleted`)
   const process = await reading
-  process.forgetDeletedThread('deleted')
+  await process.forgetDeletedThread('deleted')
   finish({ thread: { id: 'deleted', turns: [{ id: 'old-turn', items: [] }] } })
   const result = await response
   expect(result.status).toBe(410)

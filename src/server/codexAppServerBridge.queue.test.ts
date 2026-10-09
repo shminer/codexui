@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppServerProcess, BackendQueueProcessor, mutateThreadQueue } from './codexAppServerBridge'
 
 let reviewHome: string
 let processor: BackendQueueProcessor | undefined
+let appServer: AppServerProcess | undefined
 beforeEach(async () => {
   reviewHome = await mkdtemp(join(tmpdir(), 'codex-review-'))
   vi.stubEnv('CODEX_HOME', reviewHome)
@@ -13,6 +14,10 @@ beforeEach(async () => {
 afterEach(async () => {
   processor?.dispose()
   processor = undefined
+  appServer?.dispose()
+  appServer = undefined
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
   await rm(reviewHome, { recursive: true, force: true })
 })
@@ -20,7 +25,7 @@ afterEach(async () => {
 describe('backend review reproductions', () => {
   it('does not schedule endless retries for an ephemeral thread with no queue', async () => {
     const rpc = vi.fn().mockRejectedValue(new Error('ephemeral threads do not support includeTurns'))
-    processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
+    processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {}, onThreadDeleted: () => () => {} } as any)
     const schedule = vi.spyOn(processor, 'scheduleThreadQueueDrain')
     await processor.processThreadQueue('ephemeral-with-no-queue')
     expect(schedule).not.toHaveBeenCalled()
@@ -53,7 +58,7 @@ describe('queued turn settings', () => {
       if (method === 'config/read') return { config: { model: 'global-model', model_reasoning_effort: 'medium' } }
       return {}
     })
-    processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
+    processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {}, onThreadDeleted: () => () => {} } as any)
     await processor.processThreadQueue('main')
     const start = rpc.mock.calls.find(([method]) => method === 'turn/start')
     expect(rpc).toHaveBeenCalledWith('thread/resume', { threadId: 'main', excludeTurns: true })
@@ -90,7 +95,7 @@ it('does not start or reschedule a queue after disposal during a metadata read',
   let startedRead: () => void = () => {}
   const reading = new Promise<void>(resolve => { startedRead = resolve })
   const rpc = vi.fn(() => new Promise(resolve => { finish = resolve; startedRead() }))
-  processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {} } as any)
+  processor = new BackendQueueProcessor({ rpc, onNotification: () => () => {}, onThreadDeleted: () => () => {} } as any)
   const drain = processor.processThreadQueue('main')
   await reading
   processor.dispose()
@@ -112,10 +117,111 @@ describe('stopped queue recovery', () => {
       if (method === 'config/read') return { config: { model: 'global-model', model_reasoning_effort: 'medium' } }
       return {}
     })
-    processor = new BackendQueueProcessor({ rpc, onNotification: (handler: any) => { notify = handler; return () => {} } } as any)
+    processor = new BackendQueueProcessor({ rpc, onNotification: (handler: any) => { notify = handler; return () => {} }, onThreadDeleted: () => () => {} } as any)
     notify!({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'stopped', status } } })
     await new Promise(resolve => setTimeout(resolve, 100))
     expect(rpc.mock.calls.some(([method]) => method === 'turn/start')).toBe(false)
   })
 
+})
+
+describe('deleted thread queues', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+
+  function setupServer() {
+    appServer = new AppServerProcess()
+    vi.spyOn(appServer as any, 'disposeIfConfigChanged').mockImplementation(() => {})
+    vi.spyOn(appServer as any, 'ensureInitialized').mockResolvedValue(undefined)
+    const call = vi.spyOn(appServer as unknown as { call(method: string, params: unknown): Promise<unknown> }, 'call').mockResolvedValue({})
+    processor = new BackendQueueProcessor(appServer)
+    return { server: appServer, queue: processor, call }
+  }
+
+  async function seedQueues() {
+    await mutateThreadQueue('deleted', { type: 'add', message: { id: 'first', text: 'private draft', imageUrls: ['attachment'] } })
+    await mutateThreadQueue('deleted', { type: 'add', message: { id: 'second', text: 'remaining draft' } })
+    await mutateThreadQueue('other', { type: 'add', message: { id: 'keep', text: 'keep this' } })
+  }
+
+  async function expectQueuesCleared(queue: BackendQueueProcessor) {
+    const state = JSON.parse(await readFile(join(reviewHome, '.codex-global-state.json'), 'utf8'))
+    expect(state['thread-queue-state'].deleted).toBeUndefined()
+    expect(state['thread-queue-state'].other.map((message: { id: string }) => message.id)).toEqual(['keep'])
+    expect((queue as any).queueDrainTimersByThreadId.has('deleted')).toBe(false)
+    expect((queue as any).queueDrainDueAtByThreadId.has('deleted')).toBe(false)
+    expect((queue as any).queueCleanupByThreadId.size).toBe(0)
+  }
+
+  it.each(['rpc', 'notification'])('clears a paused persisted queue and its timer through %s', async (source) => {
+    await seedQueues()
+    const { server, queue, call } = setupServer()
+    call.mockImplementation(async (method: string) => method === 'thread/read'
+      ? { thread: { status: { type: 'idle' }, turns: [{ status: 'interrupted' }] } }
+      : {})
+    await queue.processThreadQueue('deleted')
+    queue.scheduleThreadQueueDrain('deleted', 60_000)
+    if (source === 'rpc') await server.rpc('thread/delete', { threadId: 'deleted' })
+    else {
+      const cleanup = vi.spyOn(queue, 'forgetDeletedThread')
+      ;(server as any).emitNotification({ method: 'thread/deleted', params: { threadId: 'deleted' } })
+      await cleanup.mock.results[0]!.value
+    }
+    await expectQueuesCleared(queue)
+    const readCount = call.mock.calls.filter(([method]) => method === 'thread/read').length
+    await queue.scheduleAllQueuedThreads(60_000)
+    await queue.processThreadQueue('deleted')
+    expect(call.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(readCount)
+    expect((queue as any).queueDrainTimersByThreadId.has('deleted')).toBe(false)
+  })
+
+  it.each(['thread/read', 'thread/resume', 'turn/start'])('cancels a drain waiting on %s without restoring or sending deleted drafts', async (pendingMethod) => {
+    await seedQueues()
+    const { server, queue, call } = setupServer()
+    let finish!: (value: unknown) => void
+    let fail!: (error: Error) => void
+    let started!: () => void
+    const waiting = new Promise<void>((resolve) => { started = resolve })
+    const pending = new Promise((resolve, reject) => { finish = resolve; fail = reject })
+    call.mockImplementation(async (method: string) => {
+      if (method === pendingMethod) { started(); return pending }
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' }, turns: [] } }
+      if (method === 'thread/resume') return { model: 'thread-model', reasoningEffort: 'high' }
+      return {}
+    })
+    const drain = queue.processThreadQueue('deleted')
+    await waiting
+    await server.rpc('thread/delete', { threadId: 'deleted' })
+    if (pendingMethod === 'turn/start') fail(new Error('thread not found'))
+    else finish({ thread: { status: { type: 'idle' }, turns: [] }, model: 'thread-model' })
+    await drain
+    await expectQueuesCleared(queue)
+    expect(call.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(pendingMethod === 'turn/start' ? 1 : 0)
+    expect((queue as any).processingByThreadId.size).toBe(0)
+  })
+
+  it('keeps drafts and scheduling when native deletion fails', async () => {
+    await seedQueues()
+    const { server, queue, call } = setupServer()
+    queue.scheduleThreadQueueDrain('deleted', 60_000)
+    call.mockRejectedValue(new Error('Delete failed'))
+    await expect(server.rpc('thread/delete', { threadId: 'deleted' })).rejects.toThrow('Delete failed')
+    const state = JSON.parse(await readFile(join(reviewHome, '.codex-global-state.json'), 'utf8'))
+    expect(state['thread-queue-state'].deleted.map((message: { id: string }) => message.id)).toEqual(['first', 'second'])
+    expect((queue as any).queueDrainTimersByThreadId.has('deleted')).toBe(true)
+  })
+
+  it('restores a failed send when its thread has not been deleted', async () => {
+    await seedQueues()
+    const { queue, call } = setupServer()
+    call.mockImplementation(async (method) => {
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' }, turns: [] } }
+      if (method === 'thread/resume') return { model: 'thread-model' }
+      if (method === 'turn/start') throw new Error('Temporary failure')
+      return {}
+    })
+    await queue.processThreadQueue('deleted')
+    const state = JSON.parse(await readFile(join(reviewHome, '.codex-global-state.json'), 'utf8'))
+    expect(state['thread-queue-state'].deleted.map((message: { id: string }) => message.id)).toEqual(['first', 'second'])
+    expect((queue as any).queueDrainTimersByThreadId.has('deleted')).toBe(true)
+  })
 })

@@ -4,12 +4,19 @@ import { t } from '../../composables/useUiLanguage'
 import type { UiThread } from '../../types/codex'
 
 type ArchiveAction = 'restore' | 'delete'
+type RemovedListener = (threadId: string, action: ArchiveAction) => void
 
-export function useArchivedThreadActions(onRemoved: (threadId: string, action: ArchiveAction) => void) {
+export function useArchivedThreadActions(onRemoved: RemovedListener) {
   const pending = ref(new Map<string, ArchiveAction>())
   const confirmation = ref<UiThread | null>(null)
   const error = ref('')
+  const removedListeners = new Set<RemovedListener>()
   let disposed = false
+
+  function subscribeRemoved(listener: RemovedListener): () => void {
+    removedListeners.add(listener)
+    return () => { removedListeners.delete(listener) }
+  }
 
   function requestDelete(thread: UiThread): void {
     if (disposed || pending.value.has(thread.id)) return
@@ -30,6 +37,7 @@ export function useArchivedThreadActions(onRemoved: (threadId: string, action: A
       if (disposed) return
       if (confirmation.value?.id === threadId) confirmation.value = null
       onRemoved(threadId, action)
+      for (const listener of removedListeners) listener(threadId, action)
     } catch (failure) {
       if (!disposed) error.value = failure instanceof Error ? failure.message : t(action === 'restore' ? 'Failed to restore conversation' : 'Failed to delete conversation')
     } finally {
@@ -41,6 +49,8 @@ export function useArchivedThreadActions(onRemoved: (threadId: string, action: A
     if (confirmation.value) await run(confirmation.value.id, 'delete')
   }
 
-  onScopeDispose(() => { disposed = true; confirmation.value = null })
-  return { pending, confirmation, error, requestDelete, cancelDelete, confirmDelete, restore: (threadId: string) => run(threadId, 'restore') }
+  onScopeDispose(() => { disposed = true; confirmation.value = null; removedListeners.clear() })
+  return { pending, confirmation, error, requestDelete, cancelDelete, confirmDelete, subscribeRemoved, restore: (threadId: string) => run(threadId, 'restore') }
 }
+
+export type ArchivedThreadActions = ReturnType<typeof useArchivedThreadActions>

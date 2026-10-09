@@ -37,15 +37,16 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getThreadGroupsPage, searchThreads } from '../../api/codexGateway'
 import { isNativeHistoryUnsupported, titleMatchRank } from '../../api/threadSearch'
 import { useUiLanguage } from '../../composables/useUiLanguage'
-import { useArchivedThreadActions } from './useArchivedThreadActions'
+import type { ArchivedThreadActions } from './useArchivedThreadActions'
 import type { UiThread } from '../../types/codex'
 import IconTablerArchive from '../icons/IconTablerArchive.vue'
 import IconTablerTrash from '../icons/IconTablerTrash.vue'
 import ThreadArchivePreview from './ThreadArchivePreview.vue'
 
-const emit = defineEmits<{ select: [thread: UiThread]; restored: []; deleted: [threadId: string] }>()
+defineEmits<{ select: [thread: UiThread] }>()
 const { t, uiLanguage } = useUiLanguage()
 const props = withDefaults(defineProps<{
+  actions: ArchivedThreadActions
   archived?: boolean
   query?: string
   activeThreads?: UiThread[]
@@ -64,13 +65,13 @@ const metadataError = ref('')
 const loading = ref(false)
 const error = ref('')
 const removedIds = ref(new Set<string>())
-const { pending, confirmation, error: actionError, requestDelete, cancelDelete, confirmDelete, restore } = useArchivedThreadActions((threadId, action) => {
+const { pending, confirmation, error: actionError, requestDelete, cancelDelete, confirmDelete, restore } = props.actions
+const unsubscribeRemoved = props.actions.subscribeRemoved((threadId, action) => {
+  if (action === 'restore' && !props.archived) return
   threads.value = threads.value.filter((thread) => thread.id !== threadId)
   nativeThreads.value = nativeThreads.value.filter((thread) => thread.id !== threadId)
   removedIds.value.add(threadId)
   if (previewThread.value?.id === threadId) previewThread.value = null
-  if (action === 'restore') emit('restored')
-  else emit('deleted', threadId)
 })
 let disposed = false
 let generation = 0
@@ -158,5 +159,11 @@ watch(() => props.query, () => {
     timer = setTimeout(() => { void load(); void ensureMetadata() }, 220)
   } else if (!titlesStarted) void load()
 }, { immediate: true })
-onBeforeUnmount(() => { disposed = true; generation += 1; if (timer) clearTimeout(timer) })
+onBeforeUnmount(() => {
+  disposed = true
+  generation += 1
+  unsubscribeRemoved()
+  cancelDelete()
+  if (timer) clearTimeout(timer)
+})
 </script>

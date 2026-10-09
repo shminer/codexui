@@ -108,7 +108,7 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
-async function setupTurnLifecycleNotificationState(selectedThreadId: string) {
+async function setupTurnLifecycleNotificationState(selectedThreadId: string, additionalThreads: ReturnType<typeof thread>[] = []) {
   installTestWindow()
   let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
   gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -117,7 +117,7 @@ async function setupTurnLifecycleNotificationState(selectedThreadId: string) {
   })
   gatewayMocks.getPendingServerRequests.mockResolvedValue([])
   gatewayMocks.getThreadGroupsPage.mockResolvedValue({
-    groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }],
+    groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project'), ...additionalThreads] }],
     nextCursor: null,
   })
 
@@ -3676,6 +3676,39 @@ describe('findAdjacentThreadId', () => {
 })
 
 describe('atomic queue edits', () => {
+  const message = (id: string) => ({ id, text: id, imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' })
+
+  it('clears only the deleted queue and discards a late queue mutation response', async () => {
+    gatewayMocks.getThreadQueueState.mockResolvedValue({ 'thread-1': [message('a'), message('b')], other: [message('keep')] })
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('other', '/tmp/project')])
+    let finish!: (value: unknown) => void
+    gatewayMocks.mutateThreadQueue.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    state.removeQueuedMessage('a')
+    await flushMicrotasks()
+    expect(state.selectedThreadQueuedMessages.value.map((item) => item.id)).toEqual(['b'])
+    emit({ method: 'thread/deleted', params: { threadId: 'thread-1' } })
+    finish({ data: { 'thread-1': [message('b')], other: [message('keep')] } })
+    await flushMicrotasks()
+    state.primeSelectedThread('thread-1')
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+    state.primeSelectedThread('other')
+    expect(state.selectedThreadQueuedMessages.value.map((item) => item.id)).toEqual(['keep'])
+  })
+
+  it('discards a queue refresh that started before deletion', async () => {
+    gatewayMocks.getThreadQueueState.mockResolvedValue({ 'thread-1': [message('a')] })
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    let finish!: (value: unknown) => void
+    gatewayMocks.getThreadQueueState.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+    expect(state.selectedThreadQueuedMessages.value).toHaveLength(1)
+    state.forgetDeletedThread('thread-1')
+    finish({ 'thread-1': [message('a')] })
+    await flushMicrotasks()
+    state.primeSelectedThread('thread-1')
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+  })
+
   it('sends only a removal by ID from stale clients and keeps persisted queues on teardown', async () => {
     const message = (id: string) => ({ id, text: id, imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' })
     let stored: any = { 'thread-1': [message('a'), message('b')] }

@@ -89,9 +89,9 @@
           </div>
           <ThreadLibrary v-if="!isSidebarCollapsed && (showArchivedThreads || sidebarSearchQuery.trim())"
             :key="showArchivedThreads ? 'archived' : 'active'" :archived="showArchivedThreads" :query="sidebarSearchQuery"
+            :actions="archivedThreadActions"
             :active-threads="projectGroups.flatMap((group) => group.threads)" :load-active-metadata="ensureThreadSearchMetadata"
-            @select="registerThreadSummary($event); onSelectThread($event.id)" @deleted="forgetDeletedThread($event)"
-            @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
+            @select="registerThreadSummary($event); onSelectThread($event.id)" />
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
@@ -1260,6 +1260,7 @@ import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ThreadLibrary from './components/sidebar/ThreadLibrary.vue'
+import { useArchivedThreadActions } from './components/sidebar/useArchivedThreadActions'
 import type { UiThreadResource } from './threadResources'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
@@ -1477,6 +1478,11 @@ const {
   stopPolling,
   primeSelectedThread,
 } = useDesktopState()
+
+const archivedThreadActions = useArchivedThreadActions((threadId, action) => {
+  if (action === 'delete') forgetDeletedThread(threadId)
+  else void refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })
+})
 
 const route = useRoute()
 const router = useRouter()

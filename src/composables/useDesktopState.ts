@@ -6169,6 +6169,9 @@ export function useDesktopState() {
   }
 
   function forgetDeletedThread(threadId: string): void {
+    queueMutationRevision += 1
+    queuedMessagesByThreadId.value = omitKey(queuedMessagesByThreadId.value, threadId)
+    queueProcessingByThreadId.value = omitKey(queueProcessingByThreadId.value, threadId)
     removeArchivedThreadFromLoadedLists(threadId)
     invalidateThreadBody(threadId)
     resumedThreadById.value = omitKey(resumedThreadById.value, threadId)

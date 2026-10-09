@@ -1,4 +1,4 @@
-import { effectScope, type EffectScope } from 'vue'
+import { effectScope, onScopeDispose, type EffectScope } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deleteThread, unarchiveThread } from '../../api/codexGateway'
 import { setUiLanguage, t } from '../../composables/useUiLanguage'
@@ -86,7 +86,7 @@ describe('archived conversation actions', () => {
     expect(removed).toHaveBeenCalledExactlyOnceWith(thread.id, 'delete')
   })
 
-  it('does not update an unmounted list after deletion completes', async () => {
+  it('does not update a disposed application after deletion completes', async () => {
     let finish!: () => void
     vi.mocked(deleteThread).mockReturnValue(new Promise<void>((resolve) => { finish = resolve }))
     const { scope, actions, removed } = setup()
@@ -98,6 +98,37 @@ describe('archived conversation actions', () => {
     expect(removed).not.toHaveBeenCalled()
     expect(actions.pending.value.size).toBe(0)
     expect(actions.confirmation.value).toBeNull()
+  })
+
+  it.each(['delete', 'restore'] as const)('keeps %s pending across list remounts and notifies only the new list', async (action) => {
+    let finish!: () => void
+    vi.mocked(action === 'delete' ? deleteThread : unarchiveThread).mockReturnValue(new Promise<void>((resolve) => { finish = resolve }))
+    const { actions, removed } = setup()
+    const oldList = effectScope()
+    const oldRemoved = vi.fn()
+    oldList.run(() => { onScopeDispose(actions.subscribeRemoved(oldRemoved)) })
+    actions.requestDelete(thread)
+    const request = action === 'delete' ? actions.confirmDelete() : actions.restore(thread.id)
+    oldList.stop()
+    actions.cancelDelete()
+
+    const newList = effectScope()
+    scopes.push(newList)
+    const newRemoved = vi.fn()
+    newList.run(() => { onScopeDispose(actions.subscribeRemoved(newRemoved)) })
+    expect(actions.pending.value.get(thread.id)).toBe(action)
+    actions.requestDelete(thread)
+    await actions.confirmDelete()
+    await actions.restore(thread.id)
+    expect(deleteThread).toHaveBeenCalledTimes(action === 'delete' ? 1 : 0)
+    expect(unarchiveThread).toHaveBeenCalledTimes(action === 'restore' ? 1 : 0)
+
+    finish()
+    await request
+    expect(removed).toHaveBeenCalledExactlyOnceWith(thread.id, action)
+    expect(oldRemoved).not.toHaveBeenCalled()
+    expect(newRemoved).toHaveBeenCalledExactlyOnceWith(thread.id, action)
+    expect(actions.pending.value.size).toBe(0)
   })
 
   it('translates labels independently of account status and localizes fallback errors', async () => {

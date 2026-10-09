@@ -421,6 +421,7 @@ describe('backend queue scheduling', () => {
   it('reschedules a pending drain when a run-now request needs an earlier drain', async () => {
     vi.useFakeTimers()
     const processor = new BackendQueueProcessor({
+      onThreadDeleted: () => () => {},
       onNotification: () => () => undefined,
     } as never)
     const processThreadQueue = vi
