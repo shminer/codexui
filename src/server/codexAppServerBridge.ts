@@ -19,6 +19,7 @@ import { collectSubagents } from '../agentCollaboration.js'
 import { normalizeHistoryEntry, projectHistoryResources, readThreadHistoryEntries } from './threadHistoryProjection.js'
 import { commandOutputPage, diagnosticPreview, ThreadCacheBudget, ThreadDiagnosticBuffer } from './threadMemoryPolicy.js'
 import { readPersistedCommandOutputs } from './persistedCommandOutput.js'
+import { EPHEMERAL_HISTORY_MAX_THREADS, EphemeralHistoryError, EphemeralHistoryStore } from './ephemeralHistoryStore.js'
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import {
   getRandomFreeKey,
@@ -6275,6 +6276,10 @@ const MERGEABLE_ITEM_TYPES = new Set([
 ])
 
 export class AppServerProcess {
+  readonly ephemeralHistory = new EphemeralHistoryStore()
+  private readonly ephemeralThreadIds = new Set<string>()
+  private readonly closedEphemeralThreadIds = new Set<string>()
+  private pendingEphemeralStarts = 0
   private process: ChildProcessWithoutNullStreams | null = null
   private lifecycleEpoch = 0
   private initialized = false
@@ -6447,13 +6452,20 @@ export class AppServerProcess {
 
   private emitNotification(notification: { method: string; params: unknown }): void {
     const nThreadId = this.extractThreadIdFromParams(notification.params)
+    if (nThreadId && this.closedEphemeralThreadIds.has(nThreadId)) return
     if (notification.method === 'thread/deleted' && nThreadId) {
       void this.forgetDeletedThread(nThreadId).catch((error) => {
         console.warn('[thread-delete] Failed to clear the message queue', error)
       })
     }
     this.recordStreamEvent(notification)
-    this.captureItemFromNotification(notification)
+    if (nThreadId && this.ephemeralThreadIds.has(nThreadId)) {
+      const captured = this.ephemeralHistory.capture(notification.method, notification.params)
+      if (!captured && notification.method === 'turn/started') {
+        this.ephemeralHistory.register(nThreadId, true)
+        this.ephemeralHistory.capture(notification.method, notification.params)
+      }
+    } else this.captureItemFromNotification(notification)
     if (nThreadId) {
       const turnId = readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.id)
       if (notification.method === 'turn/started' && turnId) this.activeTurnIds.set(nThreadId, turnId)
@@ -6651,6 +6663,8 @@ export class AppServerProcess {
   }
 
   forgetDeletedThread(threadId: string): Promise<void> {
+    this.ephemeralThreadIds.delete(threadId)
+    this.ephemeralHistory.remove(threadId)
     for (const scope of this.threadReadScopes.get(threadId) ?? []) scope.deleted = true
     this.lastThreadReadSnapshotByThreadId.delete(threadId)
     this.threadTurnPageReadCacheByThreadId.delete(threadId)
@@ -6673,6 +6687,7 @@ export class AppServerProcess {
   private ensureMemoryMaintenance(): void {
     if (this.memoryMaintenanceTimer) return
     this.memoryMaintenanceTimer = setInterval(() => {
+      this.ephemeralHistory.prune()
       this.threadCacheBudget.prune()
       this.streamEvents.prune()
       void this.verifyNextPersistedCapture()
@@ -6681,6 +6696,10 @@ export class AppServerProcess {
   }
 
   private clearRecoverableMemory(): void {
+    this.ephemeralThreadIds.clear()
+    this.closedEphemeralThreadIds.clear()
+    this.pendingEphemeralStarts = 0
+    this.ephemeralHistory.clear()
     if (this.memoryMaintenanceTimer) clearInterval(this.memoryMaintenanceTimer)
     this.memoryMaintenanceTimer = null
     this.threadCacheBudget.clear()
@@ -6977,8 +6996,37 @@ export class AppServerProcess {
     const epoch = this.lifecycleEpoch
     await this.ensureInitialized()
     this.assertLifecycleEpoch(epoch)
-    const request = this.call(method, params)
     const threadId = readNonEmptyString(asRecord(params)?.threadId)
+    if ((method === 'thread/fork' || method === 'thread/start') && asRecord(params)?.ephemeral === true) {
+      if (this.ephemeralThreadIds.size + this.pendingEphemeralStarts >= EPHEMERAL_HISTORY_MAX_THREADS) throw new Error('Temporary conversation limit reached. Close an existing side conversation first.')
+      this.pendingEphemeralStarts++
+      try {
+        const result = await this.call(method, params)
+        this.assertLifecycleEpoch(epoch)
+        const id = readNonEmptyString(asRecord(asRecord(result)?.thread)?.id)
+        if (id) {
+          this.ephemeralThreadIds.add(id)
+          this.ephemeralHistory.register(id)
+          this.ensureMemoryMaintenance()
+        }
+        return result
+      } finally {
+        if (epoch === this.lifecycleEpoch) this.pendingEphemeralStarts--
+      }
+    }
+    const request = this.call(method, params)
+    if (method === 'thread/unsubscribe' && threadId) {
+      const result = await request
+      this.assertLifecycleEpoch(epoch)
+      if (this.ephemeralThreadIds.delete(threadId)) {
+        this.closedEphemeralThreadIds.add(threadId)
+        while (this.closedEphemeralThreadIds.size > 128) this.closedEphemeralThreadIds.delete(this.closedEphemeralThreadIds.values().next().value!)
+        this.activeTurnIds.delete(threadId)
+        this.streamEvents.remove(threadId)
+      }
+      this.ephemeralHistory.remove(threadId)
+      return result
+    }
     if (method === 'thread/delete' && threadId) {
       const result = await request
       await this.forgetDeletedThread(threadId)
@@ -8232,6 +8280,22 @@ export function createCodexBridgeMiddleware(options: {
               sendThreadReadJson(200, { data: normalizeHistoryEntry({ turnId, item }) })
             }
           }
+          if (url.searchParams.get('source') === 'ephemeral') {
+            try {
+              const item = appServer.ephemeralHistory.item(threadId, turnId, itemId)
+              if (outputView) sendCommandSource(item)
+              else {
+                const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', { thread: { turns: [{ id: turnId, items: [item] }] } })
+                const turn = asRecord((asRecord(asRecord(sanitized)?.thread)?.turns as unknown[])?.[0])
+                const normalizedItem = asRecord((turn?.items as unknown[])?.[0])
+                sendThreadReadJson(200, { data: normalizeHistoryEntry({ turnId, item: normalizedItem ?? item }) })
+              }
+            } catch (failure) {
+              if (!(failure instanceof EphemeralHistoryError)) throw failure
+              setJson(res, failure.status, { error: failure.message, code: failure.code })
+            }
+            return
+          }
           const readPersistedItem = async (): Promise<Record<string, unknown> | null> => {
             const refreshPath = async (): Promise<string | undefined> => {
               if (!securityPolicy.isRpcMethodAllowed('thread/read')) return undefined
@@ -8356,6 +8420,18 @@ export function createCodexBridgeMiddleware(options: {
           }
           if (beforeTurnId && afterTurnId) {
             setJson(res, 400, { error: 'Specify only one turn window anchor.' })
+            return
+          }
+
+          if (url.searchParams.get('source') === 'ephemeral') {
+            try {
+              const page = appServer.ephemeralHistory.page(threadId, beforeTurnId, afterTurnId, limit)
+              const result = await sanitizeThreadTurnsInlinePayloads('thread/read', page.result)
+              sendThreadReadJson(200, { ...page, result })
+            } catch (failure) {
+              if (!(failure instanceof EphemeralHistoryError)) throw failure
+              setJson(res, failure.status, { error: failure.message, code: failure.code })
+            }
             return
           }
 

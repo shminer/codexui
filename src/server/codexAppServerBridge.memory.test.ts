@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AppServerProcess, createCodexBridgeMiddleware } from './codexAppServerBridge'
 import { PERMISSIVE_SECURITY_POLICY } from './securityPolicy'
+import { EphemeralHistoryStore } from './ephemeralHistoryStore'
 
 let server: Server | undefined
 let bridge: ReturnType<typeof createCodexBridgeMiddleware> | undefined
@@ -23,11 +24,11 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-async function start(allowRead: () => boolean = () => true) {
+async function start(allowRead: () => boolean = () => true, denyItemReads = false) {
   bridge = createCodexBridgeMiddleware({ securityPolicy: {
     ...PERMISSIVE_SECURITY_POLICY,
     backgroundIntegrationsEnabled: false,
-    isRpcMethodAllowed: (method) => method !== 'thread/read' || allowRead(),
+    isRpcMethodAllowed: (method) => method === 'thread/items/list' && denyItemReads ? false : method !== 'thread/read' || allowRead(),
   } })
   server = createServer((req, res) => { void bridge!(req, res, () => res.end()) })
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
@@ -35,6 +36,70 @@ async function start(allowRead: () => boolean = () => true) {
   if (!address || typeof address === 'string') throw new Error('Missing test listener')
   return `http://127.0.0.1:${address.port}`
 }
+
+it('reads ephemeral pages and full sources without calling native history RPC', async () => {
+  const cache = new EphemeralHistoryStore()
+  cache.register('side')
+  cache.capture('turn/started', { threadId: 'side', turn: { id: 'turn' } })
+  cache.capture('item/completed', { threadId: 'side', turnId: 'turn', item: { id: 'command', type: 'commandExecution', command: 'echo', status: 'completed', aggregatedOutput: 'x'.repeat(70000) } })
+  cache.capture('turn/completed', { threadId: 'side', turn: { id: 'turn', status: 'completed' } })
+  const page = cache.page('side', '', '', 20)
+  const item = cache.item('side', 'turn', 'command')
+  vi.spyOn(EphemeralHistoryStore.prototype, 'page').mockReturnValue(page)
+  vi.spyOn(EphemeralHistoryStore.prototype, 'item').mockReturnValue(item)
+  const rpc = vi.spyOn(AppServerProcess.prototype, 'rpc')
+  const base = await start()
+  const response = await fetch(`${base}/codex-api/thread-turn-page?threadId=side&source=ephemeral`)
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ result: { thread: { id: 'side' } }, nextTurnIndex: 1 })
+  const output = await fetch(`${base}/codex-api/thread-resource-source?threadId=side&turnId=turn&itemId=command&source=ephemeral&view=command-output&offset=0&limit=100`)
+  expect(await output.json()).toEqual({ data: { text: 'x'.repeat(100), offset: 0, totalLength: 70000, nextOffset: 100 } })
+  const full = await fetch(`${base}/codex-api/thread-resource-source?threadId=side&turnId=turn&itemId=command&source=ephemeral`)
+  expect(await full.json()).toMatchObject({ data: [{ id: 'command', commandExecution: { aggregatedOutput: 'x'.repeat(70000) } }] })
+  expect(rpc).not.toHaveBeenCalled()
+})
+
+it('keeps policy checks in front of ephemeral history routes', async () => {
+  const page = vi.spyOn(EphemeralHistoryStore.prototype, 'page')
+  const item = vi.spyOn(EphemeralHistoryStore.prototype, 'item')
+  const base = await start(() => false, true)
+  for (const route of ['thread-turn-page?threadId=side', 'thread-resource-source?threadId=side&turnId=turn&itemId=item']) {
+    expect((await fetch(`${base}/codex-api/${route}&source=ephemeral`)).status).toBe(403)
+  }
+  expect(page).not.toHaveBeenCalled()
+  expect(item).not.toHaveBeenCalled()
+})
+
+it('never copies expired or closed ephemeral events into the ordinary capture cache', async () => {
+  const appServer = new AppServerProcess()
+  processes.push(appServer)
+  vi.spyOn(appServer as any, 'ensureInitialized').mockResolvedValue(undefined)
+  vi.spyOn(appServer as any, 'call').mockResolvedValue({ thread: { id: 'side' } })
+  await appServer.rpc('thread/fork', { threadId: 'parent', ephemeral: true })
+  appServer.ephemeralHistory.remove('side')
+  const event = { method: 'item/completed', params: { threadId: 'side', turnId: 'turn', item: { id: 'command', type: 'commandExecution', aggregatedOutput: 'output' } } }
+  ;(appServer as any).emitNotification(event)
+  expect((appServer as any).capturedItemsByThreadId.has('side')).toBe(false)
+  ;(appServer as any).emitNotification({ method: 'turn/started', params: { threadId: 'side', turn: { id: 'turn' } } })
+  ;(appServer as any).emitNotification(event)
+  expect(appServer.ephemeralHistory.page('side', '', '', 20).historyTruncated).toBe(true)
+  await appServer.rpc('thread/unsubscribe', { threadId: 'side' })
+  ;(appServer as any).emitNotification(event)
+  expect((appServer as any).capturedItemsByThreadId.has('side')).toBe(false)
+  expect(appServer.ephemeralHistory.stats.threads).toBe(0)
+  expect((appServer as any).ephemeralThreadIds.size).toBe(0)
+})
+
+it('bounds ephemeral lifecycle registrations before issuing additional forks', async () => {
+  const appServer = new AppServerProcess()
+  processes.push(appServer)
+  vi.spyOn(appServer as any, 'ensureInitialized').mockResolvedValue(undefined)
+  let nextId = 0
+  const call = vi.spyOn(appServer as any, 'call').mockImplementation(async () => ({ thread: { id: `side-${nextId++}` } }))
+  for (let index = 0; index < 8; index++) await appServer.rpc('thread/fork', { threadId: 'parent', ephemeral: true })
+  await expect(appServer.rpc('thread/fork', { threadId: 'parent', ephemeral: true })).rejects.toThrow('Temporary conversation limit reached')
+  expect(call).toHaveBeenCalledTimes(8)
+})
 
 it('uses exclusive before/after anchors, latest windows, and explicit stale-window errors', async () => {
   const turns = Array.from({ length: 6 }, (_, index) => ({ id: `turn-${index}`, items: [] }))
