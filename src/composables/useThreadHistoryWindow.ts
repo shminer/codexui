@@ -3,6 +3,7 @@ import { getLatestThreadMessages, getNewerThreadMessages, getOlderThreadMessages
 import {
   ACTIVE_THREAD_TEXT_BUDGET,
   ACTIVE_THREAD_TURN_LIMIT,
+  getThreadPageFocusTurnId,
   retainThreadMessageWindow,
 } from './threadMessageRetention'
 
@@ -50,6 +51,7 @@ export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
         maxTurns: ACTIVE_THREAD_TURN_LIMIT,
         maxBytes: ACTIVE_THREAD_TEXT_BUDGET,
         direction: direction === 'older' ? 'earliest' : 'latest',
+        focusTurnId: direction === 'latest' ? undefined : getThreadPageFocusTurnId(page.messages, direction),
       })
       const indices = { ...(direction === 'latest' ? {} : previous?.turnIndexByTurnId), ...page.turnIndexByTurnId }
       const retainedIds = new Set(window.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
@@ -65,7 +67,7 @@ export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
         hasMoreOlder: (direction === 'newer' ? previous!.hasMoreOlder : page.hasMoreOlder) || window.removedOlder,
         hasMoreNewer: (direction === 'older' ? previous!.hasMoreNewer === true : page.hasMoreNewer === true) || window.removedNewer,
         turnIndexByTurnId: Object.fromEntries(Object.entries(indices).filter(([turnId]) => retainedIds.has(turnId))),
-        startTurnIndex: indices[olderAnchor] ?? page.startTurnIndex,
+        startTurnIndex: indices[olderAnchor] ?? (direction === 'newer' ? previous!.startTurnIndex : page.startTurnIndex),
         nextTurnIndex: direction === 'latest' ? page.nextTurnIndex : Math.max(previous?.nextTurnIndex ?? 0, page.nextTurnIndex ?? 0),
       }
     } catch (failure) {

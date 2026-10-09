@@ -2,6 +2,7 @@ import { effectScope, ref, type EffectScope } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ThreadTurnPage } from '../api/codexGateway'
 import { useThreadHistoryWindow } from './useThreadHistoryWindow'
+import { ACTIVE_THREAD_TEXT_BUDGET } from './threadMessageRetention'
 
 const api = vi.hoisted(() => ({ latest: vi.fn(), older: vi.fn(), newer: vi.fn() }))
 vi.mock('../api/codexGateway', () => ({
@@ -62,6 +63,89 @@ describe('read-only thread history windows', () => {
     finish(page(80, 20))
     await oldRequest
     expect(state.detail.value?.messages[0]?.turnId).toBe('turn-0')
+  })
+
+  it.each(['older', 'newer'] as const)('reaches and passes an oversized middle turn when paging %s', async (direction) => {
+    const oversizedText = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
+    const oversizedPage = (start: number, count: number) => {
+      const result = page(start, count)
+      result.messages.find((message) => message.turnId === 'turn-25')!.text = oversizedText
+      return result
+    }
+    api.latest.mockResolvedValue(page(direction === 'older' ? 30 : 0, 20))
+    api[direction].mockResolvedValueOnce(oversizedPage(20, 10))
+    api[direction].mockResolvedValueOnce(oversizedPage(direction === 'older' ? 16 : 25, 10))
+    api[direction].mockResolvedValueOnce(page(direction === 'older' ? 15 : 26, 10))
+    const { state } = windowFor()
+    const load = direction === 'older' ? state.loadOlder : state.loadNewer
+    await state.loadLatest()
+    await load()
+    expect(state.detail.value?.messages).toHaveLength(20)
+    expect(state.detail.value?.messages[0]?.turnId).toBe(direction === 'older' ? 'turn-26' : 'turn-5')
+    expect(state.detail.value?.messages.at(-1)?.turnId).toBe(direction === 'older' ? 'turn-45' : 'turn-24')
+    expect(state.detail.value).toMatchObject({ hasMoreOlder: true, hasMoreNewer: true })
+    await load()
+    expect(state.detail.value?.messages).toEqual([expect.objectContaining({ turnId: 'turn-25', text: oversizedText, turnIndex: 25 })])
+    expect(state.detail.value?.startTurnIndex).toBe(25)
+    expect(state.detail.value).toMatchObject({ hasMoreOlder: true, hasMoreNewer: true })
+    await load()
+    expect(state.detail.value?.messages).toHaveLength(10)
+    expect(state.detail.value?.messages[0]?.turnId).toBe(direction === 'older' ? 'turn-15' : 'turn-26')
+    expect(state.detail.value?.messages.at(-1)?.turnId).toBe(direction === 'older' ? 'turn-24' : 'turn-35')
+    expect(api[direction].mock.calls).toEqual(direction === 'older'
+      ? [['thread', 'turn-30'], ['thread', 'turn-26'], ['thread', 'turn-25']]
+      : [['thread', 'turn-19'], ['thread', 'turn-24'], ['thread', 'turn-25']])
+    expect(state.detail.value?.nextTurnIndex).toBe(100)
+    expect(Object.keys(state.detail.value?.turnIndexByTurnId ?? {})).toHaveLength(10)
+  })
+
+  it('keeps newer paging available for unseen turns in an end page', async () => {
+    const oversizedText = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
+    const endPage = (start: number) => {
+      const result = { ...page(start, 30 - start), hasMoreNewer: false }
+      const oversized = result.messages.find((message) => message.turnId === 'turn-25')
+      if (oversized) oversized.text = oversizedText
+      return result
+    }
+    api.latest.mockResolvedValue(page(0, 20))
+    api.newer.mockResolvedValueOnce(endPage(20))
+    api.newer.mockResolvedValueOnce(endPage(25))
+    api.newer.mockResolvedValueOnce(endPage(26))
+    const { state } = windowFor()
+    await state.loadLatest()
+    await state.loadNewer()
+    expect(state.detail.value?.hasMoreNewer).toBe(true)
+    await state.loadNewer()
+    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-25')
+    expect(state.detail.value?.hasMoreNewer).toBe(true)
+    await state.loadNewer()
+    expect(state.detail.value?.hasMoreNewer).toBe(false)
+    expect(state.detail.value?.messages.map((message) => message.turnId)).toEqual(['turn-26', 'turn-27', 'turn-28', 'turn-29'])
+    expect(api.newer.mock.calls).toEqual([['thread', 'turn-19'], ['thread', 'turn-24'], ['thread', 'turn-25']])
+  })
+
+  it.each(['older', 'newer'] as const)('advances consecutive empty raw pages and preserves the start watermark when paging %s', async (direction) => {
+    api.latest.mockResolvedValue({ ...page(40, 10), messages: [] })
+    const step = direction === 'older' ? -10 : 10
+    api[direction].mockResolvedValueOnce({ ...page(40 + step, 10), messages: [] })
+    api[direction].mockResolvedValueOnce({ ...page(40 + 2 * step, 10), messages: [] })
+    api[direction].mockResolvedValueOnce(page(40 + 3 * step, 10))
+    const { state } = windowFor()
+    const load = direction === 'older' ? state.loadOlder : state.loadNewer
+    await state.loadLatest()
+    await load()
+    expect(state.detail.value?.messages).toEqual([])
+    expect(state.detail.value?.startTurnIndex).toBe(direction === 'older' ? 30 : 40)
+    await load()
+    expect(state.detail.value?.messages).toEqual([])
+    expect(state.detail.value?.startTurnIndex).toBe(direction === 'older' ? 20 : 40)
+    await load()
+    expect(api[direction].mock.calls).toEqual(direction === 'older'
+      ? [['thread', 'turn-40'], ['thread', 'turn-30'], ['thread', 'turn-20']]
+      : [['thread', 'turn-49'], ['thread', 'turn-59'], ['thread', 'turn-69']])
+    expect(state.detail.value?.messages[0]?.turnId).toBe(direction === 'older' ? 'turn-10' : 'turn-70')
+    expect(state.detail.value?.startTurnIndex).toBe(direction === 'older' ? 10 : 40)
+    expect(state.detail.value?.nextTurnIndex).toBe(100)
   })
 
   it('advances raw turn boundaries even when a page has no displayable messages', async () => {

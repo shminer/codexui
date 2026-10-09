@@ -33,3 +33,10 @@ The Fork action beside an assistant response creates a new thread ending at that
 - Fork from a response after turn 15. Open the resulting fork immediately and click Load earlier messages.
 - Expected: the fork ends at exactly the selected response, the initial recent page exposes the earlier-history control without a reload, and older pages retain turn indices and provider metadata.
 - Cleanup: archive the test fork. Pagination metadata is copied from the existing verification read, with no extra network request.
+
+### Fork larger than the inactive cache budget
+
+- Setup: a completed source thread with a response whose estimated text is greater than 512 KiB and less than 2 MiB. For a mock, use separate source and fork responses keyed by their thread IDs; the source may not have loaded its body yet.
+- Fork from that response and inspect the resulting thread immediately. Confirm its final turn ID matches the selected source response, the new fork is selected, and the full response remains visible without an error.
+- Inspect the mock requests: one source detail read, one fork detail verification read, and one fork request carrying the selected `lastTurnId`. The source read must not consume the fork's large-body fixture.
+- Cleanup: archive the test fork and preserve the original source thread. Reset the scoped mocks after the case.

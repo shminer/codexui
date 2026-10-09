@@ -84,6 +84,7 @@ import {
   INACTIVE_THREAD_CACHE_LIMIT,
   INACTIVE_THREAD_TEXT_BUDGET,
   INACTIVE_THREAD_TURN_LIMIT,
+  getThreadPageFocusTurnId,
   retainThreadMessageWindow,
 } from './threadMessageRetention'
 
@@ -3535,7 +3536,7 @@ export function useDesktopState() {
     setThreadTerminalOpen(threadId, !selectedThreadTerminalOpen.value)
   }
 
-  function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[], direction: 'latest' | 'earliest' = 'latest'): boolean {
+  function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[], direction: 'latest' | 'earliest' = 'latest', focusTurnId?: string): boolean {
     if (!isKnownSideConversationThread(threadId)) {
       nextMessages = nextMessages.map((message) => {
         if (!message.commandExecution) return message
@@ -3548,6 +3549,7 @@ export function useDesktopState() {
           maxTurns: threadId === selectedThreadId.value ? ACTIVE_THREAD_TURN_LIMIT : INACTIVE_THREAD_TURN_LIMIT,
           maxBytes: threadId === selectedThreadId.value ? ACTIVE_THREAD_TEXT_BUDGET : INACTIVE_THREAD_TEXT_BUDGET,
           direction,
+          focusTurnId: threadId === selectedThreadId.value ? focusTurnId : undefined,
           keepOversizedTurn: threadId === selectedThreadId.value,
         })
         if (nextMessages.length > 0 && retained.messages.length === 0 && threadId !== selectedThreadId.value) {
@@ -5933,7 +5935,7 @@ export function useDesktopState() {
       }
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
       extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'older')
-      setPersistedMessagesForThread(threadId, mergedMessages, 'earliest')
+      setPersistedMessagesForThread(threadId, mergedMessages, 'earliest', getThreadPageFocusTurnId(page.messages, 'older'))
       rebindLiveFileChangeTurnIndices(threadId)
     } catch (loadError) {
       if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
@@ -5961,8 +5963,8 @@ export function useDesktopState() {
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
       extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'newer')
       const merged = mergeMessages(persistedMessagesByThreadId.value[threadId] ?? [], page.messages, { preserveMissing: true })
-      setPersistedMessagesForThread(threadId, merged, 'latest')
-      if (page.hasMoreNewer !== true) historyWindowThreadIds.delete(threadId)
+      setPersistedMessagesForThread(threadId, merged, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))
+      if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) historyWindowThreadIds.delete(threadId)
       rebindLiveFileChangeTurnIndices(threadId)
       removeLiveCommandsPersistedIn(threadId, page.messages)
       removeLiveFileChangesPersistedIn(threadId, page.messages)

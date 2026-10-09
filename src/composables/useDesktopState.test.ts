@@ -3831,6 +3831,91 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
+  it('reaches an oversized middle turn in both directions without skipping history', async () => {
+    const historyPage = (start: number, count: number) => {
+      const result = { ...page(start, count, start + count < 50), nextTurnIndex: 50 }
+      const oversized = result.messages.find(message => message.turnId === 'turn-25')
+      if (oversized) oversized.text = 'x'.repeat(2 * 1024 * 1024)
+      return result
+    }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(30, 20), model: '', modelProvider: '', subagents: [] })
+    gatewayMocks.getOlderThreadMessages
+      .mockResolvedValueOnce(historyPage(20, 10))
+      .mockResolvedValueOnce(historyPage(16, 10))
+      .mockResolvedValueOnce(historyPage(15, 10))
+      .mockResolvedValueOnce(historyPage(5, 10))
+      .mockResolvedValueOnce(historyPage(0, 5))
+    gatewayMocks.getNewerThreadMessages
+      .mockResolvedValueOnce(historyPage(20, 10))
+      .mockResolvedValueOnce(historyPage(25, 10))
+      .mockResolvedValueOnce(historyPage(26, 10))
+      .mockResolvedValueOnce(historyPage(36, 10))
+      .mockResolvedValueOnce(historyPage(46, 4))
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    const visited = new Set(state.messages.value.map(message => message.turnIndex ?? -1))
+    for (const direction of ['older', 'newer'] as const) {
+      const load = direction === 'older' ? state.loadOlderMessages : state.loadNewerMessages
+      for (let step = 0; step < 5; step += 1) {
+        await load()
+        for (const message of state.messages.value) visited.add(message.turnIndex ?? -1)
+        expect(state.messages.value.length).toBeLessThanOrEqual(20)
+        if (step === 1) {
+          expect(state.messages.value).toHaveLength(1)
+          expect(state.messages.value[0]).toMatchObject({ turnId: 'turn-25', turnIndex: 25 })
+          expect(state.messages.value[0].text).toHaveLength(2 * 1024 * 1024)
+          expect(state.hasMoreOlderMessages.value).toBe(true)
+          expect(state.hasMoreNewerMessages.value).toBe(true)
+        }
+      }
+      expect([...visited].sort((left, right) => left - right)).toEqual(Array.from({ length: 50 }, (_, index) => index))
+      visited.clear()
+      for (const message of state.messages.value) visited.add(message.turnIndex ?? -1)
+    }
+    expect(gatewayMocks.getOlderThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
+      ['bounded', 'turn-30'], ['bounded', 'turn-26'], ['bounded', 'turn-25'], ['bounded', 'turn-15'], ['bounded', 'turn-5'],
+    ])
+    expect(gatewayMocks.getNewerThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
+      ['bounded', 'turn-19'], ['bounded', 'turn-24'], ['bounded', 'turn-25'], ['bounded', 'turn-35'], ['bounded', 'turn-45'],
+    ])
+    expect(state.hasMoreNewerMessages.value).toBe(false)
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index + 30))
+    state.stopPolling()
+  })
+
+  it('keeps reading history when a final newer page is only partly retained', async () => {
+    const historyPage = (start: number, count: number) => {
+      const result = { ...page(start, count, start + count < 30), nextTurnIndex: 30 }
+      const oversized = result.messages.find(message => message.turnId === 'turn-25')
+      if (oversized) oversized.text = 'x'.repeat(2 * 1024 * 1024)
+      return result
+    }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(20, 10), model: '', modelProvider: '', subagents: [] })
+    gatewayMocks.getOlderThreadMessages
+      .mockResolvedValueOnce(historyPage(16, 10))
+      .mockResolvedValueOnce(historyPage(15, 10))
+      .mockResolvedValueOnce(historyPage(5, 10))
+      .mockResolvedValueOnce(historyPage(0, 5))
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    for (let step = 0; step < 4; step += 1) await state.loadOlderMessages()
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(historyPage(20, 10))
+    await state.loadNewerMessages()
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(24)
+    expect(state.hasMoreNewerMessages.value).toBe(true)
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(20, 10), model: '', modelProvider: '', subagents: [] })
+    await state.loadMessages('bounded', { silent: true, force: true })
+    expect(state.messages.value.at(-1)?.turnIndex).toBe(24)
+    expect(state.hasMoreNewerMessages.value).toBe(true)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(historyPage(25, 5))
+    await state.loadNewerMessages()
+    expect(gatewayMocks.getNewerThreadMessages).toHaveBeenLastCalledWith('bounded', 'turn-24')
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual([25])
+    state.stopPolling()
+  })
+
   it('reloads evicted inactive bodies instead of treating an empty cache as loaded', async () => {
     const state = useDesktopState()
     for (let index = 0; index < 5; index += 1) {
@@ -4087,10 +4172,21 @@ describe('bounded thread working sets', () => {
     oversized.messages[0].text = 'x'.repeat(512 * 1024)
     gatewayMocks.forkThread.mockResolvedValueOnce({ threadId: 'large-fork', cwd: '/tmp/project', model: '' })
     gatewayMocks.renameThread.mockResolvedValueOnce(undefined)
-    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...oversized, model: '', modelProvider: '', subagents: [] })
+    const readDetail = async (threadId: string) => {
+      if (threadId === 'thread-1') return { ...page(0, 1), model: '', modelProvider: '', subagents: [] }
+      if (threadId === 'large-fork') return { ...oversized, model: '', modelProvider: '', subagents: [] }
+      throw new Error(`Unexpected thread detail request: ${threadId}`)
+    }
+    gatewayMocks.getThreadDetail.mockImplementationOnce(readDetail).mockImplementationOnce(readDetail)
     expect(await state.forkThreadFromTurn('thread-1', 'turn-0')).toBe('large-fork')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenNthCalledWith(1, 'thread-1')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenNthCalledWith(2, 'large-fork')
+    expect(gatewayMocks.forkThread).toHaveBeenCalledExactlyOnceWith('thread-1', { lastTurnId: 'turn-0' })
     expect(state.selectedThreadId.value).toBe('large-fork')
+    expect(state.messages.value[0]?.turnId).toBe('turn-0')
     expect(state.messages.value[0]?.text).toHaveLength(512 * 1024)
+    expect(state.error.value).toBe('')
     state.stopPolling()
   })
 })

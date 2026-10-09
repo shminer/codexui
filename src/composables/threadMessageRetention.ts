@@ -18,12 +18,21 @@ export function estimateMessageTextBytes(message: UiMessage): number {
   return chars * 2
 }
 
+export function getThreadPageFocusTurnId(messages: UiMessage[], direction: 'older' | 'newer'): string | undefined {
+  const step = direction === 'older' ? -1 : 1
+  for (let index = direction === 'older' ? messages.length - 1 : 0; index >= 0 && index < messages.length; index += step) {
+    if (messages[index].turnId) return messages[index].turnId
+  }
+  return undefined
+}
+
 export function retainThreadMessageWindow(
   messages: UiMessage[],
   options: {
     maxTurns: number
     maxBytes: number
     direction: 'latest' | 'earliest'
+    focusTurnId?: string
     protectedTurnIds?: ReadonlySet<string>
     keepOversizedTurn?: boolean
   },
@@ -42,7 +51,6 @@ export function retainThreadMessageWindow(
   }
 
   const entries = [...groups.entries()]
-  const ordered = options.direction === 'latest' ? [...entries].reverse() : entries
   const retained = new Set<string>()
   let bytes = 0
   let count = 0
@@ -53,8 +61,9 @@ export function retainThreadMessageWindow(
     bytes += group.bytes
     count += 1
   }
-  for (const [key, group] of ordered) {
-    if (retained.has(key)) continue
+  function retainGroup(index: number): boolean {
+    const [key, group] = entries[index]
+    if (retained.has(key)) return true
     const exceedsBudget = count >= options.maxTurns || bytes + group.bytes > options.maxBytes
     if (exceedsBudget) {
       if (count === 0 && options.keepOversizedTurn !== false) {
@@ -63,12 +72,32 @@ export function retainThreadMessageWindow(
         count += 1
         oversized = true
       }
-      // Keep a contiguous window rather than filling gaps with smaller turns.
-      break
+      return false
     }
     retained.add(key)
     bytes += group.bytes
     count += 1
+    return true
+  }
+
+  const focusIndex = options.focusTurnId && options.keepOversizedTurn !== false
+    ? entries.findIndex(([key]) => key === options.focusTurnId) : -1
+  if (focusIndex >= 0) {
+    // Reach the nearest incoming turn before moving past any budget barrier.
+    if (retainGroup(focusIndex)) {
+      const step = options.direction === 'earliest' ? -1 : 1
+      for (let index = focusIndex + step; index >= 0 && index < entries.length; index += step) {
+        if (!retainGroup(index)) break
+      }
+      for (let index = focusIndex - step; index >= 0 && index < entries.length; index -= step) {
+        if (!retainGroup(index)) break
+      }
+    }
+  } else {
+    const step = options.direction === 'latest' ? -1 : 1
+    for (let index = step === -1 ? entries.length - 1 : 0; index >= 0 && index < entries.length; index += step) {
+      if (!retainGroup(index)) break
+    }
   }
 
   const firstRetained = entries.findIndex(([key]) => retained.has(key))

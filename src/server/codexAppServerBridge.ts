@@ -6265,6 +6265,7 @@ const MERGEABLE_ITEM_TYPES = new Set([
 
 export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
+  private lifecycleEpoch = 0
   private initialized = false
   private initializePromise: Promise<void> | null = null
   private stdoutLines: ReturnType<typeof createInterface> | null = null
@@ -6368,6 +6369,7 @@ export class AppServerProcess {
         return
       }
 
+      this.lifecycleEpoch += 1
       const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
       for (const request of this.pending.values()) {
         request.reject(failure)
@@ -6550,10 +6552,13 @@ export class AppServerProcess {
     const pending = this.threadTurnPageReadPromiseByThreadId.get(threadId)
     if (pending) return pending
 
-    const promise = this.rpc('thread/read', {
+    const request = this.rpc('thread/read', {
       threadId,
       includeTurns: true,
-    }).then((result) => {
+    })
+    const epoch = this.lifecycleEpoch
+    const promise = request.then((result) => {
+      this.assertLifecycleEpoch(epoch)
       if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
       this.threadTurnPageReadCacheByThreadId.set(threadId, {
         result,
@@ -6564,6 +6569,7 @@ export class AppServerProcess {
       if (path) this.rememberThreadSessionPath(threadId, path)
       return result
     }, (error) => {
+      this.assertLifecycleEpoch(epoch)
       if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
       throw error
     }).finally(() => {
@@ -6871,7 +6877,8 @@ export class AppServerProcess {
       return
     }
 
-    this.initializePromise = this.call('initialize', {
+    const epoch = this.lifecycleEpoch
+    const promise = this.call('initialize', {
       clientInfo: {
         name: 'codex-web-local',
         version: '0.1.0',
@@ -6880,25 +6887,34 @@ export class AppServerProcess {
         experimentalApi: true,
       },
     }).then(() => {
+      this.assertLifecycleEpoch(epoch)
       this.sendLine({
         jsonrpc: '2.0',
         method: 'initialized',
       })
       this.initialized = true
     }).finally(() => {
-      this.initializePromise = null
+      if (this.initializePromise === promise) this.initializePromise = null
     })
 
-    await this.initializePromise
+    this.initializePromise = promise
+    await promise
+  }
+
+  private assertLifecycleEpoch(epoch: number): void {
+    if (epoch !== this.lifecycleEpoch) throw new Error('codex app-server lifecycle changed')
   }
 
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
+    const epoch = this.lifecycleEpoch
     await this.ensureInitialized()
+    this.assertLifecycleEpoch(epoch)
     const request = this.call(method, params)
     const threadId = readNonEmptyString(asRecord(params)?.threadId)
     if (method === 'thread/revert' && threadId) {
       const result = await request
+      this.assertLifecycleEpoch(epoch)
       this.lastThreadReadSnapshotByThreadId.delete(threadId)
       this.threadTurnPageReadCacheByThreadId.delete(threadId)
       this.threadTurnPageReadPromiseByThreadId.delete(threadId)
@@ -6911,10 +6927,12 @@ export class AppServerProcess {
     pending.add(request)
     this.pendingTurnStarts.set(threadId, pending)
     try {
-      return await request
+      const result = await request
+      this.assertLifecycleEpoch(epoch)
+      return result
     } finally {
       pending.delete(request)
-      if (!pending.size) this.pendingTurnStarts.delete(threadId)
+      if (!pending.size && this.pendingTurnStarts.get(threadId) === pending) this.pendingTurnStarts.delete(threadId)
     }
   }
 
@@ -6967,15 +6985,16 @@ export class AppServerProcess {
   }
 
   dispose(): void {
+    this.lifecycleEpoch += 1
+    this.initialized = false
+    this.initializePromise = null
+    this.activeConfigSignature = ''
     this.clearRecoverableMemory()
     if (!this.process) return
 
     const proc = this.process
     this.stopping = true
     this.process = null
-    this.initialized = false
-    this.initializePromise = null
-    this.activeConfigSignature = ''
     this.stdoutLines?.close()
     this.stdoutLines = null
 
