@@ -10,6 +10,8 @@ import {
 } from './useDesktopState'
 import type { UiProjectGroup } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
+import { CodexApiError } from '../api/codexErrors'
+import { EPHEMERAL_MESSAGE_CHARS } from './ephemeralMessageWindow'
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
@@ -175,6 +177,7 @@ beforeEach(() => {
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getThreadGoal.mockResolvedValue(null)
   gatewayMocks.getRecentThreadDetail.mockResolvedValue(null)
+  gatewayMocks.getLatestThreadMessages.mockResolvedValue({ messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, hasMoreNewer: false, startTurnIndex: 0, turnIndexByTurnId: {} })
   gatewayMocks.clearThreadGoal.mockResolvedValue(true)
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
 })
@@ -3800,6 +3803,102 @@ describe('history rollback capability', () => {
 })
 
 describe('side memory event races', () => {
+  it('keeps a newer same-ID live reply when an older temporary snapshot returns late', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const load = state.loadLatestMessages('side-thread-default')
+    emit({ method: 'item/completed', params: { threadId: 'side-thread-default', turnId: 'turn', item: { id: 'reply', type: 'agentMessage', text: 'new final answer' } } })
+    finish({ messages: [{ id: 'reply', role: 'assistant', text: 'old answer', turnId: 'turn', turnIndex: 0 }], inProgress: false, activeTurnId: '', hasMoreOlder: false, startTurnIndex: 0, turnIndexByTurnId: { turn: 0 } })
+    await load
+    expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toEqual([expect.objectContaining({ text: 'new final answer' })])
+  })
+  it('batches side正文、命令和推理增量，并在完成事件前冲刷', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    emit({ method: 'item/started', params: { ...params, item: { id: 'command', type: 'commandExecution', command: 'echo', status: 'inProgress', aggregatedOutput: '' } } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: 'first' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'command', delta: 'output' } })
+    emit({ method: 'item/reasoning/summaryTextDelta', params: { ...params, itemId: 'reason', delta: 'thinking' } })
+    expect(state.getLiveMessagesForThread(params.threadId).find((row) => row.id === 'reply')).toBeUndefined()
+    expect(state.getLiveMessagesForThread(params.threadId).find((row) => row.id === 'command')?.commandExecution?.aggregatedOutput).toBe('')
+    await vi.advanceTimersByTimeAsync(50)
+    expect(state.getLiveMessagesForThread(params.threadId).find((row) => row.id === 'reply')?.text).toBe('first')
+    expect(state.getLiveMessagesForThread(params.threadId).find((row) => row.id === 'command')?.commandExecution?.aggregatedOutput).toBe('output')
+    expect(state.sideConversationLiveOverlay.value?.reasoningText).toBe('thinking')
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: ' last' } })
+    emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } } })
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')?.text).toBe('first last')
+  })
+
+  it('bounds side正文与命令状态，最小化后保留队列和同一个临时会话', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'x'.repeat(EPHEMERAL_MESSAGE_CHARS + 10) } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'command', type: 'commandExecution', command: 'echo', status: 'completed', aggregatedOutput: 'y'.repeat(100000) } } })
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')).toMatchObject({ textTruncated: true })
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')?.text.length).toBe(EPHEMERAL_MESSAGE_CHARS)
+    expect(state.getLiveMessagesForThread(params.threadId).find((row) => row.id === 'command')?.commandExecution).toMatchObject({ outputTruncated: true, outputTotalLength: 100000 })
+    await state.sendSideConversationMessage('queued', [], [], 'queue')
+    state.hideSideConversation()
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')?.text.length).toBe(64 * 1024)
+    expect(state.sideConversationQueuedMessages.value.map((row) => row.text)).toEqual(['queued'])
+    await state.openSideConversation('thread-1')
+    expect(state.sideConversationThreadId.value).toBe(params.threadId)
+    expect(gatewayMocks.startSideConversation).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledWith(params.threadId, 20, 'ephemeral')
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalledWith(params.threadId)
+  })
+
+  it('coalesces side pagination and rejects a response after the window closes', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const first = state.loadLatestMessages('side-thread-default')
+    const second = state.loadLatestMessages('side-thread-default')
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    state.endSideConversation()
+    finish({ messages: [{ id: 'late', role: 'assistant', text: 'late answer' }], inProgress: false, activeTurnId: '', hasMoreOlder: false, startTurnIndex: 0, turnIndexByTurnId: {} })
+    await Promise.all([first, second])
+    expect(state.getLiveMessagesForThread('side-thread-default')).toEqual([])
+    expect(state.sideConversationMessages.value).toEqual([])
+  })
+
+  it('restores latest side history on stale anchors without reactivating an idle turn', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const page = { messages: [{ id: 'reply', role: 'assistant', text: 'cached', turnId: 'turn', turnIndex: 5 }], inProgress: true, activeTurnId: 'old', hasMoreOlder: true, hasMoreNewer: false, historyTruncated: true, startTurnIndex: 5, turnIndexByTurnId: { turn: 5 } }
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(page)
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockRejectedValueOnce(new CodexApiError('stale_window', { code: 'http_error', status: 409 }))
+    await state.loadOlderMessages('side-thread-default')
+    expect(gatewayMocks.getOlderThreadMessages).toHaveBeenCalledWith('side-thread-default', 'turn', 10, 'ephemeral')
+    expect(state.sideConversationHistoryTruncated.value).toBe(true)
+    expect(state.isSideConversationInProgress.value).toBe(false)
+    gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new CodexApiError('expired', { code: 'http_error', status: 410 }))
+    await expect(state.loadLatestMessages('side-thread-default')).rejects.toMatchObject({ status: 410 })
+    expect(state.sideConversationHasMoreOlder.value).toBe(false)
+    expect(state.sideConversationMessages.value.some((row) => row.text === 'cached')).toBe(true)
+  })
+
+  it('clears pending side deltas without recreating closed state', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    emit({ method: 'turn/started', params: { threadId: 'side-thread-default', turn: { id: 'turn' } } })
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'side-thread-default', turnId: 'turn', itemId: 'reply', delta: 'pending' } })
+    state.endSideConversation()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(state.getLiveMessagesForThread('side-thread-default')).toEqual([])
+  })
+
   it('updates a late final item without duplicating the saved side reply', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')

@@ -5,6 +5,24 @@ import { MAX_COMMAND_OUTPUT_CHARS } from '../commandOutput'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('bounded history APIs', () => {
+  it('reads side pages and full sources only from ephemeral history', async () => {
+    const urls: URL[] = []
+    const full = 'x'.repeat(256 * 1024 + 10)
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = new URL(String(input), 'http://localhost')
+      urls.push(url)
+      if (url.searchParams.get('view') === 'command-output') return Response.json({ data: { text: 'tail', offset: 0, totalLength: 4, nextOffset: null } })
+      if (url.pathname.endsWith('thread-resource-source')) return Response.json({ data: [{ id: 'reply', role: 'assistant', text: full }] })
+      return Response.json({ result: { thread: { id: 'side', turns: [{ id: 'turn', status: 'completed', items: [{ id: 'reply', type: 'agentMessage', text: full }] }] } }, startTurnIndex: 0, historyTruncated: true, activeTurnId: 'live-turn' })
+    }))
+    const page = await getLatestThreadMessages('side', 20, 'ephemeral')
+    expect(page).toMatchObject({ historyTruncated: true, activeTurnId: 'live-turn' })
+    expect(page.messages[0]).toMatchObject({ textTruncated: true })
+    expect(page.messages[0]?.text.length).toBe(256 * 1024)
+    expect((await getThreadResourceSource('side', 'turn', 'reply', 'ephemeral'))[0]?.text).toBe(full)
+    await getThreadCommandOutputPage('side', 'turn', 'cmd', 0, MAX_COMMAND_OUTPUT_CHARS, 'ephemeral')
+    expect(urls.every((url) => url.searchParams.get('source') === 'ephemeral')).toBe(true)
+  })
   it('requests exclusive older/newer boundaries and a latest window', async () => {
     const urls: URL[] = []
     vi.stubGlobal('fetch', vi.fn(async (input) => {

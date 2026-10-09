@@ -2,7 +2,7 @@
 
 ## Feature / Change
 
-The composer voice-input control is replaced by a temporary side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains scoped to the current main thread, survives minimization, and ends from X or when the original page closes. Its transcript, draft, selections, completion statistics, and queue remain in memory. Pop-out moves the same instance into a new window; it depends on the original page remaining open.
+The composer voice-input control is replaced by a temporary side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains scoped to the current main thread, survives minimization, and ends from X or when the original page closes. Its transcript uses bounded browser memory and temporary server memory; draft, selections, completion statistics, and queue remain in browser memory. Pop-out moves the same instance into a new window; it depends on the original page remaining open.
 
 ## Prerequisites
 
@@ -82,11 +82,37 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 
 - Setup: current CLI with ephemeral forks; open a parent conversation and the browser network inspector.
 - Send two side turns, steer during the first, and reconnect the notification stream. Finish or stop the turn, then start another.
-- Expected: earlier side messages and tool output stay in memory; synchronization uses only `thread/read` with `includeTurns:false`, never `thread/resume` or full history. No `no rollout found` or `ephemeral threads do not support includeTurns` error. A lost runtime thread asks to reopen the temporary conversation.
+- Expected: lifecycle synchronization uses `thread/read` with `includeTurns:false`, never `thread/resume` or native full history. Transcript pages use `/codex-api/thread-turn-page?source=ephemeral` and read only the temporary server cache. No `no rollout found` or `ephemeral threads do not support includeTurns` error. A lost runtime thread asks to reopen the temporary conversation.
 - Close the side window or reload the parent. Expected: the active turn is interrupted when its ID is known, then the child is unsubscribed. No transcript or side queue is saved. Empty side queues trigger no background history reads/retry timers.
 - Cleanup: close the temporary child; no persistent test session is needed.
-- Performance: one metadata read per coalesced sync; no history payload and no polling for threads without queued messages. No live long-duration throughput measurement was performed.
+- Performance: one metadata read per coalesced lifecycle sync, one coalesced temporary-cache read on visible completion/restoration, and no history polling for minimized threads. No live long-duration throughput measurement was performed.
 
 - Reorder fixture delivery so idle metadata precedes the final assistant item, and so running metadata arrives after turn completion. Expected: one final reply, no restored Thinking state. Replay of a final item updates the same in-memory ID. Each render deduplicates side rows in linear time; no extra request is needed.
 
 - Reload while `turn/start` is pending: teardown waits for the server-side start to settle and uses its active turn ID before unsubscribing. This adds no history read and does not rely on the departing browser receiving the start response.
+
+## Temporary Server History Cache
+
+| Item | Actions | Expected result |
+| --- | --- | --- |
+| Setup | Use an ephemeral-capable CLI; open a side conversation and DevTools Network. | The child stays absent from persistent history and the cache contains only new child turns, not inherited parent turns or boundary injection. |
+| Paging | Produce at least 25 side turns, request earlier/later/latest pages with `source=ephemeral`. | Exclusive turn anchors page the same child; these routes issue no native history RPC. |
+| Limits | Produce over 100 turns, more than 8 MiB of retained source data, or exceed the global 32 MiB cache budget across tabs. | Older turns/items or least-recently-used caches are released. Expired sources return 410; evicted anchors return 409. A single oversize item is omitted rather than retained beyond budget. |
+| Expiration | Leave a child idle without cache reads for 30 minutes. Resume with a new turn. | The old cache expires; the new turn creates a fresh bounded cache marked as truncated. Later child events never enter the ordinary persisted-item cache. |
+| Policy | Deny `thread/read` for page requests and `thread/items/list` for source requests using the injected policy. | Requests return 403 before reading the cache, preserving the existing route/RPC checks. |
+| Cleanup | End the side conversation; deliver a late completed-item event. | Cache and active registration are released; recent closed-child events are ignored. Process disposal clears all temporary caches. Up to eight live temporary children are admitted per app-server process. |
+
+## Browser Transcript Budget And Minimize
+
+| Item | Actions | Expected result |
+| --- | --- | --- |
+| Setup | Prepare desktop, 375x812 and 768x1024 viewports; repeat in light/dark themes. Generate over 20 turns, a response over 256 Ki characters and command output over 64 Ki characters. | Side assistant text, command output and reasoning deltas use the existing 50 ms batch path; completion/idle synchronization flushes pending content first. |
+| Retention | Continue sending while observing browser state and heap snapshots. Include a single turn with many commands. | Visible transcript retains at most 20 turns, 1000 items and an estimated 2 MiB text budget including live content and reasoning. A single huge turn is cropped by item, not exempted. |
+| Output | Expand a long completed command; page earlier/later output and copy full output. | State stores only the latest 64 Ki characters plus offset/total metadata. Older output and full copy read the temporary source only when requested. |
+| Text | Edit/copy a truncated user message and copy a truncated assistant response. Then expire the source and repeat. | A truncated marker is shown. Successful actions use the full source; an expired/running source shows an error without editing the draft or copying the preview as full content. |
+| Minimize | Keep a draft, skill, attachment and queued messages; minimize while running. | Only the transcript component unmounts. Its render caches/timers are cleared. Browser transcript drops to 10 turns and an estimated 512 KiB budget; draft, queue, selections and child execution remain. |
+| Restore | Open the same side window, then pop it out and return. | Same child, no fork/resume/new subscription; restoration coalesces one latest-cache read. Width preference stays synchronized. |
+| Races | Delay a history request; finish another turn or close the side window before returning the response. | Newly arrived rows survive the delayed response; closed state stays cleared. Stale anchors recover latest once, and expired caches stop pagination while keeping the remaining preview. |
+| Cleanup | End the child and restore viewport/theme/width settings. | Pending deltas, window bounds, indices, queue and cache references are released. No side transcript/draft is persisted in localStorage. |
+
+Static verification only: runtime/mock tests, heap measurements and browser/theme acceptance were not executed under the session restrictions. Server source budgets are additional to the existing ordinary-thread cache budget; draft/attachment/queue memory is intentionally outside transcript retention.

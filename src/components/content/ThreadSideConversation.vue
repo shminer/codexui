@@ -43,9 +43,10 @@
         </header>
 
         <div class="side-conversation-body">
+          <p v-if="historyTruncated" class="side-conversation-history-status" role="status">{{ t('Earlier temporary messages have been cleared') }}</p>
           <p v-if="isOpening" class="side-conversation-status">{{ t('Opening side conversation...') }}</p>
           <ThreadConversation
-            v-else
+            v-else-if="visible"
             class="side-conversation-thread"
             :messages="messages"
             :pending-requests="pendingRequests"
@@ -55,7 +56,14 @@
             :cwd="cwd"
             :readonly="true"
             :can-edit-message="!isOpening && Boolean(threadId) && pendingRequests.length === 0"
-            :recoverable-history="false"
+            history-source="ephemeral"
+            :has-more-persisted-above="hasMoreOlder"
+            :is-loading-persisted-above="loadingOlder"
+            :has-more-persisted-below="hasMoreNewer"
+            :is-loading-persisted-below="loadingNewer"
+            :load-earlier-messages="loadEarlierMessages"
+            :load-later-messages="loadLaterMessages"
+            :load-latest-messages="loadLatestMessages"
             @edit-message="onEditMessage"
           />
         </div>
@@ -165,6 +173,14 @@ type SideConversationWindowGesture = {
 const props = defineProps<{
   threadId: string
   chatWidth: number
+  historyTruncated: boolean
+  hasMoreOlder: boolean
+  hasMoreNewer: boolean
+  loadingOlder: boolean
+  loadingNewer: boolean
+  loadEarlierMessages: (threadId: string) => Promise<void>
+  loadLaterMessages: (threadId: string) => Promise<void>
+  loadLatestMessages: (threadId: string) => Promise<void>
   cwd: string
   messages: UiMessage[]
   pendingRequests: UiServerRequest[]
@@ -498,11 +514,15 @@ watch(isMobile, (mobile) => {
 }
 
 .side-conversation-body {
-  @apply min-h-0 flex-1 py-3;
+  @apply flex min-h-0 flex-1 flex-col py-3;
 }
 
 .side-conversation-thread {
-  @apply h-full;
+  @apply min-h-0 flex-1;
+}
+
+.side-conversation-history-status {
+  @apply shrink-0 px-3 pb-2 text-xs text-zinc-500;
 }
 
 .side-conversation-status {

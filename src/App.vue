@@ -1112,9 +1112,17 @@
     :chat-width="chatWidth"
     :cwd="composerCwd"
     :messages="sideConversationMessages"
+    :history-truncated="sideConversationHistoryTruncated"
+    :has-more-older="sideConversationHasMoreOlder"
+    :has-more-newer="sideConversationHasMoreNewer"
+    :loading-older="sideConversationLoadingOlder"
+    :loading-newer="sideConversationLoadingNewer"
+    :load-earlier-messages="loadOlderMessages"
+    :load-later-messages="loadNewerMessages"
+    :load-latest-messages="loadLatestMessages"
     :pending-requests="sideConversationServerRequests"
     :live-overlay="sideConversationLiveOverlay"
-    :error="sideConversationError"
+    :error="sideConversationError || sideConversationHistoryError"
     :is-opening="isSideConversationOpening"
     :is-turn-in-progress="isSideConversationInProgress"
     :collaboration-modes="availableCollaborationModes"
@@ -1387,10 +1395,16 @@ const {
   selectedLiveOverlay,
   sideConversationThreadId,
   sideConversationMessages,
+  sideConversationHistoryTruncated,
+  sideConversationHasMoreOlder,
+  sideConversationHasMoreNewer,
+  sideConversationLoadingOlder,
+  sideConversationLoadingNewer,
   sideConversationQueuedMessages,
   sideConversationLiveOverlay,
   sideConversationServerRequests,
   sideConversationError,
+  sideConversationHistoryError,
   isSideConversationOpen,
   isSideConversationVisible,
   isSideConversationOpening,

@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import type { UiMessage } from '../../types/codex'
+import type { ThreadHistorySource, UiMessage } from '../../types/codex'
 import { getThreadCommandOutputPage, getThreadResourceSource } from '../../api/codexGateway'
 import { MAX_COMMAND_OUTPUT_CHARS, commandOutputPage, limitCommandExecutionOutput } from '../../commandOutput'
 import { copyTextToClipboard } from '../../utils/clipboard'
@@ -23,7 +23,7 @@ import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 
-const props = defineProps<{ threadId: string; message: UiMessage; condensed?: boolean; recoverableHistory?: boolean }>()
+const props = defineProps<{ threadId: string; message: UiMessage; condensed?: boolean; recoverableHistory?: boolean; historySource?: ThreadHistorySource }>()
 const detail = ref<Awaited<ReturnType<typeof getThreadCommandOutputPage>> | null>(null)
 const loading = ref(false)
 const copying = ref(false)
@@ -61,7 +61,7 @@ async function loadPage(pageOffset: number): Promise<void> {
     const command = props.message.commandExecution
     const page = command && !command.outputTruncated
       ? commandOutputPage(command.aggregatedOutput, pageOffset, MAX_COMMAND_OUTPUT_CHARS)
-      : await getThreadCommandOutputPage(props.threadId, props.message.turnId!, props.message.id, pageOffset)
+      : await getThreadCommandOutputPage(props.threadId, props.message.turnId!, props.message.id, pageOffset, MAX_COMMAND_OUTPUT_CHARS, props.historySource)
     if (requestGeneration === generation) detail.value = page
   } catch (cause) {
     if (requestGeneration === generation) error.value = cause instanceof Error ? cause.message : 'Failed to load output.'
@@ -79,7 +79,7 @@ async function copyFullOutput(): Promise<void> {
   try {
     let fullText = props.message.commandExecution?.aggregatedOutput ?? ''
     if (props.message.commandExecution?.outputTruncated) {
-      const messages = await getThreadResourceSource(props.threadId, props.message.turnId!, messageId)
+      const messages = await getThreadResourceSource(props.threadId, props.message.turnId!, messageId, props.historySource)
       const command = messages.find((message) => message.id === messageId)?.commandExecution
       if (!command || command.outputTruncated) throw new Error('Full command output is not available.')
       fullText = command.aggregatedOutput
@@ -97,7 +97,7 @@ async function copyFullOutput(): Promise<void> {
   }
 }
 
-watch(() => [props.threadId, props.message.id, props.recoverableHistory], () => {
+watch(() => [props.threadId, props.message.id, props.recoverableHistory, props.historySource], () => {
   resetDetail()
   copied.value = false
   if (copiedTimer) clearTimeout(copiedTimer)

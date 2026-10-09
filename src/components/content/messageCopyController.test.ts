@@ -39,6 +39,16 @@ afterEach(() => {
 })
 
 describe('message copy interaction', () => {
+  it('resolves truncated user sources and never copies a partial preview on failure', async () => {
+    const getUserText = vi.fn().mockResolvedValue('full user message')
+    controller = createMessageCopyController({ getThreadId: () => threadId, getUserText, getResponseText: () => undefined })
+    await controller.copyMessage({ ...user, text: 'preview', textTruncated: true })
+    expect(copyTextToClipboard).toHaveBeenCalledWith('full user message')
+    vi.mocked(copyTextToClipboard).mockClear()
+    getUserText.mockRejectedValueOnce(new Error('Source expired'))
+    await controller.copyMessage({ ...user, text: 'preview', textTruncated: true })
+    expect(copyTextToClipboard).not.toHaveBeenCalled()
+  })
   it('does not read full response text while rendering copy controls', async () => {
     const getResponseText = vi.fn().mockResolvedValue('Full response')
     controller = createMessageCopyController({ getThreadId: () => threadId, hasResponseText: () => true, getResponseText })

@@ -2,6 +2,17 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
+  it('unmounts only the transcript on minimize and wires temporary history navigation', async () => {
+    const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    expect(source).toContain('v-else-if="visible"')
+    expect(source).toContain('history-source="ephemeral"')
+    expect(source).toContain(':load-earlier-messages="loadEarlierMessages"')
+    expect(source).toContain(':load-later-messages="loadLaterMessages"')
+    expect(source).toContain(':load-latest-messages="loadLatestMessages"')
+    expect(source).toContain('v-show="!pendingRequests[0]"')
+    expect(source).not.toContain(':recoverable-history="false"')
+    expect(source).not.toMatch(/<ThreadComposer\s+v-if/u)
+  })
   it('carries chat width through teleport and edits only its own draft', async () => {
     const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')

@@ -9,6 +9,7 @@ export function isCopyableUserMessage(message: UiMessage): boolean {
 export function createMessageCopyController(options: {
   getThreadId: () => string
   getResponseText: (messageId: string) => string | undefined | Promise<string | undefined>
+  getUserText?: (message: UiMessage) => string | Promise<string>
   hasResponseText?: (messageId: string) => boolean
 }) {
   const expandedUserMessageId = ref('')
@@ -39,7 +40,7 @@ export function createMessageCopyController(options: {
     const generationAtStart = ++copyGeneration
     let content: string
     try {
-      const requested = message.role === 'user' ? message.text : options.getResponseText(message.id)
+      const requested = message.role === 'user' ? options.getUserText?.(message) ?? message.text : options.getResponseText(message.id)
       content = (typeof requested === 'string' ? requested : await requested) ?? ''
     } catch {
       return

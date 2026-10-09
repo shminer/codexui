@@ -21,6 +21,8 @@ import type {
   Turn,
 } from './appServerDtos'
 import { CodexApiError, extractErrorMessage, normalizeCodexApiError } from './codexErrors'
+import { previewEphemeralMessage } from '../composables/ephemeralMessageWindow'
+import type { ThreadHistorySource } from '../types/codex'
 import type { UiThreadResource } from '../threadResources'
 import { collectSubagents, type UiSubagent } from '../agentCollaboration'
 import {
@@ -833,6 +835,7 @@ export type ThreadTurnPage = {
   activeTurnId: string
   hasMoreOlder: boolean
   hasMoreNewer?: boolean
+  historyTruncated?: boolean
   nextTurnIndex?: number
   startTurnIndex: number
   turnIndexByTurnId: ThreadTurnIndexById
@@ -931,11 +934,13 @@ async function getThreadMessagePage(
   threadId: string,
   boundary: { beforeTurnId?: string; afterTurnId?: string },
   limit: number,
+  source: ThreadHistorySource = 'persisted',
 ): Promise<ThreadTurnPage> {
   const params = new URLSearchParams({
     threadId,
     ...boundary,
     limit: String(limit),
+    ...(source === 'ephemeral' ? { source } : {}),
   })
   const response = await fetch(`/codex-api/thread-turn-page?${params.toString()}`)
   const payload = await response.json() as {
@@ -945,6 +950,8 @@ async function getThreadMessagePage(
     hasMoreNewer?: unknown
     nextTurnIndex?: unknown
     startTurnIndex?: unknown
+    historyTruncated?: unknown
+    activeTurnId?: unknown
   }
   if (!response.ok) {
     throw new CodexApiError(extractErrorMessage(payload, `Thread page request failed with ${response.status}`), {
@@ -957,11 +964,12 @@ async function getThreadMessagePage(
   const startTurnIndex = Math.max(0, Math.floor(typeof payload.startTurnIndex === 'number' ? payload.startTurnIndex : 0))
 
   return {
-    messages: normalizeThreadMessagesV2(payload.result, startTurnIndex),
+    messages: source === 'ephemeral' ? normalizeThreadMessagesV2(payload.result, startTurnIndex).map((message) => previewEphemeralMessage(message)) : normalizeThreadMessagesV2(payload.result, startTurnIndex),
     inProgress: readThreadInProgressFromResponse(payload.result),
-    activeTurnId: readActiveTurnIdFromResponse(payload.result),
+    activeTurnId: typeof payload.activeTurnId === 'string' ? payload.activeTurnId : readActiveTurnIdFromResponse(payload.result),
     hasMoreOlder: payload.hasMoreOlder === true,
     hasMoreNewer: payload.hasMoreNewer === true,
+    historyTruncated: payload.historyTruncated === true,
     nextTurnIndex: typeof payload.nextTurnIndex === 'number' && Number.isFinite(payload.nextTurnIndex)
       ? Math.max(0, Math.floor(payload.nextTurnIndex))
       : undefined,
@@ -1027,20 +1035,20 @@ export async function getThreadDetail(threadId: string): Promise<{
   }
 }
 
-export async function getOlderThreadMessages(threadId: string, beforeTurnId: string, limit?: number): Promise<ThreadTurnPage> {
+export async function getOlderThreadMessages(threadId: string, beforeTurnId: string, limit?: number, source: ThreadHistorySource = 'persisted'): Promise<ThreadTurnPage> {
   try {
-    return await getThreadMessagePage(threadId, { beforeTurnId }, limit ?? 10)
+    return await getThreadMessagePage(threadId, { beforeTurnId }, limit ?? 10, source)
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to load earlier messages for thread ${threadId}`, 'thread/read')
   }
 }
 
-export function getNewerThreadMessages(threadId: string, afterTurnId: string, limit = 10): Promise<ThreadTurnPage> {
-  return getThreadMessagePage(threadId, { afterTurnId }, limit)
+export function getNewerThreadMessages(threadId: string, afterTurnId: string, limit = 10, source: ThreadHistorySource = 'persisted'): Promise<ThreadTurnPage> {
+  return getThreadMessagePage(threadId, { afterTurnId }, limit, source)
 }
 
-export function getLatestThreadMessages(threadId: string, limit = 20): Promise<ThreadTurnPage> {
-  return getThreadMessagePage(threadId, {}, limit)
+export function getLatestThreadMessages(threadId: string, limit = 20, source: ThreadHistorySource = 'persisted'): Promise<ThreadTurnPage> {
+  return getThreadMessagePage(threadId, {}, limit, source)
 }
 
 function normalizeReviewLine(value: unknown): UiReviewLine | null {
@@ -3753,8 +3761,8 @@ export function getThreadCollaborationPage(threadId: string, cursor: string | nu
   return readThreadProjection<UiSubagent>('/codex-api/thread-collaboration', { threadId, ...(cursor ? { cursor } : {}) })
 }
 
-export async function getThreadResourceSource(threadId: string, turnId: string, itemId: string): Promise<UiMessage[]> {
-  return (await readThreadProjection<UiMessage>('/codex-api/thread-resource-source', { threadId, turnId, itemId })).data
+export async function getThreadResourceSource(threadId: string, turnId: string, itemId: string, source: ThreadHistorySource = 'persisted'): Promise<UiMessage[]> {
+  return (await readThreadProjection<UiMessage>('/codex-api/thread-resource-source', { threadId, turnId, itemId, ...(source === 'ephemeral' ? { source } : {}) })).data
 }
 
 export type ThreadCommandOutputPage = {
@@ -3770,9 +3778,11 @@ export async function getThreadCommandOutputPage(
   itemId: string,
   offset?: number,
   limit = MAX_COMMAND_OUTPUT_CHARS,
+  source: ThreadHistorySource = 'persisted',
 ): Promise<ThreadCommandOutputPage> {
   const params = new URLSearchParams({
     threadId, turnId, itemId, view: 'command-output',
+    ...(source === 'ephemeral' ? { source } : {}),
     limit: String(Math.min(MAX_COMMAND_OUTPUT_CHARS, Math.max(1, Math.floor(limit)))),
     ...(offset === undefined ? {} : { offset: String(Math.max(0, Math.floor(offset))) }),
   })

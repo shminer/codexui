@@ -78,6 +78,8 @@ import { REASONING_EFFORTS } from '../types/codex'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 import { resolveTurnCompletionDisposition, type TurnTerminalStatus } from './threadLifecycle'
 import { MAX_COMMAND_OUTPUT_CHARS, limitCommandExecutionOutput } from '../commandOutput'
+import { boundedText, EPHEMERAL_REASONING_CHARS, previewEphemeralMessage, retainEphemeralMessageWindow } from './ephemeralMessageWindow'
+import { CodexApiError } from '../api/codexErrors'
 import {
   ACTIVE_THREAD_TEXT_BUDGET,
   ACTIVE_THREAD_TURN_LIMIT,
@@ -726,6 +728,7 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     first.id === second.id &&
     first.role === second.role &&
     first.text === second.text &&
+    first.textTruncated === second.textTruncated &&
     first.createdAtIso === second.createdAtIso &&
     areStringArraysEqual(first.images, second.images) &&
     areUiFileChangesEqual(first.fileChanges, second.fileChanges) &&
@@ -1691,6 +1694,7 @@ export function useDesktopState() {
   const sideConversationQueuedMessages = ref<QueuedMessage[]>([])
   const isSideConversationVisible = ref(false)
   const sideConversationError = ref('')
+  const sideConversationHistoryError = ref('')
   const isSideConversationOpening = ref(false)
   const sideConversationModelId = ref('')
   const sideConversationReasoningEffort = ref<ReasoningEffort | ''>('')
@@ -1701,6 +1705,7 @@ export function useDesktopState() {
   let sideConversationFirstTurnIndex = 0
   const sideConversationTurnIds = new Set<string>()
   const sideConversationCompletedTurnIds = new Set<string>()
+  const sideConversationHistoryTruncated = ref(false)
   const discardedSideConversationThreadIds = new Set<string>()
 
   const threadTitleById = ref<Record<string, string>>({})
@@ -2296,12 +2301,14 @@ export function useDesktopState() {
     if (!threadId) return []
 
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const livePlan = livePlanMessagesByThreadId.value[threadId] ?? []
-    const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
-    const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
-    const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
     const inHistoryWindow = historyWindowThreadIds.has(threadId)
-    const rows = inHistoryWindow ? persisted : [...persisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const rows = inHistoryWindow ? persisted : [
+      ...persisted,
+      ...(livePlanMessagesByThreadId.value[threadId] ?? []),
+      ...(liveCommandsByThreadId.value[threadId] ?? []),
+      ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
+      ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
+    ]
     const combined = isKnownSideConversationThread(threadId)
       ? [...new Map(rows.map((message) => [message.id, message])).values()]
       : rows
@@ -2315,6 +2322,16 @@ export function useDesktopState() {
     return insertTurnSummaryMessages(combined, summaries, inHistoryWindow ? undefined : current)
   }
   const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
+  function getLiveMessagesForThread(threadId: string): UiMessage[] {
+    const rows = [
+      ...(livePlanMessagesByThreadId.value[threadId] ?? []),
+      ...(liveCommandsByThreadId.value[threadId] ?? []),
+      ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
+      ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
+    ]
+    const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || rows.at(-1)?.turnId
+    return rows.filter((message) => !message.turnId || message.turnId === turnId)
+  }
   const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
   const sideConversationMessages = computed<UiMessage[]>(() => {
     const all = getMessagesForThread(sideConversationThreadId.value)
@@ -2328,6 +2345,10 @@ export function useDesktopState() {
   const isSideConversationInProgress = computed(() => (
     inProgressById.value[sideConversationThreadId.value] === true
   ))
+  const sideConversationHasMoreOlder = computed(() => hasMoreOlderMessagesByThreadId.value[sideConversationThreadId.value] === true)
+  const sideConversationHasMoreNewer = computed(() => hasMoreNewerMessagesByThreadId.value[sideConversationThreadId.value] === true)
+  const sideConversationLoadingOlder = computed(() => loadingOlderMessagesByThreadId.value[sideConversationThreadId.value] === true)
+  const sideConversationLoadingNewer = computed(() => loadingNewerMessagesByThreadId.value[sideConversationThreadId.value] === true)
   const sideConversationServerRequests = computed<UiServerRequest[]>(() => {
     const threadId = sideConversationThreadId.value
     return threadId ? pendingServerRequestsByThreadId.value[threadId] ?? [] : []
@@ -3320,6 +3341,7 @@ export function useDesktopState() {
 
   function setThreadInProgress(threadId: string, nextInProgress: boolean): void {
     if (!threadId) return
+    if (!nextInProgress) flushPendingContentDeltas(threadId)
     const currentValue = inProgressById.value[threadId] === true
     if (currentValue === nextInProgress) return
     if (nextInProgress) {
@@ -3328,7 +3350,7 @@ export function useDesktopState() {
         [threadId]: true,
       }
     } else {
-      if (isKnownSideConversationThread(threadId)) {
+      if (isKnownSideConversationThread(threadId) && !historyWindowThreadIds.has(threadId)) {
         const messages = [
           ...(persistedMessagesByThreadId.value[threadId] ?? []),
           ...(livePlanMessagesByThreadId.value[threadId] ?? []),
@@ -3570,8 +3592,32 @@ export function useDesktopState() {
     }
     updateRetainedTurnLookup(threadId, nextMessages)
     touchThreadBody(threadId)
+    enforceSideConversationBudget(threadId, direction)
     enforceInactiveThreadBodies()
     return true
+  }
+
+  function enforceSideConversationBudget(threadId: string, direction?: 'latest' | 'earliest'): void {
+    if (!isKnownSideConversationThread(threadId)) return
+    const states = [persistedMessagesByThreadId, livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]
+    const all = [...new Map(states.flatMap((state) => state.value[threadId] ?? []).map((message) => [message.id, message])).values()]
+    const retained = retainEphemeralMessageWindow(all, isSideConversationVisible.value, direction ?? (historyWindowThreadIds.has(threadId) && isSideConversationVisible.value ? 'earliest' : 'latest'), 2 * (liveReasoningTextByThreadId.value[threadId]?.length ?? 0))
+    const byId = new Map(retained.messages.map((message) => [message.id, message]))
+    for (const state of states) {
+      const previous = state.value[threadId] ?? []
+      const next = previous.flatMap((message) => byId.has(message.id) ? [byId.get(message.id)!] : [])
+      if (!areMessageArraysEqual(previous, next)) state.value = { ...state.value, [threadId]: next }
+    }
+    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
+    cropThreadWindowBounds(threadId, persisted, retained.removedOlder, retained.removedNewer)
+    updateRetainedTurnLookup(threadId, retained.messages)
+    if (retained.removedOlder) hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: true }
+    if (retained.removedNewer) hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
+  }
+
+  function rememberSideConversationTurn(ids: Set<string>, turnId: string): void {
+    ids.add(turnId)
+    while (ids.size > 200) ids.delete(ids.values().next().value!)
   }
 
   let optimisticMessageSequence = 0
@@ -3600,12 +3646,14 @@ export function useDesktopState() {
   }
 
   function setLiveAgentMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
+    if (isKnownSideConversationThread(threadId)) nextMessages = nextMessages.map((message) => previewEphemeralMessage(message, isSideConversationVisible.value))
     const previous = liveAgentMessagesByThreadId.value[threadId] ?? []
     if (areMessageArraysEqual(previous, nextMessages)) return
     liveAgentMessagesByThreadId.value = {
       ...liveAgentMessagesByThreadId.value,
       [threadId]: nextMessages,
     }
+    enforceSideConversationBudget(threadId)
   }
 
   function clearLiveAgentMessagesForThread(threadId: string): void {
@@ -3622,6 +3670,7 @@ export function useDesktopState() {
       ...liveFileChangeMessagesByThreadId.value,
       [threadId]: nextMessages,
     }
+    enforceSideConversationBudget(threadId)
   }
 
   function setLivePlanMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
@@ -3631,6 +3680,7 @@ export function useDesktopState() {
       ...livePlanMessagesByThreadId.value,
       [threadId]: nextMessages,
     }
+    enforceSideConversationBudget(threadId)
   }
 
   function upsertLivePlanMessage(threadId: string, nextMessage: UiMessage): void {
@@ -3653,7 +3703,7 @@ export function useDesktopState() {
 
   function setLiveReasoningText(threadId: string, text: string): void {
     if (!threadId) return
-    const normalized = text.trim()
+    const normalized = isKnownSideConversationThread(threadId) ? boundedText(text.trim(), EPHEMERAL_REASONING_CHARS) : text.trim()
     const previous = liveReasoningTextByThreadId.value[threadId] ?? ''
     if (normalized.length === 0) {
       if (!previous) return
@@ -3665,11 +3715,13 @@ export function useDesktopState() {
       ...liveReasoningTextByThreadId.value,
       [threadId]: normalized,
     }
+    enforceSideConversationBudget(threadId)
   }
 
   function appendLiveReasoningText(threadId: string, delta: string): void {
     if (!threadId) return
     const previous = liveReasoningTextByThreadId.value[threadId] ?? ''
+    if (isKnownSideConversationThread(threadId) && previous.length >= EPHEMERAL_REASONING_CHARS) return
     setLiveReasoningText(threadId, `${previous}${delta}`)
   }
 
@@ -4686,13 +4738,14 @@ export function useDesktopState() {
   }
 
   function upsertLiveCommand(threadId: string, msg: UiMessage): void {
-    if (!isKnownSideConversationThread(threadId) && msg.commandExecution) {
+    if (msg.commandExecution) {
       msg = { ...msg, commandExecution: limitCommandExecutionOutput(msg.commandExecution) }
     }
     const previous = liveCommandsByThreadId.value[threadId] ?? []
     const next = upsertMessage(previous, msg)
     if (next === previous) return
     liveCommandsByThreadId.value = { ...liveCommandsByThreadId.value, [threadId]: next }
+    enforceSideConversationBudget(threadId)
   }
 
   function scheduleContentDeltaFlush(): void {
@@ -4714,8 +4767,9 @@ export function useDesktopState() {
       if (threadId && pending.threadId !== threadId) continue
       pendingAgentTextByKey.delete(key)
       const current = liveAgentMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.messageId)
+      if (isKnownSideConversationThread(pending.threadId) && current?.textTruncated) continue
       upsertLiveAgentMessage(pending.threadId, {
-        id: pending.messageId, role: 'assistant', text: `${current?.text ?? ''}${pending.delta}`, messageType: 'agentMessage.live',
+        id: pending.messageId, role: 'assistant', text: `${current?.text ?? ''}${pending.delta}`, textTruncated: current?.textTruncated, messageType: 'agentMessage.live',
       }, pending.turnId)
     }
     for (const [pendingThreadId, delta] of pendingReasoningByThreadId) {
@@ -4730,11 +4784,7 @@ export function useDesktopState() {
   }
 
   function queueAgentTextDelta(threadId: string, messageId: string, turnId: string, delta: string): void {
-    if (isKnownSideConversationThread(threadId)) {
-      const current = liveAgentMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
-      upsertLiveAgentMessage(threadId, { id: messageId, role: 'assistant', text: `${current?.text ?? ''}${delta}`, messageType: 'agentMessage.live' }, turnId)
-      return
-    }
+    if (isKnownSideConversationThread(threadId) && liveAgentMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)?.textTruncated) return
     const key = JSON.stringify([threadId, messageId])
     const pending = pendingAgentTextByKey.get(key)
     pendingAgentTextByKey.set(key, { threadId, messageId, turnId, delta: `${pending?.delta ?? ''}${delta}` })
@@ -4748,10 +4798,6 @@ export function useDesktopState() {
     const key = JSON.stringify([threadId, itemId])
     const data = pendingCommandOutputByKey.get(key)?.data ?? current.commandExecution
     const appended = { ...data, aggregatedOutput: `${data.aggregatedOutput}${delta}` }
-    if (isKnownSideConversationThread(threadId)) {
-      upsertLiveCommand(threadId, { ...current, commandExecution: appended })
-      return
-    }
     pendingCommandOutputByKey.set(key, { threadId, itemId, data: appended })
     // Copy/truncate once per batch, rather than copying a 64 Ki tail for every token.
     if (appended.aggregatedOutput.length >= 2 * MAX_COMMAND_OUTPUT_CHARS) flushPendingContentDeltas(threadId)
@@ -4940,7 +4986,8 @@ export function useDesktopState() {
     if (startedTurn) {
       threadLifecycleRevisionByThreadId.set(startedTurn.threadId, (threadLifecycleRevisionByThreadId.get(startedTurn.threadId) ?? 0) + 1)
       if (isKnownSideConversationThread(startedTurn.threadId)) {
-        sideConversationTurnIds.add(startedTurn.turnId)
+        if (typeof turnIndexByTurnIdByThreadId.value[startedTurn.threadId]?.[startedTurn.turnId] === 'number' && activeTurnIdByThreadId.value[startedTurn.threadId] === startedTurn.turnId) return
+        rememberSideConversationTurn(sideConversationTurnIds, startedTurn.turnId)
       }
       nonSuccessCompletionReadBaselineByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
@@ -4980,8 +5027,8 @@ export function useDesktopState() {
       threadLifecycleRevisionByThreadId.set(completedTurn.threadId, (threadLifecycleRevisionByThreadId.get(completedTurn.threadId) ?? 0) + 1)
       if (isKnownSideConversationThread(completedTurn.threadId)) {
         if (sideConversationCompletedTurnIds.has(completedTurn.turnId)) return
-        sideConversationCompletedTurnIds.add(completedTurn.turnId)
-        sideConversationTurnIds.add(completedTurn.turnId)
+        rememberSideConversationTurn(sideConversationCompletedTurnIds, completedTurn.turnId)
+        rememberSideConversationTurn(sideConversationTurnIds, completedTurn.turnId)
       }
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
       const startedTurnState = pendingTurnStartsById.get(completedTurn.turnId)
@@ -5050,6 +5097,9 @@ export function useDesktopState() {
         hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [completedTurn.threadId]: true }
       }
       enforceInactiveThreadBodies()
+      if (isSideConversationTurn && isSideConversationVisible.value && !historyWindowThreadIds.has(completedTurn.threadId)) {
+        void loadSideConversationWindow('latest').catch(() => undefined)
+      }
     }
 
     if (turnErrorMessage) {
@@ -5155,13 +5205,10 @@ export function useDesktopState() {
 
     const liveReasoningDelta = readReasoningDelta(notification)
     if (liveReasoningDelta) {
-      if (isKnownSideConversationThread(notificationThreadId)) appendLiveReasoningText(notificationThreadId, liveReasoningDelta.delta)
-      else {
-        const pending = `${pendingReasoningByThreadId.get(notificationThreadId) ?? ''}${liveReasoningDelta.delta}`
-        pendingReasoningByThreadId.set(notificationThreadId, pending)
-        if (pending.length >= 64 * 1024) flushPendingContentDeltas(notificationThreadId)
-        else scheduleContentDeltaFlush()
-      }
+      const pending = `${pendingReasoningByThreadId.get(notificationThreadId) ?? ''}${liveReasoningDelta.delta}`
+      pendingReasoningByThreadId.set(notificationThreadId, pending)
+      if (pending.length >= 64 * 1024) flushPendingContentDeltas(notificationThreadId)
+      else scheduleContentDeltaFlush()
     }
 
     const sectionBreakMessageId = readReasoningSectionBreakMessageId(notification)
@@ -5701,14 +5748,13 @@ export function useDesktopState() {
         return
       }
 
-      // Ephemeral threads have no rollout to resume or history to read. Their
-      // transcript belongs to this page and is populated only by live events.
+      // Ephemeral lifecycle reads stay metadata-only; history uses the temporary cache.
       if (isKnownSideConversationThread(threadId)) {
         const observedTurnId = activeTurnIdByThreadId.value[threadId]
-        const completedCount = sideConversationCompletedTurnIds.size
+        const lifecycleRevision = threadLifecycleRevisionByThreadId.get(threadId) ?? 0
         const summary = await getThreadSummary(threadId)
-        if (discardedSideConversationThreadIds.has(threadId)) return
-        if (observedTurnId === activeTurnIdByThreadId.value[threadId] && completedCount === sideConversationCompletedTurnIds.size && !sideConversationPendingTurnStarts.size) {
+        if (!isKnownSideConversationThread(threadId) || (threadBodyGeneration.get(threadId) ?? 0) !== bodyGeneration) return
+        if (observedTurnId === activeTurnIdByThreadId.value[threadId] && lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0) && !sideConversationPendingTurnStarts.size) {
           setThreadInProgress(threadId, summary.inProgress)
           if (!summary.inProgress) {
             activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
@@ -5906,7 +5952,7 @@ export function useDesktopState() {
 
   async function loadOlderMessages(threadId: string = selectedThreadId.value): Promise<void> {
     if (!threadId) return
-    if (isKnownSideConversationThread(threadId)) return
+    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('older')
     if (loadingOlderMessagesByThreadId.value[threadId] === true || loadingNewerMessagesByThreadId.value[threadId] === true) return
     if (hasMoreOlderMessagesByThreadId.value[threadId] !== true) return
 
@@ -5951,8 +5997,89 @@ export function useDesktopState() {
     }
   }
 
+  function loadSideConversationWindow(direction: 'older' | 'newer' | 'latest'): Promise<void> {
+    const threadId = sideConversationThreadId.value
+    if (!threadId) return Promise.resolve()
+    const existing = latestWindowPromiseByThreadId.get(threadId)
+    if (existing) return existing
+    const boundary = threadWindowBoundsByThreadId.get(threadId)
+    const body = persistedMessagesByThreadId.value[threadId] ?? []
+    const before = boundary?.first || body.find((message) => message.turnId)?.turnId
+    const after = boundary?.last || [...body].reverse().find((message) => message.turnId)?.turnId
+    const generation = threadBodyGeneration.get(threadId) ?? 0
+    const epoch = sideConversationEpoch
+    const initialBody = new Map(body.map((message) => [message.id, message]))
+    const initialLive = new Map((liveAgentMessagesByThreadId.value[threadId] ?? []).map((message) => [message.id, message]))
+    const loading = direction === 'older' ? loadingOlderMessagesByThreadId : loadingNewerMessagesByThreadId
+    loading.value = { ...loading.value, [threadId]: true }
+    const current = () => epoch === sideConversationEpoch && threadId === sideConversationThreadId.value && generation === (threadBodyGeneration.get(threadId) ?? 0)
+    const promise = (async () => {
+      try {
+        let latest = direction === 'latest' || (direction === 'older' ? !before : !after)
+        let page
+        try {
+          page = latest ? await getLatestThreadMessages(threadId, 20, 'ephemeral')
+            : direction === 'older' ? await getOlderThreadMessages(threadId, before!, 10, 'ephemeral')
+              : await getNewerThreadMessages(threadId, after!, 10, 'ephemeral')
+        } catch (cause) {
+          if (!current()) return
+          if (!(cause instanceof CodexApiError) || cause.status !== 409 || latest) throw cause
+          latest = true
+          page = await getLatestThreadMessages(threadId, 20, 'ephemeral')
+        }
+        if (!current()) return
+        flushPendingContentDeltas(threadId)
+        sideConversationHistoryTruncated.value = page.historyTruncated === true
+        sideConversationHistoryError.value = ''
+        const previous = persistedMessagesByThreadId.value[threadId] ?? []
+        const optimistic = previous.filter(isOptimisticUserMessage).filter((message) => !hasEquivalentUserMessage(message, page.messages))
+        const arrived = previous.filter((message) => !isOptimisticUserMessage(message) && (!initialBody.has(message.id) || !areMessageFieldsEqual(initialBody.get(message.id)!, message)))
+        const next = latest ? page.messages.length
+          ? [...new Map([...page.messages, ...arrived, ...optimistic].map((message) => [message.id, message])).values()]
+          : previous
+          : direction === 'older' ? mergeMessages(page.messages, previous, { preserveMissing: true })
+            : mergeMessages(previous, page.messages, { preserveMissing: true })
+        hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: page.hasMoreOlder }
+        hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: page.hasMoreNewer === true }
+        if (!latest && direction === 'older') {
+          historyWindowThreadIds.add(threadId)
+          hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
+        } else if (!page.hasMoreNewer) historyWindowThreadIds.delete(threadId)
+        observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
+        extendThreadWindowBounds(threadId, page.turnIndexByTurnId, latest, direction === 'latest' ? undefined : direction)
+        setPersistedMessagesForThread(threadId, next, direction === 'older' && !latest ? 'earliest' : 'latest')
+        removeLiveCommandsPersistedIn(threadId, page.messages)
+        removeLiveFileChangesPersistedIn(threadId, page.messages)
+        const pageById = new Map(page.messages.map((message) => [message.id, message]))
+        setLiveAgentMessagesForThread(threadId, (liveAgentMessagesByThreadId.value[threadId] ?? []).filter((message) => {
+          const persisted = pageById.get(message.id)
+          if (!persisted) return true
+          const initial = initialLive.get(message.id)
+          return (!initial || !areMessageFieldsEqual(initial, message)) && message.text !== persisted.text
+        }))
+      } catch (cause) {
+        if (!current()) return
+        if (cause instanceof CodexApiError && (cause.status === 404 || cause.status === 410)) {
+          sideConversationHistoryTruncated.value = true
+          hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: false }
+          hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: false }
+        }
+        sideConversationHistoryError.value = cause instanceof Error ? cause.message : 'Failed to load temporary conversation history'
+        throw cause
+      } finally {
+        if (current()) loading.value = omitKey(loading.value, threadId)
+      }
+    })()
+    latestWindowPromiseByThreadId.set(threadId, promise)
+    void promise.finally(() => {
+      if (latestWindowPromiseByThreadId.get(threadId) === promise) latestWindowPromiseByThreadId.delete(threadId)
+    }).catch(() => undefined)
+    return promise
+  }
+
   async function loadNewerMessages(threadId: string = selectedThreadId.value): Promise<void> {
-    if (!threadId || isKnownSideConversationThread(threadId)) return
+    if (!threadId) return
+    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('newer')
     if (loadingOlderMessagesByThreadId.value[threadId] || loadingNewerMessagesByThreadId.value[threadId]) return
     if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) return
     const body = persistedMessagesByThreadId.value[threadId] ?? []
@@ -5984,7 +6111,8 @@ export function useDesktopState() {
   }
 
   function loadLatestMessages(threadId: string = selectedThreadId.value): Promise<void> {
-    if (!threadId || isKnownSideConversationThread(threadId)) return Promise.resolve()
+    if (!threadId) return Promise.resolve()
+    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('latest')
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) return existing
     flushPendingContentDeltas(threadId)
@@ -6371,6 +6499,19 @@ export function useDesktopState() {
 
   function clearSideConversationThreadState(threadId: string): void {
     if (!threadId) return
+    threadBodyGeneration.set(threadId, (threadBodyGeneration.get(threadId) ?? 0) + 1)
+    latestWindowPromiseByThreadId.delete(threadId)
+    nextTurnIndexByThreadId.delete(threadId)
+    threadWindowBoundsByThreadId.delete(threadId)
+    threadLifecycleRevisionByThreadId.delete(threadId)
+    loadingMessagesByThreadId.value = omitKey(loadingMessagesByThreadId.value, threadId)
+    for (const [key, pending] of pendingAgentTextByKey) if (pending.threadId === threadId) pendingAgentTextByKey.delete(key)
+    for (const [key, pending] of pendingCommandOutputByKey) if (pending.threadId === threadId) pendingCommandOutputByKey.delete(key)
+    pendingReasoningByThreadId.delete(threadId)
+    if (!pendingAgentTextByKey.size && !pendingCommandOutputByKey.size && !pendingReasoningByThreadId.size && contentDeltaTimer !== null) {
+      globalThis.clearTimeout(contentDeltaTimer)
+      contentDeltaTimer = null
+    }
     if (savedTurnSummariesByThreadId.value[threadId]) {
       savedTurnSummariesByThreadId.value = omitKey(savedTurnSummariesByThreadId.value, threadId)
       saveTurnSummaries(savedTurnSummariesByThreadId.value)
@@ -6457,6 +6598,7 @@ export function useDesktopState() {
       const oldestThreadId = discardedSideConversationThreadIds.values().next().value
       if (!oldestThreadId) return
       discardedSideConversationThreadIds.delete(oldestThreadId)
+      threadBodyGeneration.delete(oldestThreadId)
     }
   }
 
@@ -6480,7 +6622,10 @@ export function useDesktopState() {
   }
 
   function hideSideConversation(): void {
-    if (isSideConversationOpen.value) isSideConversationVisible.value = false
+    if (!isSideConversationOpen.value) return
+    flushPendingContentDeltas(sideConversationThreadId.value)
+    isSideConversationVisible.value = false
+    enforceSideConversationBudget(sideConversationThreadId.value)
   }
 
   function resetSideConversationState(): void {
@@ -6495,6 +6640,7 @@ export function useDesktopState() {
     sideConversationQueuedMessages.value = []
     isSideConversationVisible.value = false
     sideConversationError.value = ''
+    sideConversationHistoryError.value = ''
     sideConversationModelId.value = ''
     sideConversationReasoningEffort.value = ''
     sideConversationCollaborationMode.value = 'default'
@@ -6503,6 +6649,7 @@ export function useDesktopState() {
     sideConversationFirstTurnIndex = 0
     sideConversationTurnIds.clear()
     sideConversationCompletedTurnIds.clear()
+    sideConversationHistoryTruncated.value = false
     isSideConversationOpening.value = false
   }
 
@@ -6516,6 +6663,7 @@ export function useDesktopState() {
     if (isSideConversationOpen.value) {
       if (sideConversationParentThreadId.value === normalizedParentThreadId) {
         isSideConversationVisible.value = true
+        void loadSideConversationWindow('latest').catch(() => undefined)
       }
       return
     }
@@ -6648,7 +6796,7 @@ export function useDesktopState() {
     try {
       const turnId = await turnStartPromise
       if (turnId && sideConversationThreadId.value === threadId && sideConversationTurnStartPromise === turnStartPromise && !sideConversationCompletedTurnIds.has(turnId)) {
-        sideConversationTurnIds.add(turnId)
+        rememberSideConversationTurn(sideConversationTurnIds, turnId)
         rememberObservedTurnStart(threadId, turnId)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
@@ -7701,13 +7849,20 @@ export function useDesktopState() {
     selectedThreadSubagents,
     selectedLiveOverlay,
     getLiveOverlayForThread,
+    getLiveMessagesForThread,
     sideConversationParentThreadId,
     sideConversationThreadId,
     sideConversationMessages,
+    sideConversationHasMoreOlder,
+    sideConversationHasMoreNewer,
+    sideConversationLoadingOlder,
+    sideConversationLoadingNewer,
+    sideConversationHistoryTruncated,
     sideConversationQueuedMessages,
     sideConversationLiveOverlay,
     sideConversationServerRequests,
     sideConversationError,
+    sideConversationHistoryError,
     isSideConversationOpen,
     isSideConversationVisible,
     isSideConversationOpening,

@@ -97,7 +97,7 @@
                     :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
                   >
                     <div class="cmd-output-inner">
-                      <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" />
+                      <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" :history-source="historySource" />
                     </div>
                   </div>
                 </div>
@@ -130,7 +130,7 @@
                 :class="{ 'cmd-output-visible': isCommandExpanded(message) }"
               >
                 <div class="cmd-output-inner">
-                  <CommandOutput :thread-id="activeThreadId" :message="message" :condensed="isCommandOutputCondensed(message)" :recoverable-history="recoverableHistory" />
+                  <CommandOutput :thread-id="activeThreadId" :message="message" :condensed="isCommandOutputCondensed(message)" :recoverable-history="recoverableHistory" :history-source="historySource" />
                 </div>
               </div>
             </template>
@@ -349,7 +349,7 @@
                         :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
                       >
                         <div class="cmd-output-inner">
-                          <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" />
+                          <CommandOutput :thread-id="activeThreadId" :message="cmd" :condensed="isCommandOutputCondensed(cmd)" :recoverable-history="recoverableHistory" :history-source="historySource" />
                         </div>
                       </div>
                     </div>
@@ -759,6 +759,7 @@
                 </div>
               </section>
 
+              <p v-if="message.textTruncated" class="conversation-history-error" role="status">{{ t('Message preview truncated') }}</p>
               <div
                 v-if="showCopyMessageButton(message) || showEditMessageButton(message)"
                 class="message-toolbar"
@@ -814,6 +815,7 @@
         <button type="button" class="load-more-button" :disabled="isLoadingMore || isLoadingPersistedBelow" @click="loadMoreBelow">{{ isLoadingMore || isLoadingPersistedBelow ? 'Loading…' : 'Load later messages' }}</button>
       </li>
       <li v-if="historyLoadError" class="conversation-history-error" role="status">{{ historyLoadError }}</li>
+      <li v-if="messageSourceError" class="conversation-history-error" role="status">{{ messageSourceError }}</li>
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
     </ul>
 
@@ -985,8 +987,9 @@
 <script setup lang="ts">
 import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
-import { updateThreadFileChanges } from '../../api/codexGateway'
+import type { ThreadHistorySource, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
+import { getThreadResourceSource, updateThreadFileChanges } from '../../api/codexGateway'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import { findNextMarkdownLink, getBasename, normalizePathDots, parseFileReference, parseMarkdownLinkToken, resolveRelativePath, trimLinkWrappers } from '../../fileReferences'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
@@ -1422,6 +1425,7 @@ const props = defineProps<{
   readonly?: boolean
   canEditMessage?: boolean
   recoverableHistory?: boolean
+  historySource?: ThreadHistorySource
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   hasMorePersistedBelow?: boolean
@@ -1440,6 +1444,9 @@ const emit = defineEmits<{
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
+const { t } = useUiLanguage()
+const messageSourceError = ref('')
+let messageSourceGeneration = 0
 const searchTargetId = ref('')
 const searchTurnMessages = ref<UiMessage[]>([])
 const searchWindowEnd = ref<number | undefined>(undefined)
@@ -1449,6 +1456,7 @@ const messageCopy = createMessageCopyController({
   getThreadId: () => props.activeThreadId,
   hasResponseText: (messageId) => copyableResponseAnchorIds.value.has(messageId),
   getResponseText: buildCopyableResponseContent,
+  getUserText: async (message) => (await readCompleteMessage(message)).text,
 })
 const { expandedUserMessageId, copiedMessageId: copiedResponseAnchorId, toggleUserMessageCopy, onUserMessageTextClick, showCopyMessageButton, copyMessage } = messageCopy
 const fileChangeActionState = ref<Record<string, 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone'>>({})
@@ -1776,14 +1784,33 @@ const copyableResponseAnchorIds = computed(() => {
   return ids
 })
 
-function buildCopyableResponseContent(anchorMessageId: string): string | undefined {
+async function readCompleteMessage(message: UiMessage): Promise<UiMessage> {
+  if (!message.textTruncated) return message
+  const threadId = props.activeThreadId
+  const generation = messageSourceGeneration
+  try {
+    if (!message.turnId || props.recoverableHistory === false) throw new Error(t('Full message source has expired or is still running'))
+    const source = await getThreadResourceSource(threadId, message.turnId, message.id, props.historySource)
+    if (generation !== messageSourceGeneration || threadId !== props.activeThreadId) throw new Error('Message source request expired')
+    const full = source.find((item) => item.id === message.id)
+    if (!full || full.textTruncated) throw new Error(t('Full message source has expired or is still running'))
+    messageSourceError.value = ''
+    return full
+  } catch (cause) {
+    if (generation === messageSourceGeneration && threadId === props.activeThreadId) messageSourceError.value = cause instanceof Error ? cause.message : t('Full message source has expired or is still running')
+    throw cause
+  }
+}
+
+async function buildCopyableResponseContent(anchorMessageId: string): Promise<string | undefined> {
   const anchor = props.messages.find((message) => message.id === anchorMessageId)
   if (!anchor || !copyableResponseAnchorIds.value.has(anchorMessageId)) return undefined
   const key = responseKey(anchor)
-  const parts = props.messages
-    .filter((message) => isCopyableAssistantMessage(message) && responseKey(message) === key)
-    .map(buildCopyableMessageContent)
-    .filter(Boolean)
+  const parts: string[] = []
+  for (const message of props.messages.filter((message) => isCopyableAssistantMessage(message) && responseKey(message) === key)) {
+    const content = buildCopyableMessageContent(await readCompleteMessage(message))
+    if (content) parts.push(content)
+  }
   const summary = anchoredFileChangeSummaryByAnchorId.value[anchorMessageId]
   if (summary?.source === 'metadata') {
     const fileChangeCopy = buildFileChangeCopyText(summary)
@@ -2341,9 +2368,15 @@ function showEditMessageButton(message: UiMessage): boolean {
   return (props.canEditMessage ?? !props.readonly) && message.role === 'user' && message.text.trim().length > 0
 }
 
-function editMessage(message: UiMessage): void {
+async function editMessage(message: UiMessage): Promise<void> {
   if (!showEditMessageButton(message)) return
-  emit('editMessage', message.text)
+  const generation = messageSourceGeneration
+  try {
+    const full = await readCompleteMessage(message)
+    if (generation === messageSourceGeneration && showEditMessageButton(message)) emit('editMessage', full.text)
+  } catch {
+    // Keep the draft untouched when the full temporary source has expired.
+  }
 }
 
 function splitPlainTextByLinks(
@@ -4416,6 +4449,8 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    messageSourceGeneration += 1
+    messageSourceError.value = ''
     navigationGeneration += 1
     searchTargetId.value = ''
     searchTurnMessages.value = []
@@ -4495,6 +4530,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  messageSourceGeneration += 1
   navigationGeneration += 1
   if (streamRenderTimer) clearTimeout(streamRenderTimer)
   clearRenderCaches()

@@ -229,6 +229,7 @@ export type UiMessage = {
   id: string
   role: 'user' | 'assistant' | 'system'
   text: string
+  textTruncated?: boolean
   createdAtIso?: string
   images?: string[]
   skills?: Array<{ name: string; path: string }>
@@ -245,6 +246,8 @@ export type UiMessage = {
   isAutomationRun?: boolean
   automationDisplayName?: string | null
 }
+
+export type ThreadHistorySource = 'persisted' | 'ephemeral'
 
 export type UiServerRequest = {
   id: number
