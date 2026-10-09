@@ -167,6 +167,15 @@ function tokenUsageNotification(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  for (const mock of Object.values(gatewayMocks)) {
+    mock.mockReset()
+  }
+  gatewayMocks.normalizeThreadGoal.mockImplementation((value: unknown) => value)
+  gatewayMocks.resumeThread.mockResolvedValue(null)
+  gatewayMocks.getThreadDetail.mockResolvedValue({
+    model: '', modelProvider: '', messages: [], inProgress: false,
+    activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {},
+  })
   gatewayMocks.supportsThreadRollback.mockResolvedValue(false)
   gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: false })
   gatewayMocks.discardSideConversationThreadInBackground.mockResolvedValue(undefined)
