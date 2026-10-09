@@ -2,7 +2,7 @@
 @import "highlight.js/styles/github-dark.css";
 
 .thread-feature-modes { display: flex; gap: 4px; padding: 8px; }
-.thread-feature-modes button { flex: 1; padding: 5px 8px; border-radius: 4px; color: #666; font-size: 12px; }
+.thread-feature-modes button { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 4px; color: #666; font-size: 12px; overflow-wrap: anywhere; }
 .thread-feature-modes button[aria-pressed='true'] { background: #e4e4e7; color: #18181b; }
 .thread-library { padding: 8px; min-width: 0; }
 .thread-library-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #e4e4e7; }
@@ -15,6 +15,12 @@
 .thread-feature-icon:disabled { opacity: .4; }
 .thread-feature-action { padding: 6px 10px; font-size: 12px; text-decoration: underline; }
 .thread-feature-error { color: #be123c; font-size: 12px; overflow-wrap: anywhere; }
+.thread-library-delete { color: #be123c; }
+.thread-library-confirmation { padding: 8px 4px; border-bottom: 1px solid #e4e4e7; font-size: 12px; overflow-wrap: anywhere; }
+.thread-library-confirmation p { margin: 0 0 6px; }
+.thread-library-confirmation-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.thread-library-confirm-delete { padding: 6px 10px; border-radius: 4px; background: #be123c; color: #fff; }
+.thread-library-confirmation-actions button:disabled, .thread-library-link:disabled { opacity: .4; cursor: default; }
 .thread-search-tools { flex: 0 0 auto; padding: 4px 8px; min-width: 0; border-bottom: 1px solid #e4e4e7; }
 .thread-conversation-tools { display: flex; align-items: flex-start; flex: 0 0 auto; min-width: 0; border-bottom: 1px solid #e4e4e7; }
 .thread-conversation-tools .thread-search-tools { flex: 1; border: none; }
@@ -54,6 +60,9 @@
 :root.dark .thread-feature-icon:hover, :root.dark .thread-library-link:hover { background: #27272a; }
 :root.dark .thread-feature-status, :root.dark .thread-library-link time { color: #a1a1aa; }
 :root.dark .thread-feature-error { color: #fda4af; }
+:root.dark .thread-library-delete { color: #fda4af; }
+:root.dark .thread-library-confirmation { border-color: #3f3f46; }
+:root.dark .thread-library-confirm-delete { background: #9f1239; color: #fff; }
 
 :root.dark {
   color-scheme: dark;

@@ -1726,6 +1726,12 @@ export async function unarchiveThread(threadId: string): Promise<void> {
   await callRpc('thread/unarchive', { threadId })
 }
 
+export async function deleteThread(threadId: string): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) throw new Error('thread/delete requires threadId')
+  await callRpc('thread/delete', { threadId: normalizedThreadId })
+}
+
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
   await callRpc('thread/name/set', { threadId, name: threadName })
 }

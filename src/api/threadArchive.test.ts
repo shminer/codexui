@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
-import { getThreadGroupsPage, unarchiveThread } from './codexGateway'
+import { deleteThread, getThreadGroupsPage, unarchiveThread } from './codexGateway'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -27,4 +27,16 @@ it('lists archived threads by cursor and restores through the native RPC', async
     { method: 'thread/list', params: { archived: true, limit: 50, sortKey: 'updated_at', modelProviders: [], cursor: 'older' } },
     { method: 'thread/unarchive', params: { threadId: 'archived' } },
   ])
+})
+
+it('permanently deletes through one native RPC without restoring or archiving first', async () => {
+  const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json({ result: {} }))
+  vi.stubGlobal('fetch', fetch)
+  await deleteThread(' archived ')
+  expect(fetch).toHaveBeenCalledOnce()
+  expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    method: 'thread/delete', params: { threadId: 'archived' },
+  })
+  await expect(deleteThread(' ')).rejects.toThrow('threadId')
+  expect(fetch).toHaveBeenCalledOnce()
 })

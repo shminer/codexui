@@ -75,6 +75,69 @@ afterEach(() => {
 })
 
 describe('app-server lifecycle cancellation', () => {
+  it('releases only the deleted thread caches after a confirmed native deletion', async () => {
+    const { server, call } = readyServer()
+    const snapshot = { thread: { id: 'archived', path: '/archive/session.jsonl', turns: [] } }
+    server.storeThreadReadSnapshot('archived', snapshot)
+    server.cacheLiveState('archived', { saved: true }, 0, 100)
+    server.storeThreadReadSnapshot('other', { thread: { id: 'other', turns: [] } })
+    const readScope = server.beginThreadRead('archived')
+    call.mockResolvedValueOnce({})
+    expect(await server.rpc('thread/delete', { threadId: 'archived' })).toEqual({})
+    expect(readScope.deleted).toBe(true)
+    expect(server.getLastThreadReadSnapshot('archived')).toBeNull()
+    expect(server.getCachedLiveState('archived', 0, 100)).toBeNull()
+    server.rememberThreadPaths({ data: [{ id: 'archived', path: '/archive/stale.jsonl' }] })
+    expect(server.getThreadSessionPath('archived')).toBeUndefined()
+    expect(server.getLastThreadReadSnapshot('other')).not.toBeNull()
+    expect(() => server.storeThreadReadSnapshot('archived', snapshot)).toThrow('deleted')
+    readScope.release()
+    expect((server as any).threadReadScopes.size).toBe(0)
+  })
+
+  it('preserves snapshots and reading scopes when native deletion fails', async () => {
+    const { server, call } = readyServer()
+    const snapshot = { thread: { id: 'archived', turns: [] } }
+    server.storeThreadReadSnapshot('archived', snapshot)
+    const readScope = server.beginThreadRead('archived')
+    call.mockRejectedValueOnce(new Error('Delete failed'))
+    await expect(server.rpc('thread/delete', { threadId: 'archived' })).rejects.toThrow('Delete failed')
+    expect(server.getLastThreadReadSnapshot('archived')).toEqual(snapshot)
+    expect(readScope.deleted).toBe(false)
+    readScope.release()
+  })
+
+  it.each([false, true])('rejects a late page read without refetching after deletion (requestFails=%s)', async (requestFails) => {
+    const { server, internals, call } = readyServer()
+    const deferredRead = deferred()
+    call.mockReturnValueOnce(deferredRead.promise).mockResolvedValueOnce({})
+    const read = server.readThreadForTurnPage('archived')
+    const rejected = expect(read).rejects.toThrow('deleted')
+    await Promise.resolve()
+    await server.rpc('thread/delete', { threadId: 'archived' })
+    if (requestFails) deferredRead.reject(new Error('Late read failed'))
+    else deferredRead.resolve({ thread: { id: 'archived', path: '/archive/session.jsonl', turns: [] } })
+    await rejected
+    expect(call.mock.calls.map(([method]) => method)).toEqual(['thread/read', 'thread/delete'])
+    expect(internals.threadTurnPageReadCacheByThreadId.size).toBe(0)
+    expect(internals.threadTurnPageReadPromiseByThreadId.size).toBe(0)
+    expect(server.getThreadSessionPath('archived')).toBeUndefined()
+    expect((server as any).threadReadScopes.size).toBe(0)
+  })
+
+  it('clears captured output and diagnostics on a native deletion notification', () => {
+    const { server } = readyServer()
+    ;(server as any).emitNotification({ method: 'item/completed', params: {
+      threadId: 'archived', turnId: 'turn', item: {
+        id: 'command', type: 'commandExecution', command: 'echo saved', status: 'completed', aggregatedOutput: 'saved output',
+      },
+    } })
+    expect(server.getCapturedCommandOutput('archived', 'turn', 'command')).toBe('saved output')
+    ;(server as any).emitNotification({ method: 'thread/deleted', params: { threadId: 'archived' } })
+    expect(server.getCapturedCommandOutput('archived', 'turn', 'command')).toBeNull()
+    expect(server.getStreamEvents('archived', 10).map((event) => event.method)).toEqual(['thread/deleted'])
+  })
+
   it.each([false, true])('does not restart a disposed page read (requestFails=%s)', async (requestFails) => {
     const { server, internals, call } = readyServer()
     const request = deferred()

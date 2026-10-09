@@ -4,7 +4,7 @@ import { isAllowedRpcMethod, isDisabledRoute } from './featureGate'
 describe('safe feature gate', () => {
   it('allows the thread RPC methods needed by the mobile client', () => {
     expect(isAllowedRpcMethod('thread/read')).toBe(true)
-    for (const method of ['thread/search', 'thread/searchOccurrences', 'thread/turns/list', 'thread/items/list', 'thread/unarchive']) {
+    for (const method of ['thread/search', 'thread/searchOccurrences', 'thread/turns/list', 'thread/items/list', 'thread/unarchive', 'thread/delete']) {
       expect(isAllowedRpcMethod(method)).toBe(true)
     }
     expect(isAllowedRpcMethod('fs/writeFile')).toBe(false)

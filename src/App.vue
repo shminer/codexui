@@ -83,14 +83,15 @@
             </span>
           </button>
 
-          <div v-if="!isSidebarCollapsed" class="thread-feature-modes" role="group" aria-label="Thread list">
-            <button type="button" :aria-pressed="!showArchivedThreads" @click="showArchivedThreads = false">{{ t('Active') }}</button>
-            <button type="button" :aria-pressed="showArchivedThreads" @click="showArchivedThreads = true">{{ t('Archived') }}</button>
+          <div v-if="!isSidebarCollapsed" class="thread-feature-modes" role="group" :aria-label="t('Thread list')">
+            <button type="button" :aria-pressed="!showArchivedThreads" @click="showArchivedThreads = false">{{ t('Current Conversations') }}</button>
+            <button type="button" :aria-pressed="showArchivedThreads" @click="showArchivedThreads = true">{{ t('Archived Conversations') }}</button>
           </div>
           <ThreadLibrary v-if="!isSidebarCollapsed && (showArchivedThreads || sidebarSearchQuery.trim())"
             :key="showArchivedThreads ? 'archived' : 'active'" :archived="showArchivedThreads" :query="sidebarSearchQuery"
             :active-threads="projectGroups.flatMap((group) => group.threads)" :load-active-metadata="ensureThreadSearchMetadata"
-            @select="registerThreadSummary($event); onSelectThread($event.id)" @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
+            @select="registerThreadSummary($event); onSelectThread($event.id)" @deleted="forgetDeletedThread($event)"
+            @restored="refreshAll({ forceThreadRefresh: true, includeSelectedThreadMessages: false })" />
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
@@ -1432,6 +1433,7 @@ const {
   setThreadTerminalOpen,
   toggleSelectedThreadTerminal,
   archiveThreadById,
+  forgetDeletedThread,
   forkThreadById,
   renameThreadById,
   forkThreadFromTurn,

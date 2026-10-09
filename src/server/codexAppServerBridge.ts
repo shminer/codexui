@@ -6258,6 +6258,15 @@ type CapturedItem = {
   completed: boolean
 }
 
+type ThreadReadScope = { deleted: boolean; release: () => void }
+
+const THREAD_READ_RPC_METHODS = new Set(['thread/read', 'thread/turns/list', 'thread/items/list'])
+const THREAD_READ_ROUTES = new Set([
+  '/codex-api/thread-recent', '/codex-api/thread-turn-page', '/codex-api/thread-live-state',
+  '/codex-api/thread-resources', '/codex-api/thread-collaboration', '/codex-api/thread-resource-source',
+  '/codex-api/thread-file-change-fallback',
+])
+
 const MERGEABLE_ITEM_TYPES = new Set([
   'commandExecution',
   'fileChange',
@@ -6286,6 +6295,7 @@ export class AppServerProcess {
   private readonly threadCacheBudget = new ThreadCacheBudget()
   private memoryMaintenanceTimer: ReturnType<typeof setInterval> | null = null
   private readonly captureVerificationByThreadId = new Map<string, { dueAt: number; attempts: number }>()
+  private readonly threadReadScopes = new Map<string, Set<ThreadReadScope>>()
   private captureVerificationRunning = false
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
@@ -6433,9 +6443,10 @@ export class AppServerProcess {
   }
 
   private emitNotification(notification: { method: string; params: unknown }): void {
+    const nThreadId = this.extractThreadIdFromParams(notification.params)
+    if (notification.method === 'thread/deleted' && nThreadId) this.forgetDeletedThread(nThreadId)
     this.recordStreamEvent(notification)
     this.captureItemFromNotification(notification)
-    const nThreadId = this.extractThreadIdFromParams(notification.params)
     if (nThreadId) {
       const turnId = readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.id)
       if (notification.method === 'turn/started' && turnId) this.activeTurnIds.set(nThreadId, turnId)
@@ -6489,6 +6500,7 @@ export class AppServerProcess {
   }
 
   storeThreadReadSnapshot(threadId: string, snapshot: unknown): void {
+    this.assertThreadReadable(threadId)
     this.lastThreadReadSnapshotByThreadId.set(threadId, snapshot)
     this.retainThreadCache('snapshot', threadId, snapshot, 5 * 60_000, () => this.lastThreadReadSnapshotByThreadId.delete(threadId))
     const path = readNonEmptyString(asRecord(asRecord(snapshot)?.thread)?.path)
@@ -6509,6 +6521,7 @@ export class AppServerProcess {
     for (const row of rows) {
       const thread = asRecord(row)
       if (typeof thread?.id === 'string' && typeof thread.path === 'string') {
+        if (this.isThreadReadDeleted(thread.id)) continue
         const updatedAt = typeof thread.updatedAt === 'number' && Number.isFinite(thread.updatedAt) ? thread.updatedAt : null
         const createdAt = typeof thread.createdAt === 'number' && Number.isFinite(thread.createdAt) ? thread.createdAt : null
         const timestamp = updatedAt ?? createdAt
@@ -6529,6 +6542,7 @@ export class AppServerProcess {
   }
 
   rememberThreadSessionPath(threadId: string, path: string): void {
+    this.assertThreadReadable(threadId)
     const current = this.sessionPathByThreadId.get(threadId)
     this.sessionPathByThreadId.set(threadId, { path, timestamp: current?.timestamp ?? null })
     if (current?.path !== path && this.capturedItemsByThreadId.get(threadId)?.size) {
@@ -6557,8 +6571,10 @@ export class AppServerProcess {
       includeTurns: true,
     })
     const epoch = this.lifecycleEpoch
+    const scope = this.beginThreadRead(threadId)
     const promise = request.then((result) => {
       this.assertLifecycleEpoch(epoch)
+      this.assertThreadReadable(threadId)
       if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
       this.threadTurnPageReadCacheByThreadId.set(threadId, {
         result,
@@ -6570,9 +6586,11 @@ export class AppServerProcess {
       return result
     }, (error) => {
       this.assertLifecycleEpoch(epoch)
+      this.assertThreadReadable(threadId)
       if (this.threadTurnPageReadPromiseByThreadId.get(threadId) !== promise) return this.readThreadForTurnPage(threadId)
       throw error
     }).finally(() => {
+      scope.release()
       if (this.threadTurnPageReadPromiseByThreadId.get(threadId) === promise) this.threadTurnPageReadPromiseByThreadId.delete(threadId)
     })
 
@@ -6581,6 +6599,7 @@ export class AppServerProcess {
   }
 
   cacheLiveState(threadId: string, data: unknown, turnCount: number, sessionSize: number): void {
+    this.assertThreadReadable(threadId)
     this.liveStateCache.set(threadId, { data, turnCount, sessionSize })
     this.retainThreadCache('live', threadId, data, 30_000, () => this.liveStateCache.delete(threadId))
   }
@@ -6596,6 +6615,46 @@ export class AppServerProcess {
   invalidateLiveStateCache(threadId: string): void {
     this.liveStateCache.delete(threadId)
     this.threadCacheBudget.forget(`live:${threadId}`)
+  }
+
+  // Retain deletion markers only for in-flight reads, not for every deleted ID.
+  beginThreadRead(threadId: string): ThreadReadScope {
+    const scopes = this.threadReadScopes.get(threadId) ?? new Set<ThreadReadScope>()
+    const scope: ThreadReadScope = {
+      deleted: this.isThreadReadDeleted(threadId),
+      release: () => {
+        scopes.delete(scope)
+        if (!scopes.size) this.threadReadScopes.delete(threadId)
+      },
+    }
+    scopes.add(scope)
+    this.threadReadScopes.set(threadId, scopes)
+    return scope
+  }
+
+  private isThreadReadDeleted(threadId: string): boolean {
+    for (const scope of this.threadReadScopes.get(threadId) ?? []) if (scope.deleted) return true
+    return false
+  }
+
+  private assertThreadReadable(threadId: string): void {
+    if (this.isThreadReadDeleted(threadId)) {
+      throw new Error('This conversation was deleted.')
+    }
+  }
+
+  forgetDeletedThread(threadId: string): void {
+    for (const scope of this.threadReadScopes.get(threadId) ?? []) scope.deleted = true
+    this.lastThreadReadSnapshotByThreadId.delete(threadId)
+    this.threadTurnPageReadCacheByThreadId.delete(threadId)
+    this.threadTurnPageReadPromiseByThreadId.delete(threadId)
+    this.liveStateCache.delete(threadId)
+    this.sessionPathByThreadId.delete(threadId)
+    this.capturedItemsByThreadId.delete(threadId)
+    this.captureVerificationByThreadId.delete(threadId)
+    this.activeTurnIds.delete(threadId)
+    this.streamEvents.remove(threadId)
+    for (const kind of ['snapshot', 'page', 'live']) this.threadCacheBudget.forget(`${kind}:${threadId}`)
   }
 
   private retainThreadCache(kind: string, threadId: string, value: unknown, ttlMs: number, evict: () => void): void {
@@ -6912,6 +6971,21 @@ export class AppServerProcess {
     this.assertLifecycleEpoch(epoch)
     const request = this.call(method, params)
     const threadId = readNonEmptyString(asRecord(params)?.threadId)
+    if (method === 'thread/delete' && threadId) {
+      const result = await request
+      this.forgetDeletedThread(threadId)
+      return result
+    }
+    if (THREAD_READ_RPC_METHODS.has(method) && threadId) {
+      const scope = this.beginThreadRead(threadId)
+      try {
+        const result = await request
+        this.assertThreadReadable(threadId)
+        return result
+      } finally {
+        scope.release()
+      }
+    }
     if (method === 'thread/revert' && threadId) {
       const result = await request
       this.assertLifecycleEpoch(epoch)
@@ -7510,6 +7584,11 @@ export function createCodexBridgeMiddleware(options: {
       : null
     let responseBodyBytes = 0
     let rpcMethod: string | null = null
+    let threadReadScope: ThreadReadScope | null = null
+    const sendThreadReadJson = (statusCode: number, payload: unknown): void => {
+      if (threadReadScope?.deleted) setJson(res, 410, { error: 'This conversation was deleted.', code: 'thread_deleted' })
+      else setJson(res, statusCode, payload)
+    }
     const originalWrite = res.write.bind(res)
     const originalEnd = res.end.bind(res)
     res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
@@ -7548,6 +7627,11 @@ export function createCodexBridgeMiddleware(options: {
       if (securityPolicy.isRouteDisabled(req.method ?? 'GET', url.pathname)) {
         setJson(res, 403, { error: 'This integration is disabled by the active security policy.' })
         return
+      }
+
+      const readThreadId = url.searchParams.get('threadId')?.trim()
+      if (req.method === 'GET' && THREAD_READ_ROUTES.has(url.pathname) && readThreadId) {
+        threadReadScope = appServer.beginThreadRead(readThreadId)
       }
 
       if (url.pathname === '/codex-api/zen-proxy/v1/responses' && req.method === 'POST') {
@@ -7987,6 +8071,9 @@ export function createCodexBridgeMiddleware(options: {
           return
         }
 
+        const rpcThreadId = readNonEmptyString(asRecord(body.params)?.threadId)
+        if (THREAD_READ_RPC_METHODS.has(body.method) && rpcThreadId) threadReadScope = appServer.beginThreadRead(rpcThreadId)
+
 	        if (body.method === 'generate-thread-title') {
 	          setJson(res, 200, { result: { title: '' } })
 	          return
@@ -8010,7 +8097,7 @@ export function createCodexBridgeMiddleware(options: {
 		            const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
 		            const snapshot = threadId ? appServer.getLastThreadReadSnapshot(threadId) : null
 		            if (snapshot) {
-		              setJson(res, 200, { result: snapshot })
+		              sendThreadReadJson(200, { result: snapshot })
 		              return
 		            }
 		          }
@@ -8018,7 +8105,7 @@ export function createCodexBridgeMiddleware(options: {
             const params = asRecord(body.params)
             const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
             if (threadId) {
-              setJson(res, 200, {
+              sendThreadReadJson(200, {
                 result: {
                   thread: {
                     id: threadId,
@@ -8060,7 +8147,7 @@ export function createCodexBridgeMiddleware(options: {
           }
         }
 
-        setJson(res, 200, { result })
+        sendThreadReadJson(200, { result })
         return
       }
 
@@ -8088,9 +8175,9 @@ export function createCodexBridgeMiddleware(options: {
           const sendCommandSource = (item: Record<string, unknown>) => {
             if (outputView) {
               if (typeof item.aggregatedOutput !== 'string') { setJson(res, 404, { error: 'Source item has no command output.' }); return }
-              setJson(res, 200, { data: commandOutputPage(item.aggregatedOutput, offset, outputLimit) })
+              sendThreadReadJson(200, { data: commandOutputPage(item.aggregatedOutput, offset, outputLimit) })
             } else {
-              setJson(res, 200, { data: normalizeHistoryEntry({ turnId, item }) })
+              sendThreadReadJson(200, { data: normalizeHistoryEntry({ turnId, item }) })
             }
           }
           const readPersistedItem = async (): Promise<Record<string, unknown> | null> => {
@@ -8154,7 +8241,7 @@ export function createCodexBridgeMiddleware(options: {
                 const turn = Array.isArray(turns) ? asRecord(turns[0]) : null
                 const items = Array.isArray(turn?.items) ? turn.items : []
                 const item = asRecord(items[0])
-                setJson(res, 200, { data: normalizeHistoryEntry({ turnId, item: item ?? entry.item }) })
+                sendThreadReadJson(200, { data: normalizeHistoryEntry({ turnId, item: item ?? entry.item }) })
                 return
               }
               const next = typeof page?.nextCursor === 'string' ? page.nextCursor : null
@@ -8177,7 +8264,7 @@ export function createCodexBridgeMiddleware(options: {
         const data = url.pathname === '/codex-api/thread-resources'
           ? projectHistoryResources(entries, url.searchParams.get('cwd') ?? '')
           : collectSubagents([...entries].reverse(), threadId)
-        setJson(res, 200, { data, nextCursor: typeof page?.nextCursor === 'string' ? page.nextCursor : null })
+        sendThreadReadJson(200, { data, nextCursor: typeof page?.nextCursor === 'string' ? page.nextCursor : null })
         return
       }
 
@@ -8185,17 +8272,17 @@ export function createCodexBridgeMiddleware(options: {
         const threadId = url.searchParams.get('threadId')?.trim() ?? ''
         const path = appServer.getThreadSessionPath(threadId)
         if (!threadId || !path) {
-          setJson(res, 200, { result: null })
+          sendThreadReadJson(200, { result: null })
           return
         }
         try {
           const page = await readRecentThreadTurns(path, join(getCodexHomeDir(), 'sessions'), threadId)
-          setJson(res, 200, { result: page ? {
+          sendThreadReadJson(200, { result: page ? {
             thread: { id: threadId, turns: page.turns },
             hasMoreOlder: page.hasMoreOlder,
           } : null })
         } catch {
-          setJson(res, 200, { result: null })
+          sendThreadReadJson(200, { result: null })
         }
         return
       }
@@ -8249,7 +8336,7 @@ export function createCodexBridgeMiddleware(options: {
           const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', pagedResult)
           const result = await mergeSessionMetadataIntoThreadResult(sanitized)
 
-          setJson(res, 200, {
+          sendThreadReadJson(200, {
             result,
             startTurnIndex: startIndex,
             hasMoreOlder: startIndex > 0,
@@ -8257,7 +8344,7 @@ export function createCodexBridgeMiddleware(options: {
             nextTurnIndex: turns.length,
           })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load earlier thread messages') })
+          sendThreadReadJson(500, { error: getErrorMessage(error, 'Failed to load earlier thread messages') })
         }
         return
       }
@@ -8277,15 +8364,15 @@ export function createCodexBridgeMiddleware(options: {
         const threadRecord = asRecord(threadReadRecord?.thread)
         const sessionPath = readNonEmptyString(threadRecord?.path)
         if (!sessionPath || !isAbsolute(sessionPath)) {
-          setJson(res, 200, { data: [] })
+          sendThreadReadJson(200, { data: [] })
           return
         }
 
         try {
           const sessionLogRaw = await readFile(sessionPath, 'utf8')
-          setJson(res, 200, { data: buildSessionFileChangeFallback(threadReadResult, sessionLogRaw) })
+          sendThreadReadJson(200, { data: buildSessionFileChangeFallback(threadReadResult, sessionLogRaw) })
         } catch {
-          setJson(res, 200, { data: [] })
+          sendThreadReadJson(200, { data: [] })
         }
         return
       }
@@ -8332,7 +8419,7 @@ export function createCodexBridgeMiddleware(options: {
 
           const cached = appServer.getCachedLiveState(threadId, rawTurns.length, sessionSize)
           if (cached) {
-            setJson(res, 200, cached)
+            sendThreadReadJson(200, cached)
             return
           }
 
@@ -8374,10 +8461,10 @@ export function createCodexBridgeMiddleware(options: {
             appServer.cacheLiveState(threadId, responseData, rawTurns.length, sessionSize)
           }
 
-          setJson(res, 200, responseData)
+          sendThreadReadJson(200, responseData)
         } catch (error) {
           if (isThreadMaterializationPendingError(error)) {
-            setJson(res, 200, {
+            sendThreadReadJson(200, {
               threadId,
               conversationState: { turns: [] },
               ownerClientId: null,
@@ -8393,7 +8480,7 @@ export function createCodexBridgeMiddleware(options: {
             const thread = asRecord(record?.thread)
             const rawTurns = Array.isArray(thread?.turns) ? thread.turns : []
             const turns = appServer.mergeItemsIntoTurns(threadId, rawTurns)
-            setJson(res, 200, {
+            sendThreadReadJson(200, {
               threadId,
               conversationState: { turns },
               ownerClientId: null,
@@ -8404,7 +8491,7 @@ export function createCodexBridgeMiddleware(options: {
               isInProgress: false,
             })
           } else {
-            setJson(res, 200, {
+            sendThreadReadJson(200, {
               threadId,
               conversationState: null,
               ownerClientId: null,
@@ -9825,7 +9912,9 @@ export function createCodexBridgeMiddleware(options: {
       next()
     } catch (error) {
       const message = getErrorMessage(error, 'Unknown bridge error')
-      setJson(res, 502, { error: message })
+      sendThreadReadJson(502, { error: message })
+    } finally {
+      threadReadScope?.release()
     }
   }
 

@@ -188,6 +188,31 @@ afterEach(() => {
 })
 
 describe('recent thread preview', () => {
+  it('forgets a deleted cached thread and preserves the selected conversation', async () => {
+    installTestWindow()
+    const state = useDesktopState()
+    state.registerThreadSummary(thread('deleted', '/tmp/project'))
+    state.registerThreadSummary(thread('current', '/tmp/project'))
+    state.primeSelectedThread('current')
+    state.forgetDeletedThread('deleted')
+    expect(state.projectGroups.value.flatMap((group) => group.threads).map((thread) => thread.id)).toEqual(['current'])
+    expect(state.selectedThreadId.value).toBe('current')
+    expect(gatewayMocks.getThreadGroupsPage).not.toHaveBeenCalled()
+    state.forgetDeletedThread('current')
+    expect(state.selectedThreadId.value).toBe('')
+  })
+
+  it('handles deletion notifications without scheduling a full thread-list refresh', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const listRequests = gatewayMocks.getThreadGroupsPage.mock.calls.length
+    vi.mocked(window.setTimeout).mockClear()
+    emit({ method: 'thread/deleted', params: { threadId: 'thread-1' } })
+    expect(state.selectedThreadId.value).toBe('')
+    expect(state.projectGroups.value.flatMap((group) => group.threads)).toEqual([])
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(listRequests)
+    expect(window.setTimeout).not.toHaveBeenCalled()
+  })
+
   it('keeps recent and paged messages while metadata-only resume hydrates history', async () => {
     installTestWindow()
     gatewayMocks.getRecentThreadDetail.mockResolvedValueOnce({

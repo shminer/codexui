@@ -55,6 +55,31 @@ it('uses exclusive before/after anchors, latest windows, and explicit stale-wind
   expect((await fetch(`${base}/codex-api/thread-turn-page?threadId=thread&beforeTurnId=a&afterTurnId=b`)).status).toBe(400)
 })
 
+it.each(['/codex-api/thread-turn-page', '/codex-api/thread-live-state', '/codex-api/rpc'])('blocks stale history responses and cache writes after deletion (%s)', async (route) => {
+  let started!: (process: AppServerProcess) => void
+  const reading = new Promise<AppServerProcess>((resolve) => { started = resolve })
+  let finish!: (result: unknown) => void
+  const staleRead = new Promise<unknown>((resolve) => { finish = resolve })
+  const rpc = vi.spyOn(AppServerProcess.prototype, 'rpc').mockImplementation(function (this: AppServerProcess) {
+    started(this)
+    return staleRead
+  })
+  const base = await start()
+  const response = route === '/codex-api/rpc'
+    ? fetch(`${base}${route}`, { method: 'POST', body: JSON.stringify({ method: 'thread/read', params: { threadId: 'deleted', includeTurns: true } }) })
+    : fetch(`${base}${route}?threadId=deleted`)
+  const process = await reading
+  process.forgetDeletedThread('deleted')
+  finish({ thread: { id: 'deleted', turns: [{ id: 'old-turn', items: [] }] } })
+  const result = await response
+  expect(result.status).toBe(410)
+  expect(await result.json()).toMatchObject({ code: 'thread_deleted' })
+  expect(process.getLastThreadReadSnapshot('deleted')).toBeNull()
+  expect(process.getThreadSessionPath('deleted')).toBeUndefined()
+  expect((process as any).threadReadScopes.size).toBe(0)
+  expect(rpc).toHaveBeenCalledOnce()
+})
+
 it('returns only a requested command output page and preserves the normal source response', async () => {
   const output = 'a'.repeat(70000)
   const rpc = vi.spyOn(AppServerProcess.prototype, 'rpc').mockResolvedValue({ data: [

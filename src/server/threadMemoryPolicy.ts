@@ -167,7 +167,7 @@ export class ThreadDiagnosticBuffer<T> {
     this.bytes = 0
   }
 
-  private remove(threadId: string): void {
+  remove(threadId: string): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
     this.bytes -= thread.bytes

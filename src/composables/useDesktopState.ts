@@ -4836,6 +4836,10 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
+    if (notification.method === 'thread/deleted' && notificationThreadId) {
+      forgetDeletedThread(notificationThreadId)
+      return
+    }
     if (notificationThreadId && historyWindowThreadIds.has(notificationThreadId)
       && hasMoreNewerMessagesByThreadId.value[notificationThreadId] !== true
       && (notification.method.startsWith('item/') || notification.method === 'turn/started' || notification.method === 'turn/plan/updated')) {
@@ -5221,6 +5225,7 @@ export function useDesktopState() {
       notification.method === 'thread/tokenUsage/updated'
       || notification.method === 'thread/goal/updated'
       || notification.method === 'thread/goal/cleared'
+      || notification.method === 'thread/deleted'
     ) return
 
     const method = notification.method
@@ -6161,6 +6166,13 @@ export function useDesktopState() {
         setTurnErrorForThread(threadId, message, { transient: true })
       }
     }
+  }
+
+  function forgetDeletedThread(threadId: string): void {
+    removeArchivedThreadFromLoadedLists(threadId)
+    invalidateThreadBody(threadId)
+    resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
+    if (selectedThreadId.value === threadId) setSelectedThreadId('')
   }
 
   async function archiveThreadById(threadId: string) {
@@ -7740,6 +7752,7 @@ export function useDesktopState() {
     setThreadTerminalOpen,
     toggleSelectedThreadTerminal,
     archiveThreadById,
+    forgetDeletedThread,
     renameThreadById,
     forkThreadById,
     forkThreadFromTurn,

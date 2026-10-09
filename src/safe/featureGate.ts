@@ -28,6 +28,7 @@ const ALLOWED_RPC_METHODS = new Set([
   'setDefaultModel',
   'skills/list',
   'thread/archive',
+  'thread/delete',
   'thread/fork',
   'thread/goal/clear',
   'thread/goal/get',
