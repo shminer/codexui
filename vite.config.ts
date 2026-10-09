@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { createCodexBridgeMiddleware } from "./src/server/codexAppServerBridge";
 import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, getLocalDirectoryListing, isTextEditableFile, normalizeLocalPath } from "./src/server/localBrowseUi";
+import { encodeLocalPathForUrl } from "./src/pathUtils";
 import tailwindcss from "@tailwindcss/vite";
 import { spawnSync } from "node:child_process";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
@@ -20,19 +21,6 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
 };
-
-function normalizeLocalImagePath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("file://")) {
-    try {
-      return decodeURIComponent(trimmed.replace(/^file:\/\//u, ""));
-    } catch {
-      return trimmed.replace(/^file:\/\//u, "");
-    }
-  }
-  return trimmed;
-}
 
 function getWorktreeName(): string {
   const normalizedCwd = process.cwd().replace(/\\/g, "/");
@@ -185,7 +173,7 @@ export default defineConfig({
           const url = new URL(req.url, "http://localhost");
           if (url.pathname !== "/codex-local-image") return next();
 
-          const localPath = normalizeLocalImagePath(url.searchParams.get("path") ?? "");
+          const localPath = normalizeLocalPath(url.searchParams.get("path") ?? "");
           if (!localPath || !isAbsolute(localPath)) {
             res.statusCode = 400;
             res.setHeader("Content-Type", "application/json");
@@ -307,7 +295,7 @@ export default defineConfig({
                 return;
               }
               res.statusCode = 302;
-              res.setHeader("Location", `/codex-local-browse${localPath.split("/").map(encodeURIComponent).join("/")}`);
+              res.setHeader("Location", `/codex-local-browse${encodeLocalPathForUrl(localPath)}`);
               res.end();
               return;
             }

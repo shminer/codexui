@@ -1,5 +1,7 @@
 import { dirname, extname, join } from 'node:path'
 import { open, readFile, readdir, stat } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { encodeLocalPathForUrl } from '../pathUtils.js'
 
 type DirectoryItem = {
   name: string
@@ -66,25 +68,30 @@ function languageForPath(pathValue: string): string {
 }
 
 export function normalizeLocalPath(rawPath: string): string {
-  const trimmed = rawPath.trim()
-  if (!trimmed) return ''
-  if (trimmed.startsWith('file://')) {
+  if (!rawPath) return ''
+  if (/^file:/iu.test(rawPath)) {
     try {
-      return decodeURIComponent(trimmed.replace(/^file:\/\//u, ''))
+      return fileURLToPath(rawPath)
     } catch {
-      return trimmed.replace(/^file:\/\//u, '')
+      return ''
     }
   }
-  return trimmed
+  return rawPath
 }
 
 // Only raw URL pathnames need decoding; Express route parameters are already decoded.
 export function decodeBrowsePath(rawPath: string): string {
+  if (!rawPath) return ''
+  let path: string
   try {
-    return decodeURIComponent(rawPath)
+    path = decodeURIComponent(rawPath)
   } catch {
-    return rawPath
+    return ''
   }
+  if (process.platform === 'win32') {
+    return path.replace(/^\/([A-Za-z]:[\\/])/u, '$1').replace(/\//gu, '\\')
+  }
+  return path
 }
 
 export function isTextEditablePath(pathValue: string): boolean {
@@ -143,13 +150,13 @@ function normalizeNewProjectName(value: string): string {
 function toBrowseHref(pathValue: string, newProjectName = ''): string {
   const normalizedName = normalizeNewProjectName(newProjectName)
   const query = normalizedName ? `?newProjectName=${encodeURIComponent(normalizedName)}` : ''
-  return `/codex-local-browse${pathValue.split('/').map(encodeURIComponent).join('/')}${query}`
+  return `/codex-local-browse${encodeLocalPathForUrl(pathValue)}${query}`
 }
 
 function toEditHref(pathValue: string, newProjectName = ''): string {
   const normalizedName = normalizeNewProjectName(newProjectName)
   const query = normalizedName ? `?newProjectName=${encodeURIComponent(normalizedName)}` : ''
-  return `/codex-local-edit${pathValue.split('/').map(encodeURIComponent).join('/')}${query}`
+  return `/codex-local-edit${encodeLocalPathForUrl(pathValue)}${query}`
 }
 
 function escapeForInlineScriptString(value: string): string {
@@ -165,14 +172,14 @@ async function getDirectoryItems(localPath: string): Promise<DirectoryItem[]> {
   const entries = await readdir(localPath, { withFileTypes: true })
   const withMeta = await Promise.all(entries.map(async (entry) => {
     const entryPath = join(localPath, entry.name)
-    const entryStat = await stat(entryPath)
+    const entryStat = await stat(entryPath).catch(() => null)
     const editable = !entry.isDirectory() && await isTextEditableFile(entryPath)
     return {
       name: entry.name,
       path: entryPath,
       isDirectory: entry.isDirectory(),
       editable,
-      mtimeMs: entryStat.mtimeMs,
+      mtimeMs: entryStat?.mtimeMs ?? 0,
     }
   }))
   return withMeta.sort((a, b) => {

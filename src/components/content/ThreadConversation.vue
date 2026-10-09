@@ -983,10 +983,11 @@
 </template>
 
 <script setup lang="ts">
+import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { updateThreadFileChanges } from '../../api/codexGateway'
-import { findNextMarkdownLink, getBasename, normalizePathDots, normalizePathSeparators, parseFileReference, parseMarkdownLinkToken, resolveRelativePath, trimLinkWrappers } from '../../fileReferences'
+import { findNextMarkdownLink, getBasename, normalizePathDots, parseFileReference, parseMarkdownLinkToken, resolveRelativePath, trimLinkWrappers } from '../../fileReferences'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard } from '../../utils/clipboard'
@@ -1621,7 +1622,6 @@ type DiffViewerLine = {
   text: string
 }
 
-
 function countAsterisksBefore(value: string, endIndex: number, minIndex: number): number {
   let count = 0
   let index = endIndex - 1
@@ -2178,8 +2178,8 @@ function fileChangeSummaryStatusParts(summary: TurnFileChangeSummary | null): Fi
 
 function displayFileChangePath(pathValue: string): string {
   const resolved = resolveRelativePath(pathValue, props.cwd)
-  const normalizedCwd = normalizePathDots(normalizePathSeparators(props.cwd.trim()))
-  const normalizedResolved = normalizePathDots(normalizePathSeparators(resolved))
+  const normalizedCwd = normalizePathDots(props.cwd)
+  const normalizedResolved = normalizePathDots(resolved, isWindowsLikePath(props.cwd) || isWindowsLikePath(pathValue))
   if (normalizedCwd && normalizedResolved.startsWith(`${normalizedCwd}/`)) {
     return normalizedResolved.slice(normalizedCwd.length + 1)
   }
@@ -2751,13 +2751,7 @@ function toRenderableImageUrl(value: string): string {
     return normalized
   }
 
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  const looksLikeUnixAbsolute = normalized.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(normalized)
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute) {
+  if (/^file:/iu.test(normalized) || isAbsoluteLikePath(normalized)) {
     return `/codex-local-image?path=${encodeURIComponent(normalized)}`
   }
 
@@ -2765,17 +2759,10 @@ function toRenderableImageUrl(value: string): string {
 }
 
 function toBrowseUrl(pathValue: string): string {
-  const normalized = pathValue.trim()
-  if (!normalized) return '#'
-  const looksLikeAbsolutePath = (candidate: string): boolean => (
-    candidate.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(candidate)
-  )
+  if (!pathValue) return '#'
+  const resolved = resolveRelativePath(pathValue, props.cwd)
 
-  const parsed = parseFileReference(normalized)
-  const candidatePath = parsed?.path ?? normalized
-  const resolved = resolveRelativePath(candidatePath, props.cwd)
-
-  if (looksLikeAbsolutePath(resolved)) {
+  if (isAbsoluteLikePath(resolved)) {
     return `/codex-local-open?path=${encodeURIComponent(resolved)}`
   }
 
@@ -2794,7 +2781,7 @@ function toEditUrlFromBrowseHref(href: string): string {
     const resolved = new URL(normalizedHref, window.location.href)
     if (resolved.pathname === '/codex-local-open') {
       const path = resolved.searchParams.get('path')
-      return path ? `/codex-local-edit${(path.startsWith('/') ? path : `/${path}`).split('/').map(encodeURIComponent).join('/')}` : ''
+      return path ? `/codex-local-edit${encodeLocalPathForUrl(path)}` : ''
     }
     if (!resolved.pathname.startsWith('/codex-local-browse')) return ''
     const editPath = `/codex-local-edit${resolved.pathname.slice('/codex-local-browse'.length)}`

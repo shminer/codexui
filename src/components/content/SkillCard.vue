@@ -43,6 +43,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeLocalPathForUrl, getPathParent } from '../../pathUtils.js'
 import { computed } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
@@ -80,13 +81,13 @@ const showOwner = computed(() => props.showOwner !== false)
 const skillDirPath = computed(() => {
   const p = props.skill.path
   if (!p) return ''
-  return p.endsWith('/SKILL.md') ? p.slice(0, -'/SKILL.md'.length) : p
+  return /[\\/]SKILL\.md$/u.test(p) ? getPathParent(p) : p
 })
 
 function onBrowse(): void {
   const dir = skillDirPath.value
   if (!dir) return
-  window.open(`/codex-local-browse${encodeURI(dir)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(dir)}`, '_blank', 'noopener,noreferrer')
 }
 
 const publishedLabel = computed(() => {

@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { findNextMarkdownLink, parseFileReference, parseMarkdownLinkToken, resolveRelativePath } from './fileReferences'
+import { findNextMarkdownLink, getBasename, parseFileReference, parseMarkdownLinkToken, resolveRelativePath } from './fileReferences'
 import { mergeThreadResources, projectMessageResources } from './threadResources'
 import { normalizeHistoryEntry, projectHistoryResources, readThreadHistoryEntries } from './server/threadHistoryProjection'
 import type { UiMessage } from './types/codex'
 
 describe('thread resource projection', () => {
+  it.each([
+    ['C:\\work\\notes.md', '/project', 'C:/work/notes.md'],
+    ['src\\notes.md', 'C:\\Users\\alice\\project', 'C:/Users/alice/project/src/notes.md'],
+    ['~/notes.md', 'C:\\Users\\alice\\project', 'C:/Users/alice/notes.md'],
+    ['../../../notes.md', '\\\\server\\share\\project', '//server/share/notes.md'],
+    ['file://server/share/notes.md', '/project', '//server/share/notes.md'],
+    ['//home/alice/../notes.md', '/project', '/home/notes.md'],
+    ['src/a\\b.md', '//home/alice', '/home/alice/src/a\\b.md'],
+    ['file:///tmp/report.txt%20', '/project', '/tmp/report.txt '],
+  ])('keeps shared chat/resource path resolution for %s under %s', (path, cwd, expected) => {
+    expect(resolveRelativePath(path, cwd)).toBe(expected)
+  })
+
+  it('keeps exact parsed file URL names and POSIX backslashes', () => {
+    expect(parseFileReference('file:///tmp/report.txt%20')).toEqual({ path: '/tmp/report.txt ', line: null })
+    expect(parseFileReference('file:///C:/work/a%2520b.md:12')).toEqual({ path: 'C:/work/a%20b.md', line: 12 })
+    expect(getBasename('/tmp/a\\b.md')).toBe('a\\b.md')
+  })
+
   it('shares file-link parsing, including nested parentheses and special paths', () => {
     const source = 'See [source](/tmp/my (old)/中文%20 #?.cpp:12) next'
     const token = findNextMarkdownLink(source, 0)!

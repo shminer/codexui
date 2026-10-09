@@ -1,5 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getSkillsList, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+
+describe('mock skill paths through frontend lists', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it.each([
+    ['C:\\Users\\alice\\.codex\\skills\\demo', 'C:/Users/alice/.codex/skills/demo/SKILL.md', '\\'],
+    ['\\\\server\\share\\skills\\demo', '//server/share/skills/demo/SKILL.md', '\\'],
+    ['/home/user/.codex/skills/demo', '/home/user/.codex/skills/demo/SKILL.md', '/'],
+  ])('preserves the root and groups nested skills under %s', async (root, expected, separator) => {
+    const data = [{ cwd: root, skills: [
+      { name: 'demo', path: `${root}${separator}SKILL.md`, description: '', scope: 'user', enabled: true },
+      { name: 'nested', path: `${root}${separator}nested${separator}SKILL.md`, description: '', scope: 'user', enabled: true },
+    ], errors: [] }]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ result: { data } })))
+    const frontend = await getSkillsList([root])
+    expect(frontend.map((skill) => skill.path)).toEqual([expected])
+  })
+})
 
 describe('fork through selected response', () => {
   afterEach(() => vi.unstubAllGlobals())

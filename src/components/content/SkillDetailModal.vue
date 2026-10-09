@@ -90,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeLocalPathForUrl, getPathParent } from '../../pathUtils.js'
 import { computed, ref, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerX from '../icons/IconTablerX.vue'
@@ -137,7 +138,7 @@ const effectiveDescription = computed(() => localDescription.value || props.skil
 const skillDirPath = computed(() => {
   const p = props.skill.path
   if (!p) return ''
-  return p.endsWith('/SKILL.md') ? p.slice(0, -'/SKILL.md'.length) : p
+  return /[\\/]SKILL\.md$/u.test(p) ? getPathParent(p) : p
 })
 
 const renderedReadme = computed(() => {
@@ -216,7 +217,7 @@ function onTry(): void {
 function onBrowseFiles(): void {
   const dir = skillDirPath.value
   if (!dir) return
-  window.open(`/codex-local-browse${encodeURI(dir)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(dir)}`, '_blank', 'noopener,noreferrer')
 }
 </script>
 

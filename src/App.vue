@@ -1319,7 +1319,7 @@ import type { ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiS
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
-import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
+import { encodeLocalPathForUrl, getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 import { CHAT_WIDTH_MIN, CHAT_WIDTH_MAX, CHAT_WIDTH_STEP, CHAT_WIDTH_DEFAULT, loadChatWidthPref, saveChatWidthPref, normalizeChatWidth } from './chatWidth'
 
@@ -2803,13 +2803,13 @@ function onBrowseThreadFiles(threadId: string): void {
     }
   }
   if (!targetCwd || typeof window === 'undefined') return
-  window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(targetCwd)}`, '_blank', 'noopener,noreferrer')
 }
 
 function onBrowseComposerFiles(): void {
   const targetCwd = composerCwd.value.trim()
   if (!targetCwd || typeof window === 'undefined') return
-  window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(targetCwd)}`, '_blank', 'noopener,noreferrer')
 }
 
 function getProjectCwd(projectName: string): string {
@@ -2841,7 +2841,7 @@ function toWorktreeFolderNameDraft(projectName: string): string {
 function onBrowseProjectFiles(projectName: string): void {
   const targetCwd = getProjectCwd(projectName)
   if (!targetCwd || typeof window === 'undefined') return
-  window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
+  window.open(`/codex-local-browse${encodeLocalPathForUrl(targetCwd)}`, '_blank', 'noopener,noreferrer')
 }
 
 async function onSaveProject(projectName: string): Promise<void> {

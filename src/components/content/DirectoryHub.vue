@@ -658,6 +658,7 @@
 </template>
 
 <script setup lang="ts">
+import { isAbsoluteLikePath } from '../../pathUtils.js'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -1171,7 +1172,7 @@ function localAssetSrc(path: string): string {
   if (!path) return ''
   if (path.startsWith('connectors://')) return `/codex-api/connector-logo?src=${encodeURIComponent(path)}`
   if (/^https?:\/\//i.test(path) || path.startsWith('data:')) return path
-  if (!path.startsWith('/')) return ''
+  if (!isAbsoluteLikePath(path) && !/^file:/iu.test(path)) return ''
   return `/codex-local-image?path=${encodeURIComponent(path)}`
 }
 
