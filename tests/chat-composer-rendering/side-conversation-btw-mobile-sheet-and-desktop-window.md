@@ -76,7 +76,7 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - Click Edit message on a side user message with an empty draft and with an existing draft. Repeat while a response runs and in the popup.
 - Expected: text is appended to the side draft and focused; main draft and historical messages are unchanged. Existing attachments, skills and queue remain. No rollback or automatic send occurs.
 - During opening or a pending approval/input request, the edit action is absent. Agent and archived read-only previews still have no edit action, and side Fork/file undo controls remain absent.
-- Cleanup: close the side conversation and restore the width preference. This change was statically checked only; browser checks remain pending under the session restrictions.
+- Cleanup: close the side conversation and restore the width preference. Mock browser checks cover shared width, post-refresh persistence and independent side-message editing; popup-specific checks remain manual.
 
 ### Ephemeral synchronization regression
 
@@ -115,4 +115,19 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 | Races | Delay a history request; finish another turn or close the side window before returning the response. | Newly arrived rows survive the delayed response; closed state stays cleared. Stale anchors recover latest once, and expired caches stop pagination while keeping the remaining preview. |
 | Cleanup | End the child and restore viewport/theme/width settings. | Pending deltas, window bounds, indices, queue and cache references are released. No side transcript/draft is persisted in localStorage. |
 
-Static verification only: runtime/mock tests, heap measurements and browser/theme acceptance were not executed under the session restrictions. Server source budgets are additional to the existing ordinary-thread cache budget; draft/attachment/queue memory is intentionally outside transcript retention.
+Server source budgets are additional to the existing ordinary-thread cache budget; draft/attachment/queue memory is intentionally outside transcript retention.
+
+## Mock And Browser Verification
+
+| Check | Execution / Evidence | Result |
+| --- | --- | --- |
+| Mock regression | `pnpm exec vitest run` for the temporary server cache, bridge memory, gateway paging, ephemeral window, desktop state, history window, copy controller and conversation wiring/window modules. Report: `output/playwright/side-mock-regression.json`. | 238 cases: 230 passed, 8 failed. All 8 failures reproduce on pre-change commit `cee6441`; they cover two Agent-list expectations and six provider-model cases. No new failures. |
+| Focused side state | `pnpm exec vitest run src/composables/useDesktopState.test.ts -t 'side conversation lifecycle\|side memory event races\|bounded thread working sets\|recent thread preview\|turn completion ownership'`. | 70 passed. Gateway implementations and one-shot responses are reset between cases; default asynchronous history responses are explicit. |
+| Main UI | `node output/playwright/side-agent-acceptance.cjs`, using `http://127.0.0.1:4173/#/thread/review-testchat`, mocked RPC/HTTP/WebSocket events, and 1440x1000, 768x1024, 375x812 in both themes. | Six combinations passed; 12 screenshots. Independent drafts, live body, 64 Ki command preview and earlier-source paging, full-source edit of a 270000-character user message, transcript unmount, same-child restoration and older temporary history passed. |
+| Retention UI | `node output/playwright/side-extra-acceptance.cjs`; desktop/mobile in both themes. Report: `output/playwright/side-extra-acceptance.json`. | Four combinations passed; four screenshots. Width survives reload, side width matches the setting, draft/skill/queue survive minimization, execution continues, 410 preserves remaining content, and closing unsubscribes once without archive. No side ID is saved in localStorage. |
+| Request counts | Inspect the main/extra acceptance reports. | One fork; no side resume; no temporary-history request while minimized; one latest-page request on restore. Complete source/command-page reads occur only on user action. |
+| Short pressure check | `node output/playwright/side-memory-stress.cjs`; 200 deltas and 420 completed mock turns with 100000-character command output each. Report: `output/playwright/side-memory-stress.json`. | 200 deltas produced 3 DOM mutation batches. Minimized state retained 4 turns, 8 items and 212726 text characters; command previews stayed at 65536 characters. Latest content remained present, transcript DOM stayed unmounted, and minimized history requests were zero. |
+| Heap / blocking | Chromium CDP forced-GC samples in the pressure report. | Last two samples: 11978496 and 11985180 bytes; one recorded long task of 59 ms. This is a short development-mode fixture check, not a production leak proof or long-duration soak. |
+| Static checks | `pnpm exec vue-tsc --noEmit`, `pnpm exec tsc --noEmit -p tsconfig.server.json`, `git diff --check`. | Passed. No build, package install or publish was executed. |
+
+The browser scripts intercept writes and model turns; no real model task is started. Each browser context closes after the check, leaving the existing 4173 server running. Live CLI integration, popup/attachment-specific interaction, native mobile keyboards and a long-duration production heap profile remain untested.
