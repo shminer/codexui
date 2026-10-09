@@ -6,7 +6,7 @@
 
 #### Steps
 1. On Android, run `npm run dev -- --port 4173`.
-2. Confirm startup logs show `Codex Web Local is running!`.
+2. Confirm startup logs show `codexui is running!` and version `1.1.0`.
 3. In a second Android shell, run `curl -fsS http://127.0.0.1:4173/ | head -5`.
 4. Stop the dev server.
 

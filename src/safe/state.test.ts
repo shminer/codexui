@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  getCurrentCommandMarker,
+  getSafeHome,
   getStatePath,
   readLiveManagedState,
   readManagedState,
@@ -31,6 +33,13 @@ function state(): ManagedState {
 }
 
 describe('managed safe state', () => {
+  it('uses the new command name while retaining the existing state location', () => {
+    delete process.env.CODEX_MOBILE_SAFE_HOME
+    expect(getSafeHome()).toMatch(/\.codex-mobile-safe$/u)
+    expect(getCurrentCommandMarker([])).toBe('codexui-safe')
+    expect(getCurrentCommandMarker(['node', 'codexui-safe'])).toBe('codexui-safe')
+  })
+
   it('writes mode-restricted JSON and returns a matching live process', async () => {
     process.env.CODEX_MOBILE_SAFE_HOME = await mkdtemp(join(tmpdir(), 'codex-safe-state-'))
     await writeManagedState(state())

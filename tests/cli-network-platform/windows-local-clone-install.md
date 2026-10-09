@@ -9,7 +9,7 @@
 Set an isolated temporary installation prefix so the check cannot overwrite an existing global package:
 
 ```powershell
-$prefix = Join-Path $env:TEMP 'codex-mobile-windows-install-test'
+$prefix = Join-Path $env:TEMP 'codexui-windows-install-test'
 Remove-Item -LiteralPath $prefix -Recurse -Force -ErrorAction SilentlyContinue
 $env:PREFIX = $prefix
 ```
@@ -25,8 +25,10 @@ $env:PREFIX = $prefix
 2. Run both generated Windows command shims directly from the temporary prefix:
 
    ```powershell
-   & (Join-Path $prefix 'codex-mobile.cmd') --help
-   & (Join-Path $prefix 'codex-mobile-safe.cmd') doctor
+   & (Join-Path $prefix 'codexui.cmd') --version
+   & (Join-Path $prefix 'codexui-safe.cmd') --version
+   & (Join-Path $prefix 'codexui.cmd') --help
+   & (Join-Path $prefix 'codexui-safe.cmd') doctor
    ```
 
 3. Confirm that the normal default prefix is discoverable for future installs:
@@ -39,8 +41,8 @@ $env:PREFIX = $prefix
 ## Expected results
 
 - `pnpm run install:local` runs `scripts/install-local.bat`; it does not require `sh`, Git Bash, or WSL.
-- The installation creates `codex-mobile.cmd` and `codex-mobile-safe.cmd` directly under the configured prefix.
-- `codex-mobile --help` succeeds, and `codex-mobile-safe doctor` reports `codex-mobile-safe doctor: ok`.
+- The installation creates only `codexui.cmd` and `codexui-safe.cmd` command names directly under the configured prefix, without legacy aliases.
+- Both version commands print `1.1.0`; `codexui --help` succeeds, and `codexui-safe doctor` reports `codexui-safe doctor: ok`.
 - A normal install with no `PREFIX` override uses `npm prefix --global`, which must be on `PATH` for the commands to resolve by name.
 
 ## Rollback / cleanup

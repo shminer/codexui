@@ -21,16 +21,10 @@ pushd "%ROOT%" || exit /b 1
 call pnpm run build
 if errorlevel 1 goto :failure
 
-call npm list --global --prefix "%INSTALL_PREFIX%" --depth=0 codex-mobile-safe >nul 2>&1
-if not errorlevel 1 (
-  call npm uninstall --global --prefix "%INSTALL_PREFIX%" codex-mobile-safe
-  if errorlevel 1 goto :failure
-)
-
 call npm install --global --prefix "%INSTALL_PREFIX%" "%ROOT%"
 if errorlevel 1 goto :failure
 
-echo Installed codex-mobile and codex-mobile-safe under %INSTALL_PREFIX%.
+echo Installed codexui and codexui-safe under %INSTALL_PREFIX%.
 echo Ensure %INSTALL_PREFIX% is in PATH.
 popd
 exit /b 0

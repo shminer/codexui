@@ -5,6 +5,7 @@
 - Linux with Node.js 18+, pnpm, curl, systemd user services, and Tailscale installed.
 - The device is logged in to the intended tailnet and `${HOME}/.local/bin` is on `PATH`.
 - A clean clone of `https://github.com/zonghang-li/codex-mobile.git`.
+- Use the private local `codexui` package. Before replacing an old installation, follow the manual old-package and old-unit steps in [README](../../README.md); the installer does not migrate them.
 - One known existing thread created before the policy change. Record its id as `EXISTING_THREAD_ID`; its baseline `approvalPolicy` and `sandbox` will be captured before installing the new unit.
 
 Set reusable values:
@@ -47,8 +48,8 @@ node -e 'const r=require("/tmp/codex-mobile-existing-before.json").result; conso
 2. Inspect the effective unit and service state:
 
    ```bash
-   systemctl --user cat codex-mobile-safe.service
-   systemctl --user show codex-mobile-safe.service -p ActiveState -p SubState -p MainPID -p ExecStart --no-pager
+   systemctl --user cat codexui-safe.service
+   systemctl --user show codexui-safe.service -p ActiveState -p SubState -p MainPID -p ExecStart --no-pager
    ```
 
    Expect `ActiveState=active`, the safe entry point, `--port 5900`, `--password-file %h/.codex/codex-mobile-safe-password`, `--sandbox-mode danger-full-access`, and `--approval-policy never`. Expect no unresolved `@PROJECT_DIR@` or `@PREFIX@`.
@@ -65,7 +66,7 @@ node -e 'const r=require("/tmp/codex-mobile-existing-before.json").result; conso
 
    ```bash
    stat -c '%a %U %n' "$HOME/.codex/codex-mobile-safe-password"
-   SERVICE_PID="$(systemctl --user show codex-mobile-safe.service -p MainPID --value)"
+   SERVICE_PID="$(systemctl --user show codexui-safe.service -p MainPID --value)"
    ps -ww -p "$SERVICE_PID" -o args=
    ps -ww -p "$SERVICE_PID" -o args= | grep -Eq -- '--password(=| )' && echo 'FAIL: plaintext password argument' || echo 'PASS: password-file only'
    ```
@@ -83,8 +84,8 @@ node -e 'const r=require("/tmp/codex-mobile-existing-before.json").result; conso
 6. Confirm Tailnet-only exposure and absence of Funnel/Cloudflare:
 
    ```bash
-   codex-mobile-safe expose tailscale
-   codex-mobile-safe urls
+   codexui-safe expose tailscale
+   codexui-safe urls
    tailscale serve status
    tailscale funnel status
    pgrep -ax cloudflared || echo 'PASS: no cloudflared process'
@@ -131,10 +132,10 @@ node -e 'const r=require("/tmp/codex-mobile-existing-before.json").result; conso
 10. Verify restart recovery:
 
     ```bash
-    OLD_PID="$(systemctl --user show codex-mobile-safe.service -p MainPID --value)"
+    OLD_PID="$(systemctl --user show codexui-safe.service -p MainPID --value)"
     kill "$OLD_PID"
     sleep 4
-    systemctl --user show codex-mobile-safe.service -p ActiveState -p MainPID --no-pager
+    systemctl --user show codexui-safe.service -p ActiveState -p MainPID --no-pager
     ```
 
     Expect `ActiveState=active` and a different nonzero `MainPID`; repeat a `thread/read` or UI open for `NEW_THREAD_ID`.
@@ -153,16 +154,16 @@ node -e 'const r=require("/tmp/codex-mobile-existing-before.json").result; conso
 Restore the restricted policy in the repository template so future installs do not reintroduce the mobile override, commit or otherwise preserve that repository change, then reinstall the unit:
 
 ```bash
-sed -i 's/--sandbox-mode danger-full-access --approval-policy never/--sandbox-mode workspace-write --approval-policy on-request/' packaging/systemd/codex-mobile-safe.service.in
+sed -i 's/--sandbox-mode danger-full-access --approval-policy never/--sandbox-mode workspace-write --approval-policy on-request/' packaging/systemd/codexui-safe.service.in
 git diff --check
-git add packaging/systemd/codex-mobile-safe.service.in
+git add packaging/systemd/codexui-safe.service.in
 git commit -m 'revert: restore restricted mobile service policy'
 pnpm run install:local
 pnpm run service:install
 systemctl --user daemon-reload
-systemctl --user restart codex-mobile-safe.service
-systemctl --user cat codex-mobile-safe.service
-systemctl --user show codex-mobile-safe.service -p ActiveState -p ExecStart --no-pager
+systemctl --user restart codexui-safe.service
+systemctl --user cat codexui-safe.service
+systemctl --user show codexui-safe.service -p ActiveState -p ExecStart --no-pager
 ```
 
 Expect the effective ExecStart to contain `--sandbox-mode workspace-write --approval-policy on-request`. Create another new thread and repeat the `thread/start` response check; expect `approvalPolicy: on-request` and `sandbox.type: workspaceWrite`. Existing threads remain unchanged.
@@ -170,7 +171,7 @@ Expect the effective ExecStart to contain `--sandbox-mode workspace-write --appr
 Finally remove temporary evidence and exposure. Uninstall only if the persistent service is no longer required:
 
 ```bash
-codex-mobile-safe unexpose
+codexui-safe unexpose
 rm -f "$COOKIE_JAR" /tmp/codex-mobile-existing-before.json /tmp/codex-mobile-existing-after.json /tmp/codex-mobile-new-thread.json /tmp/codex-mobile-unauth-response.txt
 pnpm run service:uninstall
 ```

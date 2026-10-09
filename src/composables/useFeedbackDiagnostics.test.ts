@@ -123,7 +123,7 @@ describe('feedback diagnostics', () => {
 
     const subject = new URL(buildFeedbackMailto()).searchParams.get('subject') ?? ''
 
-    expect(subject).toBe('Codex Web feedback: Top level failure')
+    expect(subject).toBe('codexui feedback: Top level failure')
   })
 
   it('does not throw during install when fetch is unavailable', () => {

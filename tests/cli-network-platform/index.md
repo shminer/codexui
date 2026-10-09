@@ -6,8 +6,11 @@ Return to the [manual test index](../../tests.md).
 
 ## Test Sections
 
+当前 `codexui` 是私有本地包；历史 npm/npx 发布用例仅适用于上游发布工作，不应通过发布或下载同名包验证本项目。
+
 | Section |
 | --- |
+| [codexui 1.1.0 包命令与服务更名](codexui-branding-and-version.md) |
 | [Missing Codex CLI chat error](missing-codex-cli-chat-error.md) |
 | [Startup avoids duplicate setup probes](startup-avoids-duplicate-setup-probes.md) |
 | [Feature: modular safe CLI local install and tailnet service](modular-safe-cli-local-install-and-tailnet-service.md) |

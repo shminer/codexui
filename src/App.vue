@@ -492,7 +492,7 @@
             <IconTablerSettings class="sidebar-settings-icon" />
             <span>{{ t('Settings') }}</span>
             <span class="sidebar-settings-button-version">
-              {{ worktreeName }} · v{{ appVersion }}
+              {{ appName }} · v{{ appVersion }}
             </span>
           </button>
         </div>
@@ -633,7 +633,7 @@
                       <span class="new-thread-launch-card-badge" aria-hidden="true">
                         <IconTablerBolt />
                       </span>
-                      <p class="new-thread-launch-card-eyebrow">{{ t('New in Codex') }}</p>
+                      <p class="new-thread-launch-card-eyebrow">{{ t('New in {appName}', { appName }) }}</p>
                     </div>
                     <h2 class="new-thread-launch-card-title">{{ t('Plugins are here') }}</h2>
                     <p class="new-thread-launch-card-text">
@@ -1311,6 +1311,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const ACCOUNTS_SECTION_COLLAPSED_STORAGE_KEY = 'codex-web-local.accounts-section-collapsed.v1'
 const TERMINAL_QUICK_COMMAND_STORAGE_KEY = 'codex-web-local.terminal-quick-commands.v1'
 const TOGGLE_TERMINAL_COMMAND_VALUE = '__toggle_terminal__'
+const appName = import.meta.env.VITE_APP_NAME ?? 'codexui'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const SETTINGS_HELP = {
@@ -1737,13 +1738,12 @@ const contentTitle = computed(() => {
   if (isHomeRoute.value) return t('Start new thread')
   return selectedThread.value?.title ?? t('Choose a thread')
 })
-const browserHostName =
-  typeof window !== 'undefined'
-    ? (window.location.hostname || window.location.host || 'codexui')
-    : 'codexui'
 const pageTitle = computed(() => {
+  if (isHomeRoute.value) return appName
+  if (isSkillsRoute.value) return `${t('Skills')} · ${appName}`
+  if (isAutomationsRoute.value) return `${t('Automations')} · ${appName}`
   const threadTitle = selectedThread.value?.title?.trim() ?? ''
-  return threadTitle || browserHostName
+  return threadTitle && threadTitle !== 'Untitled thread' ? `${threadTitle} · ${appName}` : appName
 })
 const filteredMessages = computed(() =>
   messages.value.filter((message) => {

@@ -1,6 +1,6 @@
 {
-  "name": "codexapp",
-  "version": "0.2.0-local.0",
+  "name": "codexui",
+  "version": "1.1.0",
   "private": true,
   "description": "A lightweight web interface for Codex that runs on top of the Codex app-server, allowing remote access from any browser",
   "type": "module",
@@ -25,10 +25,8 @@
     "node": ">=18"
   },
   "bin": {
-    "codexapp": "dist-cli/index.js",
     "codexui": "dist-cli/index.js",
-    "codex-mobile": "dist-cli/index.js",
-    "codex-mobile-safe": "dist-cli/safe.js"
+    "codexui-safe": "dist-cli/safe.js"
   },
   "files": [
     "dist/",
@@ -62,8 +60,8 @@
     "profile:thread": "PROFILE_ROUTE='#/thread/019da7c0-4e12-7a91-837c-f7c11cc8ab6c' node scripts/profile-browser-runtime.cjs",
     "install:local": "node scripts/install-local.cjs",
     "service:install": "sh scripts/install-user-service.sh",
-    "service:restart": "systemctl --user restart codex-mobile-safe.service",
-    "service:status": "systemctl --user --no-pager --full status codex-mobile-safe.service",
+    "service:restart": "systemctl --user restart codexui-safe.service",
+    "service:status": "systemctl --user --no-pager --full status codexui-safe.service",
     "service:uninstall": "sh scripts/uninstall-user-service.sh"
   },
   "dependencies": {

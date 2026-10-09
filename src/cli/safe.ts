@@ -35,7 +35,7 @@ import { spawnSyncCommand } from '../utils/commandInvocation.js'
 import { listenWithFallback, openBrowser } from './shared/launcher.js'
 
 const program = new Command()
-  .name('codex-mobile-safe')
+  .name('codexui-safe')
   .description('Safe-by-default mobile browser interface for Codex app-server')
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -53,10 +53,13 @@ async function readCliVersion(): Promise<string> {
   }
 }
 
+const cliVersion = await readCliVersion()
+program.version(cliVersion)
+
 function requireCodexCommand(): CodexCommandResolution {
   const resolution = resolveCodexCommandResolution()
   if (!resolution) {
-    throw new Error('Codex CLI is not installed. Install @openai/codex or run codex-mobile-safe login.')
+    throw new Error('Codex CLI is not installed. Install @openai/codex or run codexui-safe login.')
   }
   return resolution
 }
@@ -151,7 +154,7 @@ program.command('start')
     process.env.CODEXUI_APPROVAL_POLICY = approvalPolicy
     process.env.CODEXUI_MEMORIES = options.memories ? 'true' : 'false'
     if (options.login && !(await stat(join(getCodexHome(), 'auth.json')).catch(() => null))) {
-      console.warn('\nCodex is not logged in. Run `codex-mobile-safe login` before starting a chat.\n')
+      console.warn('\nCodex is not logged in. Run `codexui-safe login` before starting a chat.\n')
     }
 
     const envRoots = process.env.CODEX_MOBILE_SAFE_ALLOWED_ROOTS?.trim()
@@ -186,11 +189,10 @@ program.command('start')
     }
     await writeManagedState(state)
 
-    const version = await readCliVersion()
     const lines = [
       '',
-      'Codex Mobile Safe is running!',
-      `  Version:  ${version}`,
+      'codexui-safe is running!',
+      `  Version:  ${cliVersion}`,
       '  Repository: https://github.com/zonghang-li/codex-mobile',
       '',
       `  Bind:     http://${runtimeConfig.bindHost}:${String(listening.port)}`,
@@ -233,16 +235,16 @@ program.command('urls').description('Show browser URLs for the managed server').
 const expose = program.command('expose').description('Enable an explicit authenticated exposure mode')
 expose.command('tailscale').description('Expose the running service through Tailscale Serve').action(async () => {
   const state = await readLiveManagedState()
-  if (!state) throw new Error('codex-mobile-safe is not running')
+  if (!state) throw new Error('codexui-safe is not running')
   assertPasswordProtectedExposure(state.passwordProtected)
   const tailscaleUrl = await exposeTailscale(state.port)
   await writeManagedState({ ...state, externalExposure: 'tailscale', tailscaleUrl })
   console.log(JSON.stringify({ ok: true, tailscaleUrl }, null, 2))
 })
 
-program.command('unexpose').description('Disable exposure created by codex-mobile-safe').action(async () => {
+program.command('unexpose').description('Disable exposure created by codexui-safe').action(async () => {
   const state = await readLiveManagedState()
-  if (!state) throw new Error('codex-mobile-safe is not running')
+  if (!state) throw new Error('codexui-safe is not running')
   if (state.externalExposure === 'tailscale') await unexposeTailscale(state.port)
   await writeManagedState({ ...state, externalExposure: 'disabled', tailscaleUrl: undefined })
   console.log(JSON.stringify({ ok: true }, null, 2))
@@ -262,7 +264,7 @@ program.command('stop').description('Stop the managed server process').action(as
 program.command('doctor').description('Run static safety checks for the packaged CLI').action(async () => {
   const root = resolve(__dirname, '..')
   const result = await runDoctor(root)
-  console.log(result.ok ? 'codex-mobile-safe doctor: ok' : 'codex-mobile-safe doctor: failed')
+  console.log(result.ok ? 'codexui-safe doctor: ok' : 'codexui-safe doctor: failed')
   for (const failure of result.failures) console.log(`- ${failure}`)
   if (!result.ok) process.exitCode = 1
 })
@@ -276,9 +278,9 @@ program.command('login').description('Run Codex login').action(() => {
   if (result.status !== 0) throw new Error(`Codex login failed with exit code ${String(result.status ?? -1)}`)
 })
 
-program.command('help').description('Show codex-mobile-safe command help').action(() => program.outputHelp())
+program.command('help').description('Show codexui-safe command help').action(() => program.outputHelp())
 
 program.parseAsync(process.argv).catch((error) => {
-  console.error(`\nFailed to run codex-mobile-safe: ${error instanceof Error ? error.message : String(error)}`)
+  console.error(`\nFailed to run codexui-safe: ${error instanceof Error ? error.message : String(error)}`)
   process.exit(1)
 })

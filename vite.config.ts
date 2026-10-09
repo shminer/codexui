@@ -76,6 +76,7 @@ function getWorktreeName(): string {
 }
 
 const worktreeName = getWorktreeName();
+const appName = pkg.name;
 const appVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
 
@@ -108,6 +109,7 @@ export default defineConfig({
   },
   define: {
     "import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(worktreeName),
+    "import.meta.env.VITE_APP_NAME": JSON.stringify(appName),
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
     "import.meta.env.VITE_ROLLBACK_DEBUG_FALLBACK": JSON.stringify(viteRollbackDebugFallback),
   },

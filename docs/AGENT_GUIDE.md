@@ -1,8 +1,8 @@
-# Agent Guide: codex-mobile and codex-mobile-safe
+# Agent Guide: codexui and codexui-safe
 
 ## Purpose
 
-This repository maintains the upstream-compatible `codex-mobile` command and a hardened `codex-mobile-safe` module in one build. Keep shared UI and bridge behavior in the upstream paths; implement safety differences through explicit policy injection so upstream updates remain reviewable.
+This repository maintains the upstream-compatible `codexui` command and a hardened `codexui-safe` module in one build. The private local package is named `codexui`, currently version `1.1.0`; do not publish it or use `npx codexui` to install it. Keep shared UI and bridge behavior in the upstream paths; implement safety differences through explicit policy injection so upstream updates remain reviewable.
 
 ## Architecture
 
@@ -36,6 +36,8 @@ The original command may retain upstream behavior. Do not weaken safe mode to ma
 
 ## Development and verification
 
+Explicit session restrictions on builds, runtime tests, installs, and deployment take precedence over the standard verification commands below.
+
 ```bash
 pnpm install
 pnpm run test:unit
@@ -61,18 +63,18 @@ sh -n scripts/install-local.sh scripts/install-user-service.sh scripts/uninstall
 For an isolated local-install smoke test:
 
 ```bash
-PREFIX=/tmp/codex-mobile-prefix sh scripts/install-local.sh
-/tmp/codex-mobile-prefix/bin/codex-mobile --help
-/tmp/codex-mobile-prefix/bin/codex-mobile-safe doctor
+PREFIX=/tmp/codexui-prefix sh scripts/install-local.sh
+/tmp/codexui-prefix/bin/codexui --help
+/tmp/codexui-prefix/bin/codexui-safe doctor
 ```
 
 On Windows, use a temporary npm prefix and the generated command shims instead:
 
 ```powershell
-$env:PREFIX = Join-Path $env:TEMP 'codex-mobile-prefix'
+$env:PREFIX = Join-Path $env:TEMP 'codexui-prefix'
 pnpm run install:local
-& (Join-Path $env:PREFIX 'codex-mobile.cmd') --help
-& (Join-Path $env:PREFIX 'codex-mobile-safe.cmd') doctor
+& (Join-Path $env:PREFIX 'codexui.cmd') --help
+& (Join-Path $env:PREFIX 'codexui-safe.cmd') doctor
 Remove-Item Env:PREFIX
 ```
 
@@ -95,12 +97,12 @@ Always finish with the complete test suite and production build. Update the rele
 ## Runtime operations
 
 ```bash
-codex-mobile-safe start /path/to/project --password-file ~/.codex/codex-mobile-safe-password --no-open
-codex-mobile-safe expose tailscale
-codex-mobile-safe status
-codex-mobile-safe urls
-codex-mobile-safe unexpose
-codex-mobile-safe stop
+codexui-safe start /path/to/project --password-file ~/.codex/codex-mobile-safe-password --no-open
+codexui-safe expose tailscale
+codexui-safe status
+codexui-safe urls
+codexui-safe unexpose
+codexui-safe stop
 ```
 
 For the installed user service:
@@ -109,12 +111,16 @@ For the installed user service:
 pnpm run service:install
 pnpm run service:status
 pnpm run service:restart
-journalctl --user -u codex-mobile-safe -n 100
+journalctl --user -u codexui-safe.service -n 100
 ```
 
-An HTTP 502 from a mobile RPC request means the HTTPS proxy received the request but could not obtain a valid response from the loopback backend. Check, in order: service state and journal, listener on `127.0.0.1:5900`, `codex-mobile-safe doctor`, `tailscale serve status`, then authentication. Do not solve a 502 by opening the listener to the LAN.
+An HTTP 502 from a mobile RPC request means the HTTPS proxy received the request but could not obtain a valid response from the loopback backend. Check, in order: service state and journal, listener on `127.0.0.1:5900`, `codexui-safe doctor`, `tailscale serve status`, then authentication. Do not solve a 502 by opening the listener to the LAN.
 
-To remove the user service, run `pnpm run service:uninstall`. This removes the unit and managed state but intentionally leaves the password file for explicit user handling.
+To remove the user service, run `pnpm run service:uninstall`. This removes the `codexui-safe.service` unit but intentionally leaves the password file and Tailscale Serve configuration for explicit user handling.
+
+Renaming does not migrate old installations or services. Before installing the renamed service, manually stop, disable, and remove the old `codex-mobile-safe.service`; inspect and uninstall any old package that owns the `codexui` executable in the same prefix. Keep existing password paths, `~/.codex-mobile-safe`, environment variables, cookies, and localStorage keys unchanged. Do not move the checkout or change Git remotes as part of branding.
+
+The foreground safe defaults remain `workspace-write` / `on-request`. The service template retains its existing explicit `danger-full-access` / `never` profile; a branding change must not silently alter runtime policy.
 
 ## Updating from upstream
 

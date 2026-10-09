@@ -68,6 +68,7 @@ const zhCN: Record<string, string> = {
   'Prefill is client-observed time to first text; decode measures text streaming; average covers the full turn.': 'Prefill 为客户端观测的首段文本等待时间；decode 统计文本流式输出；average 统计整轮。',
   'Worktree name and version': '工作树名称和版本',
   'Settings': '设置',
+  'New in {appName}': '{appName} 新功能',
   'Toggle terminal': '切换终端',
   'Open terminal': '打开终端',
   'Terminal command': '终端命令',

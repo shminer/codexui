@@ -24,7 +24,7 @@ export function getSafeHome(): string {
 
 export function getCurrentCommandMarker(argv: string[] = process.argv): string {
   const scriptPath = argv[1]?.trim()
-  if (!scriptPath) return 'codex-mobile-safe'
+  if (!scriptPath) return 'codexui-safe'
   return scriptPath.includes('/') || scriptPath.includes('\\') ? resolve(scriptPath) : scriptPath
 }
 

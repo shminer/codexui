@@ -16,22 +16,30 @@ async function readRepoFile(path: string): Promise<string> {
 describe('local installation packaging', () => {
   it('defines clone-local install and service lifecycle scripts', async () => {
     const packageJson = JSON.parse(await readRepoFile('package.json')) as {
+      name?: string
+      version?: string
       private?: boolean
       scripts?: Record<string, string>
       bin?: Record<string, string>
       files?: string[]
     }
     expect(packageJson.private).toBe(true)
+    expect(packageJson.name).toBe('codexui')
+    expect(packageJson.version).toBe('1.1.0')
     expect(packageJson.scripts?.['install:local']).toBe('node scripts/install-local.cjs')
     expect(packageJson.scripts?.['service:install']).toBe('sh scripts/install-user-service.sh')
-    expect(packageJson.scripts?.['service:restart']).toContain('systemctl --user restart')
-    expect(packageJson.bin?.['codex-mobile']).toBe('dist-cli/index.js')
-    expect(packageJson.bin?.['codex-mobile-safe']).toBe('dist-cli/safe.js')
+    expect(packageJson.scripts?.['service:restart']).toBe('systemctl --user restart codexui-safe.service')
+    expect(packageJson.scripts?.['service:status']).toContain('status codexui-safe.service')
+    expect(packageJson.bin).toEqual({
+      codexui: 'dist-cli/index.js',
+      'codexui-safe': 'dist-cli/safe.js',
+    })
     expect(packageJson.files).toContain('src/')
   })
 
   it('keeps plaintext passwords out of the restartable systemd unit', async () => {
-    const unit = await readRepoFile('packaging/systemd/codex-mobile-safe.service.in')
+    const unit = await readRepoFile('packaging/systemd/codexui-safe.service.in')
+    expect(unit).toContain('ExecStart=@PREFIX@/bin/codexui-safe start')
     expect(unit).toContain('Restart=on-failure')
     expect(unit).toContain('--sandbox-mode danger-full-access')
     expect(unit).toContain('--approval-policy never')
@@ -41,6 +49,29 @@ describe('local installation packaging', () => {
     expect(unit).not.toContain('--lan')
     expect(unit).not.toContain('cloudflared')
     expect(unit).not.toContain('funnel')
+  })
+
+  it('keeps browser branding and version wired to the package metadata', async () => {
+    const [html, manifestSource, vite, app, loginPage] = await Promise.all([
+      readRepoFile('index.html'),
+      readRepoFile('public/manifest.webmanifest'),
+      readRepoFile('vite.config.ts'),
+      readRepoFile('src/App.vue'),
+      readRepoFile('src/server/authMiddleware.ts'),
+    ])
+    const manifest = JSON.parse(manifestSource) as { name: string; short_name: string }
+    expect(html).toContain('<title>codexui</title>')
+    expect(html).toContain('name="apple-mobile-web-app-title" content="codexui"')
+    expect(manifest.name).toBe('codexui')
+    expect(manifest.short_name).toBe('codexui')
+    expect(vite).toContain('const appName = pkg.name')
+    expect(vite).toContain('pkg.version')
+    expect(vite).toContain('"import.meta.env.VITE_APP_NAME": JSON.stringify(appName)')
+    expect(app).toContain('{{ appName }} · v{{ appVersion }}')
+    expect(app).toContain('WT {{ worktreeName }} · v{{ appVersion }}')
+    expect(app).not.toContain('browserHostName')
+    expect(loginPage).toContain('<title>codexui</title>')
+    expect(loginPage).toContain('<h1>codexui</h1>')
   })
 
   itPosix('renders the installed safe unit and password through the isolated installer path', async () => {
@@ -75,11 +106,11 @@ describe('local installation packaging', () => {
         },
       })
 
-      const unitPath = join(configDirectory, 'systemd/user/codex-mobile-safe.service')
+      const unitPath = join(configDirectory, 'systemd/user/codexui-safe.service')
       const passwordPath = join(homeDirectory, '.codex/codex-mobile-safe-password')
       const unit = await readFile(unitPath, 'utf8')
       const repoRoot = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, '')
-      const expectedExecStart = `ExecStart=${prefix}/bin/codex-mobile-safe start ${repoRoot} --port 5900 --password-file %h/.codex/codex-mobile-safe-password --no-open --no-login --sandbox-mode danger-full-access --approval-policy never`
+      const expectedExecStart = `ExecStart=${prefix}/bin/codexui-safe start ${repoRoot} --port 5900 --password-file %h/.codex/codex-mobile-safe-password --no-open --no-login --sandbox-mode danger-full-access --approval-policy never`
 
       expect(unit).not.toMatch(/@[A-Z_]+@/u)
       expect(unit.split('\n')).toContain(expectedExecStart)
@@ -109,20 +140,22 @@ describe('local installation packaging', () => {
     ])
     expect(localInstaller).toContain('pnpm run build')
     expect(localInstaller).toContain('npm install --global --prefix')
-    expect(localInstaller).toContain('npm uninstall --global --prefix "$prefix" codex-mobile-safe')
-    expect(localInstaller).toContain('legacy_mobile_bin="$prefix/bin/codex-mobile"')
-    expect(localInstaller).toContain('rm -f "$legacy_mobile_bin"')
+    expect(localInstaller).toContain('Installed codexui and codexui-safe')
+    expect(localInstaller).not.toContain('npm uninstall')
+    expect(localInstaller).not.toContain('legacy_mobile_bin')
     expect(windowsInstaller).toContain('npm prefix --global')
     expect(windowsInstaller).toContain('call pnpm run build')
     expect(windowsInstaller).toContain('call npm install --global --prefix "%INSTALL_PREFIX%" "%ROOT%"')
     expect(windowsInstaller).toContain('Ensure %INSTALL_PREFIX% is in PATH.')
+    expect(windowsInstaller).toContain('Installed codexui and codexui-safe')
+    expect(windowsInstaller).not.toContain('npm uninstall')
     expect(installerDispatcher).toContain("process.platform === 'win32'")
     expect(installerDispatcher).toContain("'install-local.bat'")
     expect(installerDispatcher).toContain("'install-local.sh'")
     expect(serviceInstaller).toContain('systemd-analyze --user verify')
     expect(serviceInstaller).toContain('loginctl show-user')
-    expect(serviceInstaller).toContain('systemctl --user enable codex-mobile-safe.service')
-    expect(serviceInstaller).toContain('systemctl --user restart codex-mobile-safe.service')
+    expect(serviceInstaller).toContain('systemctl --user enable codexui-safe.service')
+    expect(serviceInstaller).toContain('systemctl --user restart codexui-safe.service')
   })
 
   itPosix('honors the conventional PREFIX override for isolated installs', async () => {

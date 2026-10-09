@@ -62,6 +62,9 @@ async function readCliVersion(): Promise<string> {
   }
 }
 
+const cliVersion = await readCliVersion()
+program.version(cliVersion)
+
 function isTermuxRuntime(): boolean {
   return Boolean(process.env.TERMUX_VERSION || process.env.PREFIX?.includes('/com.termux/'))
 }
@@ -470,7 +473,6 @@ async function startServer(options: {
   approvalPolicy?: string
   projectPath?: string
 }) {
-  const version = await readCliVersion()
   const projectPath = options.projectPath?.trim() ?? ''
   if (projectPath.length > 0) {
     try {
@@ -526,8 +528,8 @@ async function startServer(options: {
 
   const lines = [
     '',
-    'Codex Web Local is running!',
-    `  Version:  ${version}`,
+    'codexui is running!',
+    `  Version:  ${cliVersion}`,
     '  GitHub:   https://github.com/friuns2/codexui',
     '',
     `  Bind:     http://0.0.0.0:${String(port)}`,

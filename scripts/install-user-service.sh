@@ -4,7 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 prefix=${PREFIX:-${CODEX_MOBILE_PREFIX:-"$HOME/.local"}}
 unit_dir=${XDG_CONFIG_HOME:-"$HOME/.config"}/systemd/user
-unit_file=$unit_dir/codex-mobile-safe.service
+unit_file=$unit_dir/codexui-safe.service
 password_file=$HOME/.codex/codex-mobile-safe-password
 test_mode=${CODEX_MOBILE_SERVICE_INSTALL_TEST_MODE:-0}
 
@@ -28,7 +28,7 @@ prefix_escaped=$(escape_sed "$prefix")
 sed \
   -e "s|@PROJECT_DIR@|$project_escaped|g" \
   -e "s|@PREFIX@|$prefix_escaped|g" \
-  "$root/packaging/systemd/codex-mobile-safe.service.in" > "$unit_file"
+  "$root/packaging/systemd/codexui-safe.service.in" > "$unit_file"
 chmod 600 "$unit_file"
 
 if [ "$test_mode" = 1 ]; then
@@ -37,8 +37,8 @@ fi
 
 systemd-analyze --user verify "$unit_file"
 systemctl --user daemon-reload
-systemctl --user enable codex-mobile-safe.service
-systemctl --user restart codex-mobile-safe.service
+systemctl --user enable codexui-safe.service
+systemctl --user restart codexui-safe.service
 
 linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)
 if [ "$linger" != yes ]; then
@@ -47,4 +47,4 @@ if [ "$linger" != yes ]; then
   printf '  sudo loginctl enable-linger %s\n' "$USER"
 fi
 
-systemctl --user --no-pager --full status codex-mobile-safe.service
+systemctl --user --no-pager --full status codexui-safe.service
