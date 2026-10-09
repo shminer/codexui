@@ -55,17 +55,19 @@ export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
       })
       const indices = { ...(direction === 'latest' ? {} : previous?.turnIndexByTurnId), ...page.turnIndexByTurnId }
       const retainedIds = new Set(window.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
+      const omittedLatestBoundary = direction === 'older' && window.messages.length > 0
+        && Boolean(newerAnchor) && !retainedIds.has(newerAnchor)
       const pageTurns = Object.entries(page.turnIndexByTurnId).sort((first, second) => first[1] - second[1])
       if (direction !== 'newer' && pageTurns.length) olderAnchor = pageTurns[0][0]
       if (direction !== 'older' && pageTurns.length) newerAnchor = pageTurns[pageTurns.length - 1][0]
       if (direction === 'latest' && !pageTurns.length) olderAnchor = newerAnchor = ''
       if (window.removedOlder) olderAnchor = window.messages.find((message) => message.turnId)?.turnId ?? olderAnchor
-      if (window.removedNewer) newerAnchor = [...window.messages].reverse().find((message) => message.turnId)?.turnId ?? newerAnchor
+      if (window.removedNewer || omittedLatestBoundary) newerAnchor = [...window.messages].reverse().find((message) => message.turnId)?.turnId ?? newerAnchor
       detail.value = {
         ...page,
         messages: window.messages,
         hasMoreOlder: (direction === 'newer' ? previous!.hasMoreOlder : page.hasMoreOlder) || window.removedOlder,
-        hasMoreNewer: (direction === 'older' ? previous!.hasMoreNewer === true : page.hasMoreNewer === true) || window.removedNewer,
+        hasMoreNewer: (direction === 'older' ? previous!.hasMoreNewer === true : page.hasMoreNewer === true) || window.removedNewer || omittedLatestBoundary,
         turnIndexByTurnId: Object.fromEntries(Object.entries(indices).filter(([turnId]) => retainedIds.has(turnId))),
         startTurnIndex: indices[olderAnchor] ?? (direction === 'newer' ? previous!.startTurnIndex : page.startTurnIndex),
         nextTurnIndex: direction === 'latest' ? page.nextTurnIndex : Math.max(previous?.nextTurnIndex ?? 0, page.nextTurnIndex ?? 0),

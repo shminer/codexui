@@ -38,6 +38,44 @@
 .subagent-communication pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 4px 0; }
 :root.dark .subagent-communication { border-color: #3f3f46; }
 :root.dark .subagent-communication small { color: #a1a1aa; }
+:root.dark .subagent-panel,
+:root.dark .subagent-panel.is-mobile-open .subagent-panel-surface {
+  @apply border-slate-700 bg-slate-900 text-slate-100;
+}
+:root.dark .subagent-panel.is-mobile-open {
+  @apply bg-slate-950/40;
+}
+:root.dark .subagent-panel-header,
+:root.dark .subagent-detail-prompt {
+  @apply border-slate-700;
+}
+:root.dark .subagent-panel-title,
+:root.dark .subagent-row-title {
+  @apply text-slate-100;
+}
+:root.dark .subagent-panel-count,
+:root.dark .subagent-row-status,
+:root.dark .subagent-row-preview,
+:root.dark .subagent-detail-status,
+:root.dark .subagent-detail-prompt,
+:root.dark .subagent-detail-loading {
+  @apply text-slate-400;
+}
+:root.dark .subagent-row:hover,
+:root.dark .subagent-icon-button:hover {
+  @apply border-slate-700 bg-slate-800 text-slate-100;
+}
+:root.dark .subagent-header-trigger {
+  @apply text-zinc-400 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-100;
+}
+:root.dark .subagent-sheet-handle,
+:root.dark .subagent-panel-resizer::before {
+  @apply bg-slate-600;
+}
+:root.dark .subagent-panel-resizer:hover::before,
+:root.dark .subagent-panel-resizer:focus-visible::before {
+  @apply bg-sky-400;
+}
 .thread-history-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 12px; background: #0008; }
 .thread-history-dialog { display: flex; flex-direction: column; min-width: 0; width: min(900px, 100%); height: min(85dvh, 900px); background: #fff; color: #18181b; border: 1px solid #d4d4d8; border-radius: 6px; overflow: hidden; }
 .thread-history-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e4e4e7; }

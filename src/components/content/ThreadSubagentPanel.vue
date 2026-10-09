@@ -213,7 +213,8 @@ const activeAgents = computed(() => allAgents.value.filter((agent) => isActiveSu
 const visibleAgents = computed(() => allAgents.value.filter((agent) => agentView.value === 'running' ? isActiveSubagentStatus(agent.status) : !isActiveSubagentStatus(agent.status)))
 const selectedAgent = computed(() => allAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
 const selectedAgentIndex = computed(() => allAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
-const selectedLiveOverlay = computed(() => selectedAgent.value ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
+const selectedLiveOverlay = computed(() => selectedAgent.value && !selectedDetail.value?.hasMoreNewer
+  ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
 const selectedMessages = computed(() => {
   const detail = selectedDetail.value
   if (!detail) return []
@@ -671,55 +672,4 @@ onBeforeUnmount(() => {
   }
 }
 
-:global(:root.dark) .subagent-panel {
-  @apply border-slate-700 bg-slate-900;
-}
-
-:global(:root.dark) .subagent-panel-header,
-:global(:root.dark) .subagent-detail-prompt {
-  @apply border-slate-700;
-}
-
-:global(:root.dark) .subagent-panel-resizer::before {
-  @apply bg-slate-600;
-}
-
-:global(:root.dark) .subagent-panel-resizer:hover::before {
-  @apply bg-sky-400;
-}
-
-:global(:root.dark) .subagent-panel-resizer:focus-visible::before {
-  @apply bg-sky-400;
-}
-
-:global(:root.dark) .subagent-panel-title,
-:global(:root.dark) .subagent-row-title {
-  @apply text-slate-100;
-}
-
-:global(:root.dark) .subagent-panel-count,
-:global(:root.dark) .subagent-row-status,
-:global(:root.dark) .subagent-row-preview,
-:global(:root.dark) .subagent-detail-status,
-:global(:root.dark) .subagent-detail-prompt,
-:global(:root.dark) .subagent-detail-loading {
-  @apply text-slate-400;
-}
-
-:global(:root.dark) .subagent-row:hover,
-:global(:root.dark) .subagent-icon-button:hover {
-  @apply border-slate-700 bg-slate-800 text-slate-100;
-}
-
-:global(:root.dark) .subagent-header-trigger {
-  @apply text-zinc-400 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-100;
-}
-
-:global(:root.dark) .subagent-panel.is-mobile-open .subagent-panel-surface {
-  @apply border-slate-700 bg-slate-900 text-slate-100;
-}
-
-:global(:root.dark) .subagent-sheet-handle {
-  @apply bg-slate-600;
-}
 </style>

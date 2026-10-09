@@ -34,6 +34,21 @@ beforeEach(() => { vi.resetAllMocks() })
 afterEach(() => { for (const scope of scopes.splice(0)) scope.stop() })
 
 describe('read-only thread history windows', () => {
+  it('leaves the latest empty running turn behind while browsing older messages', async () => {
+    const latest = { ...page(100, 0), messages: [], inProgress: true, activeTurnId: 'turn-100', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-100': 100 } }
+    api.latest.mockResolvedValue(latest)
+    api.older.mockResolvedValue(page(90, 10))
+    api.newer.mockResolvedValue(latest)
+    const { state } = windowFor()
+    await state.loadLatest()
+    expect(state.detail.value?.hasMoreNewer).toBe(false)
+    await state.loadOlder()
+    expect(state.detail.value?.hasMoreNewer).toBe(true)
+    expect(state.detail.value?.messages.at(-1)?.turnId).toBe('turn-99')
+    await state.loadNewer()
+    expect(api.newer).toHaveBeenCalledWith('thread', 'turn-99')
+    expect(state.detail.value?.hasMoreNewer).toBe(false)
+  })
   it('replaces the opposite end when paging in either direction', async () => {
     api.latest.mockResolvedValue(page(80, 20))
     api.older.mockResolvedValue(page(70, 10))

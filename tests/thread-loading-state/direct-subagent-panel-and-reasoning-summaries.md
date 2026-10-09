@@ -30,6 +30,7 @@
 23. Delay an agent history/detail response, switch parent threads or detail rows, then release it. Confirm no old result or stuck loading indicator appears in the new view; empty history remains viewable on mobile.
 24. Select a running agent and stream assistant text interleaved with commands, plans and file changes. Confirm the response body updates before completion and replaces a stale same-ID snapshot without duplicating rows. Copy a response and verify it contains the streamed text.
 25. Browse older agent pages while it continues running. Confirm latest live rows are not inserted into the older window; return to latest to see the current response. Finish the agent and confirm one terminal refresh connects to the final history without duplicate response rows.
+26. Select a running agent whose latest raw turn has no displayable historical messages. Load earlier history, then load later history or jump to latest. Confirm both realtime body and the Thinking/activity overlay are absent from the older window and return only at the latest boundary.
 
 #### Expected Results
 - Collaboration participants from the active parent thread are listed, including known agent-to-agent communications.
@@ -50,4 +51,10 @@
 - Revert the feature commit if the subagent panel is not wanted.
 
 #### Verification Boundary
-- Added focused wiring/state regression cases and performed static type/diff checks only. Runtime/mock tests, long-duration browser measurements, and light/dark screenshots were not executed under the session restrictions.
+- `pnpm exec vitest run src/composables/useThreadHistoryWindow.test.ts src/components/content/threadSubagentPanel.wiring.test.ts` passes the focused history/wiring cases, including navigation away from an empty latest turn.
+- `node output/playwright/side-agent-acceptance.cjs` passes six combinations at `http://127.0.0.1:4173/#/thread/review-testchat`: 1440x1000, 768x1024 and 375x812 in light/dark themes. Mock HTTP/RPC/WebSocket events drive the real selected-Agent UI; no component props are changed to simulate the result.
+- Verified live body alongside commands, no latest body/activity overlay in older history, latest restoration, one final response row, no horizontal viewport overflow and no browser page errors. Screenshots and request records are in `output/playwright/side-agent-acceptance.json`.
+- Screenshot inspection found white Agent surfaces in dark mode. Theme overrides now live in `src/style.css`; reruns check both the inner surface and visible parent-panel background and produce readable desktop/mobile dark screenshots.
+- The combined 238-case related mock run has 230 passes and 8 pre-existing failures reproduced on `cee6441`: two Agent-list cases and six provider-model cases. These are not classified as new regressions; report: `output/playwright/side-mock-regression.json`, baseline: `output/playwright/desktop-mock-baseline.json`.
+- Performance: runtime content reuses the existing WebSocket stream; older/latest navigation is on demand, with no additional polling or subscription. Boundary detection adds one set lookup to the existing bounded-window pass. Global theme overrides add no runtime request or JavaScript work.
+- Frontend/server no-emit type checks and `git diff --check` pass. No build or publication was performed. Real-model integration and long-duration browser measurements remain untested; browser contexts close after verification, and 4173 remains running.
