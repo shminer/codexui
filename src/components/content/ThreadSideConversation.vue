@@ -1,6 +1,6 @@
 <template>
   <Teleport :to="popupTarget ?? 'body'">
-    <div v-show="visible" class="side-conversation-host" :class="{ 'side-conversation-host--popup': popupTarget }" @click.self="minimize">
+    <div v-show="visible" class="side-conversation-host" :class="{ 'side-conversation-host--popup': popupTarget }" :style="{ '--chat-column-max': `${chatWidth}px`, '--chat-card-max': `${chatWidth}px` }" @click.self="minimize">
       <section
         class="side-conversation-panel"
         role="dialog"
@@ -54,7 +54,9 @@
             :active-thread-id="threadId"
             :cwd="cwd"
             :readonly="true"
+            :can-edit-message="!isOpening && Boolean(threadId) && pendingRequests.length === 0"
             :recoverable-history="false"
+            @edit-message="onEditMessage"
           />
         </div>
 
@@ -160,8 +162,9 @@ type SideConversationWindowGesture = {
   target: HTMLElement
 }
 
-defineProps<{
+const props = defineProps<{
   threadId: string
+  chatWidth: number
   cwd: string
   messages: UiMessage[]
   pendingRequests: UiServerRequest[]
@@ -305,6 +308,11 @@ function hydrateDraft(payload: Parameters<ThreadComposerExposed['hydrateDraft']>
 
 function hasUnsavedDraft(): boolean {
   return composerRef.value?.hasUnsavedDraft() ?? false
+}
+
+function onEditMessage(text: string): void {
+  if (props.isOpening || !props.threadId || props.pendingRequests.length) return
+  composerRef.value?.appendTextToDraft(text)
 }
 
 defineExpose({ hydrateDraft, hasUnsavedDraft })

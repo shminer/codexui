@@ -1109,6 +1109,7 @@
     ref="sideConversationRef"
     :visible="isSideConversationVisible"
     :thread-id="sideConversationThreadId"
+    :chat-width="chatWidth"
     :cwd="composerCwd"
     :messages="sideConversationMessages"
     :pending-requests="sideConversationServerRequests"

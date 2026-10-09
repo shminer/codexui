@@ -10,7 +10,7 @@ describe('ThreadConversation edit-message in-progress wiring', () => {
     const conversationUsage = appSource.match(/<ThreadConversation\b[\s\S]*?\/>/u)?.[0]
 
     expect(conversationSource).toContain('canEditMessage?: boolean')
-    expect(conversationSource).toContain("return props.canEditMessage !== false && !props.readonly && message.role === 'user' && message.text.trim().length > 0")
+    expect(conversationSource).toContain("return (props.canEditMessage ?? !props.readonly) && message.role === 'user' && message.text.trim().length > 0")
     expect(conversationSource).toContain("emit('editMessage', message.text)")
     expect(conversationUsage).toContain(':can-edit-message="!selectedThreadPendingRequest"')
     expect(conversationUsage).toContain('@edit-message="onEditMessage"')

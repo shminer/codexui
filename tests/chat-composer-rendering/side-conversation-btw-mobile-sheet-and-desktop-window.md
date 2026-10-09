@@ -68,6 +68,16 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - Confirm no temporary side child is visible in the thread list after cleanup completes.
 - Return the viewport and app theme to their previous settings.
 
+## Shared Chat Width And Edit Message
+
+- Setup: open a parent thread and side conversation; prepare light/dark themes and desktop/mobile viewports.
+- Adjust Settings > Chat width while the floating side window is open, then pop it out and adjust again. Minimize and restore; reload the parent, reopen a side conversation, and repeat.
+- Expected: transcript, user bubbles and composer share the main width preference, constrained by the available window. The outer floating window still resizes independently.
+- Click Edit message on a side user message with an empty draft and with an existing draft. Repeat while a response runs and in the popup.
+- Expected: text is appended to the side draft and focused; main draft and historical messages are unchanged. Existing attachments, skills and queue remain. No rollback or automatic send occurs.
+- During opening or a pending approval/input request, the edit action is absent. Agent and archived read-only previews still have no edit action, and side Fork/file undo controls remain absent.
+- Cleanup: close the side conversation and restore the width preference. This change was statically checked only; browser checks remain pending under the session restrictions.
+
 ### Ephemeral synchronization regression
 
 - Setup: current CLI with ephemeral forks; open a parent conversation and the browser network inspector.

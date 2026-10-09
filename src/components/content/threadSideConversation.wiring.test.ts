@@ -2,6 +2,18 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
+  it('carries chat width through teleport and edits only its own draft', async () => {
+    const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+    expect(app).toContain(':chat-width="chatWidth"')
+    expect(side).toContain('chatWidth: number')
+    expect(side).toContain("'--chat-column-max': `${chatWidth}px`")
+    expect(side).toContain("'--chat-card-max': `${chatWidth}px`")
+    expect(side).toContain(':readonly="true"')
+    expect(side).toContain(':can-edit-message="!isOpening && Boolean(threadId) && pendingRequests.length === 0"')
+    expect(side).toContain('@edit-message="onEditMessage"')
+    expect(side).toContain('composerRef.value?.appendTextToDraft(text)')
+  })
   it('keeps popup pages responsive and avoids desktop window dimensions on mobile', async () => {
     const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     expect(source).toContain("isMobile.value ? undefined : 'popup,width=760,height=900'")
