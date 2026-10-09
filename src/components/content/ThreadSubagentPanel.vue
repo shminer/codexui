@@ -113,7 +113,7 @@
             <ThreadConversation
               v-if="selectedDetail"
               class="subagent-conversation"
-              :messages="selectedDetail.messages"
+              :messages="selectedMessages"
               :pending-requests="[]"
               :live-overlay="selectedLiveOverlay"
               :is-loading="false"
@@ -142,7 +142,7 @@ import { useThreadHistoryWindow } from '../../composables/useThreadHistoryWindow
 import { mergeSubagents } from '../../agentCollaboration'
 import { isNativeHistoryUnsupported } from '../../api/threadSearch'
 import { useMobile } from '../../composables/useMobile'
-import type { UiLiveOverlay } from '../../types/codex'
+import type { UiLiveOverlay, UiMessage } from '../../types/codex'
 import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
 import IconTablerLayoutSidebar from '../icons/IconTablerLayoutSidebar.vue'
 import IconTablerLayoutSidebarFilled from '../icons/IconTablerLayoutSidebarFilled.vue'
@@ -165,6 +165,7 @@ const props = defineProps<{
   agents: UiSubagent[]
   cwd: string
   liveOverlayForThread: (threadId: string) => UiLiveOverlay | null
+  liveMessagesForThread: (threadId: string) => UiMessage[]
 }>()
 
 const DESKTOP_PANEL_WIDTH_KEY = 'codex-web-local.subagent-panel-width.v1'
@@ -213,6 +214,17 @@ const visibleAgents = computed(() => allAgents.value.filter((agent) => agentView
 const selectedAgent = computed(() => allAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
 const selectedAgentIndex = computed(() => allAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
 const selectedLiveOverlay = computed(() => selectedAgent.value ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
+const selectedMessages = computed(() => {
+  const detail = selectedDetail.value
+  if (!detail) return []
+  if (detail.hasMoreNewer || !selectedAgent.value) return detail.messages
+  const live = props.liveMessagesForThread(selectedAgent.value.threadId)
+  if (!detail.inProgress && !isActiveSubagentStatus(selectedAgent.value.status)) {
+    const persistedIds = new Set(detail.messages.map((message) => message.id))
+    return [...detail.messages, ...live.filter((message) => !persistedIds.has(message.id))]
+  }
+  return [...new Map([...detail.messages, ...live].map((message) => [message.id, message])).values()]
+})
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
 const desktopHostStyle = computed<Record<string, string>>(() => ({

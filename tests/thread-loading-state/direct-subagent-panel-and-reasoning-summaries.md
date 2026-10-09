@@ -28,6 +28,8 @@
 21. Open a parent whose agents occur only outside the recent history window. Use Load history and Load older collaboration; verify partial/loaded states, no duplicated agents or event IDs, and no automatic full-history scan.
 22. Inspect Collaboration for spawn, sendMessage/sendInput, wait and close events, including agent-to-agent sender/receiver IDs and state messages. Confirm the parent itself is not listed as a child and no send/control actions appear.
 23. Delay an agent history/detail response, switch parent threads or detail rows, then release it. Confirm no old result or stuck loading indicator appears in the new view; empty history remains viewable on mobile.
+24. Select a running agent and stream assistant text interleaved with commands, plans and file changes. Confirm the response body updates before completion and replaces a stale same-ID snapshot without duplicating rows. Copy a response and verify it contains the streamed text.
+25. Browse older agent pages while it continues running. Confirm latest live rows are not inserted into the older window; return to latest to see the current response. Finish the agent and confirm one terminal refresh connects to the final history without duplicate response rows.
 
 #### Expected Results
 - Collaboration participants from the active parent thread are listed, including known agent-to-agent communications.
@@ -39,9 +41,13 @@
 - Agent detail content shrinks or scrolls within the sidebar instead of extending beyond its clipped boundary.
 - Thread content is read-only and historic reasoning is collapsed by default.
 - Realtime thinking displays protocol reasoning summaries only.
+- Running details reuse the existing notification-fed live messages; no extra polling, history request or notification subscription is added. Merging is linear in the selected window plus its existing live rows. The agent detail remains read-only.
 - Completing a known direct subagent refreshes its parent state without polling or a full thread-list scan, including after switching away and back.
 
 #### Rollback/Cleanup
 - Close the mobile sheet and return to the parent thread list.
 - Remove `codex-web-local.subagent-panel-width.v1` and `codex-web-local.subagent-panel-collapsed.v1` from local storage to reset desktop sidebar preferences.
 - Revert the feature commit if the subagent panel is not wanted.
+
+#### Verification Boundary
+- Added focused wiring/state regression cases and performed static type/diff checks only. Runtime/mock tests, long-duration browser measurements, and light/dark screenshots were not executed under the session restrictions.

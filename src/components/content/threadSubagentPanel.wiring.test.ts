@@ -2,6 +2,15 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSubagentPanel desktop sidebar wiring', () => {
+  it('merges live content by ID only when the selected history window reaches the latest turn', async () => {
+    const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
+    const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+    expect(source).toContain(':messages="selectedMessages"')
+    expect(source).toContain('if (detail.hasMoreNewer || !selectedAgent.value) return detail.messages')
+    expect(source).toContain('props.liveMessagesForThread(selectedAgent.value.threadId)')
+    expect(source).toContain('new Map([...detail.messages, ...live].map(')
+    expect(app).toContain(':live-messages-for-thread="getLiveMessagesForThread"')
+  })
   it('keeps the desktop agent sidebar resizable, collapsible, and persisted', async () => {
     const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
 

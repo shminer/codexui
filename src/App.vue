@@ -1011,6 +1011,7 @@
                     :agents="selectedThreadSubagents"
                     :cwd="composerCwd"
                     :live-overlay-for-thread="getLiveOverlayForThread"
+                    :live-messages-for-thread="getLiveMessagesForThread"
                   />
                 </div>
 
@@ -1413,6 +1414,7 @@ const {
   sideConversationReasoningEffort,
   sideConversationCollaborationMode,
   getLiveOverlayForThread,
+  getLiveMessagesForThread,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,
