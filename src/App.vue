@@ -1104,7 +1104,7 @@
           :agents="selectedThreadSubagents"
           :cwd="composerCwd"
           :live-overlay-for-thread="getLiveOverlayForThread"
-          :live-messages-for-thread="getLiveMessagesForThread"
+          :live-messages-for-thread="getCurrentTurnMessagesForThread"
         />
       </section>
     </template>
@@ -1421,7 +1421,7 @@ const {
   sideConversationReasoningEffort,
   sideConversationCollaborationMode,
   getLiveOverlayForThread,
-  getLiveMessagesForThread,
+  getCurrentTurnMessagesForThread,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,

@@ -1282,6 +1282,39 @@ describe('Codex CLI availability', () => {
 })
 
 describe('startup request deduplication', () => {
+  it.each([true, false])('preserves a running direct thread outside the first list page with bodyFirst=%s', async (bodyFirst) => {
+    installTestWindow()
+    let finishList!: (value: unknown) => void
+    let finishBody!: (value: unknown) => void
+    gatewayMocks.getThreadGroupsPage.mockImplementationOnce(() => new Promise(resolve => { finishList = resolve }))
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finishBody = resolve }))
+    gatewayMocks.mutateThreadQueue.mockImplementation(async (_id, operation) => ({ data: { A: [operation.message] } }))
+    const state = useDesktopState()
+    state.primeSelectedThread('A')
+    const list = state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    const body = state.ensureThreadMessagesLoaded('A')
+    await flushMicrotasks()
+    const listResult = { groups: [{ projectName: 'Project', threads: [thread('B', '/tmp/project')] }], nextCursor: 'next-page' }
+    const bodyResult = { model: '', modelProvider: '', messages: [], inProgress: true, activeTurnId: 'turn-A', hasMoreOlder: false, turnIndexByTurnId: {} }
+    if (bodyFirst) {
+      finishBody(bodyResult)
+      await body
+      finishList(listResult)
+    } else {
+      finishList(listResult)
+      await list
+      finishBody(bodyResult)
+    }
+    await Promise.all([list, body])
+    expect(state.selectedThreadId.value).toBe('A')
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking')
+    await state.sendMessageToSelectedThread('queued', [], [], 'queue')
+    expect(gatewayMocks.mutateThreadQueue).toHaveBeenCalledWith('A', expect.objectContaining({ type: 'add' }))
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+
   it('renders the first thread page without waiting for slow queue or titles and coalesces their initial reads', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
@@ -3276,6 +3309,74 @@ describe('fork from response', () => {
 })
 
 describe('provider model selection', () => {
+  it('uses the provider restored during a pending config read without issuing another config request', async () => {
+    installTestWindow()
+    const config = { model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' }
+    let finishConfig!: (value: typeof config) => void
+    gatewayMocks.getCurrentModelConfig.mockResolvedValueOnce(config)
+      .mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve }))
+    gatewayMocks.getAvailableModelIds.mockImplementation((options) => Promise.resolve(options.providerId === 'opencode-zen' ? ['big-pickle'] : ['gpt-5.5']))
+    const state = useDesktopState()
+    state.primeSelectedThread('other')
+    await state.refreshAncillaryState({ includeProviderModels: true })
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: 'big-pickle', modelProvider: 'opencode-zen', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    await state.selectThread('zen-thread')
+    expect(gatewayMocks.getCurrentModelConfig).toHaveBeenCalledTimes(2)
+    finishConfig(config)
+    await flushMicrotasks()
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledTimes(2)
+    expect(state.availableModelIds.value).toEqual(['big-pickle'])
+    state.stopPolling()
+  })
+
+  it.each(['completed', 'pending'] as const)('corrects the direct thread catalog when body arrives after a %s runtime catalog', async (catalogState) => {
+    installTestWindow()
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    let finishCatalog!: (models: string[]) => void
+    gatewayMocks.getAvailableModelIds.mockImplementation((options) => {
+      if (options.providerId === 'opencode-zen') return Promise.resolve(['big-pickle', 'zen-model'])
+      return catalogState === 'pending'
+        ? new Promise(resolve => { finishCatalog = resolve }) : Promise.resolve(['gpt-5.5'])
+    })
+    let finishBody!: (value: unknown) => void
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finishBody = resolve }))
+    const state = useDesktopState()
+    state.primeSelectedThread('zen-thread')
+    const body = state.ensureThreadMessagesLoaded('zen-thread')
+    const catalog = state.refreshAncillaryState({ includeProviderModels: true })
+    await flushMicrotasks()
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledTimes(1)
+    if (catalogState === 'completed') await catalog
+    finishBody({ model: 'big-pickle', modelProvider: 'opencode-zen', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    await body
+    await flushMicrotasks()
+    expect(state.availableModelIds.value).toEqual(['big-pickle', 'zen-model'])
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledTimes(2)
+    if (catalogState === 'pending') finishCatalog(['gpt-5.5'])
+    await catalog
+    expect(state.availableModelIds.value).toEqual(['big-pickle', 'zen-model'])
+    expect(state.selectedModelId.value).toBe('big-pickle')
+    state.stopPolling()
+  })
+
+  it('does not refresh the current catalog when another thread body finishes after navigation', async () => {
+    installTestWindow()
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    let finishBody!: (value: unknown) => void
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finishBody = resolve }))
+    const state = useDesktopState()
+    state.primeSelectedThread('zen-thread')
+    const body = state.ensureThreadMessagesLoaded('zen-thread')
+    await state.refreshAncillaryState({ includeProviderModels: true })
+    state.primeSelectedThread('other')
+    finishBody({ model: 'big-pickle', modelProvider: 'opencode-zen', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    await body
+    expect(state.selectedThreadId.value).toBe('other')
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+
   it('ignores global selected-model localStorage when OpenCode Zen is the active provider', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
@@ -4283,6 +4384,80 @@ describe('bounded thread working sets', () => {
     gatewayMocks.resumeThread.mockResolvedValue({ messages: [], historyExcluded: true, turnIndexByTurnId: {}, subagents: [] })
     gatewayMocks.getThreadDetail.mockResolvedValue({ ...page(20, 10), model: '', modelProvider: '', subagents: [] })
     gatewayMocks.getLatestThreadMessages.mockResolvedValue(page(20, 20))
+  })
+
+  it.each(['detail', 'latest'] as const)('releases absorbed live rows that the %s snapshot budget discards', async (kind) => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const messages: UiMessage[] = ['A', 'C'].map((id, turnIndex) => ({
+      id, role: 'assistant', text: id.repeat(600_000), messageType: 'agentMessage', turnId: `turn-${id}`, turnIndex,
+    }))
+    for (const message of messages) {
+      const params = { threadId: 'thread-1', turnId: message.turnId }
+      emit({ method: 'turn/started', params: { ...params, turn: { id: message.turnId } } })
+      emit({ method: 'item/completed', params: { ...params, item: { id: message.id, type: 'agentMessage', text: message.text } } })
+      emit({ method: 'turn/completed', params: { ...params, turn: { id: message.turnId, status: 'completed' } } })
+    }
+    const snapshot = { model: '', modelProvider: '', messages, inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: { 'turn-A': 0, 'turn-C': 1 } }
+    gatewayMocks.getThreadDetail.mockResolvedValue(snapshot)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(snapshot)
+    for (let read = 0; read < 3; read += 1) {
+      if (kind === 'detail') await state.loadMessages('thread-1', { force: true, silent: true })
+      else await state.loadLatestMessages('thread-1')
+      expect(state.messages.value.filter(message => message.role === 'assistant').map(message => message.id)).toEqual(['C'])
+      expect(state.getLiveMessagesForThread('thread-1')).toEqual([])
+    }
+    state.stopPolling()
+  })
+
+  it('keeps the history body unchanged when a restored running reply crosses its text budget', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const current: UiMessage = { id: 'C', role: 'assistant', text: 'c'.repeat(600_000), turnId: 'turn-C', turnIndex: 1, messageType: 'agentMessage' }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [current], inProgress: true, activeTurnId: 'turn-C', hasMoreOlder: true, turnIndexByTurnId: { 'turn-C': 1 } })
+    await state.loadMessages('thread-1')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({ messages: [{ id: 'A', role: 'user', text: 'a'.repeat(300_000), turnId: 'turn-A', turnIndex: 0 }], hasMoreOlder: false, turnIndexByTurnId: { 'turn-A': 0 } })
+    await state.loadOlderMessages()
+    const history = state.messages.value
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-C', itemId: 'C', delta: 'd'.repeat(200_000) } })
+    vi.advanceTimersByTime(50)
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(true)
+    expect(state.messages.value).toEqual(history)
+    expect(state.messages.value.map(message => message.id)).toEqual(['A', 'C'])
+    expect(state.getCurrentTurnMessagesForThread('thread-1')[0]?.text).toHaveLength(800_000)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce({ messages: [{ ...current, text: `${current.text}${'d'.repeat(200_000)}` }], inProgress: true, activeTurnId: 'turn-C', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-C': 1 } })
+    await state.loadLatestMessages()
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
+    expect(state.messages.value.map(message => message.id)).toEqual(['C'])
+    expect(state.messages.value[0]?.text).toHaveLength(800_000)
+    state.stopPolling()
+  })
+
+  it('exposes cached child reply, command and plan updates through the current-turn panel view', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('child', '/tmp/project')])
+    const messages: UiMessage[] = [
+      { id: 'reply', role: 'assistant', text: 'reply', turnId: 'child-turn', turnIndex: 0, messageType: 'agentMessage' },
+      { id: 'cmd', role: 'system', text: 'run', turnId: 'child-turn', turnIndex: 0, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'inProgress', aggregatedOutput: 'output', exitCode: null } },
+      { id: 'child-turn:plan', role: 'assistant', text: 'plan', turnId: 'child-turn', turnIndex: 0, messageType: 'plan' },
+    ]
+    state.primeSelectedThread('child')
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages, inProgress: true, activeTurnId: 'child-turn', hasMoreOlder: false, turnIndexByTurnId: { 'child-turn': 0 } })
+    await state.loadMessages('child')
+    state.primeSelectedThread('thread-1')
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [{ threadId: 'child', prompt: '', message: '', status: 'running' }] })
+    await state.loadMessages('thread-1')
+    const params = { threadId: 'child', turnId: 'child-turn' }
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: ' continued' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: ' continued' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: ' continued' } })
+    vi.advanceTimersByTime(50)
+    const visible = state.getCurrentTurnMessagesForThread('child')
+    expect(visible.map(message => message.id)).toEqual(['reply', 'cmd', 'child-turn:plan'])
+    expect(visible.find(message => message.id === 'reply')?.text).toBe('reply continued')
+    expect(visible.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput).toBe('output continued')
+    expect(visible.find(message => message.id === 'child-turn:plan')?.text).toBe('plan continued')
+    expect(state.getLiveMessagesForThread('child')).toEqual([])
+    state.stopPolling()
   })
 
   it('retains only twenty complete turns across long sequences of silent refreshes', async () => {

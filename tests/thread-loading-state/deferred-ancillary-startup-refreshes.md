@@ -18,6 +18,9 @@
 9. Reject title metadata while allowing the list to succeed; separately reject queue metadata. Confirm the list remains usable. While titles are delayed, rename one thread and confirm the late title snapshot does not undo the rename.
 10. After a title request fails with a network error or HTTP 503, refresh the list and allow title loading to succeed. Confirm saved titles recover. Force refresh with a nonempty title snapshot that omits a previously cached title; confirm the removed key no longer overrides the thread title.
 11. Keep initial queue/title requests pending, refresh or switch an account to restart notifications, and allow the new metadata requests to finish before releasing the old responses. Confirm the new queue/title snapshots remain visible and old completions do not mark the new loaders as finished prematurely.
+12. With Codex as the runtime provider, reload a Zen thread and delay its body until the Codex model catalog finishes. Release the body and confirm the model and Thinking menus use the Zen catalog. Repeat while the old catalog is still pending, then release that old response last; it must not replace the Zen catalog. Navigate away before body completion and confirm it does not refresh the new thread's catalog.
+13. Load a Codex catalog, select a Zen thread, delay model config, and let the Zen body finish first. Release config and confirm it requests the Zen catalog without an additional config request.
+14. Directly reload running thread A outside the first list page. Delay the list until A's body restores its running state, then return a first page that omits A and has a next cursor. Confirm Thinking remains and a queued message uses the queue endpoint, not a new turn. Repeat with list/body completion order reversed.
 
 #### Expected Results
 - A normal initial thread load with history included in the resume result uses one `thread/resume` and no fallback `thread/read`. Metadata-only resume results may use the existing bounded detail fallback.
@@ -29,6 +32,8 @@
 - Startup has one ancillary-refresh owner after provider status is known; quota watchers do not independently import auth during this phase. A confirmed imported account may trigger one necessary follow-up refresh.
 - Returning a slow response for A does not select A again or block B. Notification recovery does not fetch the temporary first list entry when starting from home.
 - Failed title reads are distinct from valid empty caches and can retry. Notification teardown invalidates old queue/title loaders; reconnect/account refresh can load current metadata again.
+- A restored provider corrects an already requested mismatching model catalog once. Model responses check account, thread, provider and request epoch; late old catalogs do not overwrite current menus. Provider changes while config is pending reuse that pending read.
+- First-page list pruning preserves the selected running thread even if its list row has not loaded. No full-list read is added to preserve this state.
 - The profiler report has no duplicate-load warnings.
 
 #### Rollback/Cleanup

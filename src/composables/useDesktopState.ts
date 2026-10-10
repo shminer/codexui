@@ -1789,6 +1789,7 @@ export function useDesktopState() {
   const activeProviderId = ref('')
   const activeRuntimeProviderId = ref('')
   let modelPreferencesRequestEpoch = 0
+  let modelCatalogProviderId = ''
   const codexCliMissingError = ref('')
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
   const unreadCutoffIso = ref(loadUnreadCutoffIso())
@@ -2476,6 +2477,14 @@ export function useDesktopState() {
     const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || rows.at(-1)?.turnId
     return rows.filter((message) => !message.turnId || message.turnId === turnId)
   }
+  function getCurrentTurnMessagesForThread(threadId: string): UiMessage[] {
+    const live = getLiveMessagesForThread(threadId)
+    const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || live.at(-1)?.turnId
+    const persisted = turnId
+      ? (persistedMessagesByThreadId.value[threadId] ?? []).filter((message) => message.turnId === turnId)
+      : []
+    return [...new Map([...persisted, ...live].map((message) => [message.id, message])).values()]
+  }
   const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
   const sideConversationMessages = computed<UiMessage[]>(() => {
     const all = getMessagesForThread(sideConversationThreadId.value)
@@ -2690,6 +2699,7 @@ export function useDesktopState() {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
 
+    const previousProviderId = readProviderIdForThread(normalizedThreadId)
     const runtimeProviderId = providerId.trim()
     if (runtimeProviderId) {
       threadModelProviderByThreadId.value = {
@@ -2698,6 +2708,11 @@ export function useDesktopState() {
       }
     } else if (threadModelProviderByThreadId.value[normalizedThreadId]) {
       threadModelProviderByThreadId.value = omitKey(threadModelProviderByThreadId.value, normalizedThreadId)
+    }
+    const nextProviderId = readProviderIdForThread(normalizedThreadId)
+    if (normalizedThreadId === selectedThreadId.value && previousProviderId !== nextProviderId
+      && modelCatalogProviderId && modelCatalogProviderId !== nextProviderId) {
+      void refreshModelPreferences({ includeProviderModels: true })
     }
   }
 
@@ -3044,12 +3059,15 @@ export function useDesktopState() {
 
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     const requestEpoch = ++modelPreferencesRequestEpoch
+    modelCatalogProviderId = ''
     const accountId = activeAccountStorageId.value
     const targetThreadId = selectedThreadId.value
+    let targetProviderId: string | undefined
     const isCurrentRequest = () => (
       requestEpoch === modelPreferencesRequestEpoch
       && activeAccountStorageId.value === accountId
       && selectedThreadId.value === targetThreadId
+      && (targetProviderId === undefined || readProviderIdForThread(targetThreadId) === targetProviderId)
     )
     codexCliMissingError.value = ''
     try {
@@ -3059,7 +3077,8 @@ export function useDesktopState() {
       activeRuntimeProviderId.value = currentConfig.providerId.trim()
       const normalizedProviderId = normalizeProviderContextId(currentConfig.providerId)
       activeProviderId.value = normalizedProviderId
-      const targetProviderId = readProviderIdForThread(targetThreadId)
+      targetProviderId = readProviderIdForThread(targetThreadId)
+      modelCatalogProviderId = targetProviderId
       const usesUpstreamCatalog = targetProviderId === 'codex'
         || (currentConfig.upstreamCatalogProviderIds ?? [])
           .map(normalizeProviderContextId)
@@ -3857,7 +3876,7 @@ export function useDesktopState() {
   }
 
   function upsertRestoredMessage(threadId: string, nextMessage: UiMessage): boolean {
-    if (isKnownSideConversationThread(threadId)) return false
+    if (isKnownSideConversationThread(threadId) || historyWindowThreadIds.has(threadId)) return false
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
     const current = previous.find((message) => message.id === nextMessage.id)
     if (!current) return false
@@ -3870,12 +3889,12 @@ export function useDesktopState() {
     return true
   }
 
-  function removeSnapshotLiveMessages(threadId: string): void {
+  function removeSnapshotLiveMessages(threadId: string, absorbed: UiMessage[]): void {
     const retained = persistedMessagesByThreadId.value[threadId] ?? []
-    const ids = new Set(retained.map((message) => message.id))
+    const ids = new Set([...absorbed, ...retained].map((message) => message.id))
     setLiveAgentMessagesForThread(threadId, (liveAgentMessagesByThreadId.value[threadId] ?? []).filter((message) => !ids.has(message.id)))
     setLivePlanMessagesForThread(threadId, (livePlanMessagesByThreadId.value[threadId] ?? []).filter((message) => !ids.has(message.id)))
-    removeLiveCommandsPersistedIn(threadId, retained)
+    removeLiveCommandsPersistedIn(threadId, [...absorbed, ...retained])
     setLiveFileChangeMessagesForThread(threadId, (liveFileChangeMessagesByThreadId.value[threadId] ?? []).filter((message) => !ids.has(message.id)))
   }
 
@@ -5704,6 +5723,7 @@ export function useDesktopState() {
       mergedWithInProgress,
     )
     const activeThreadIds = new Set(flattenThreads(sourceGroups.value).map((thread) => thread.id))
+    if (selectedThreadId.value) activeThreadIds.add(selectedThreadId.value)
     if (sideConversationThreadId.value) activeThreadIds.add(sideConversationThreadId.value)
     syncNonSuccessCompletionReadWatermarks(orderedGroups, activeThreadIds)
     inProgressById.value = pruneThreadStateMap(
@@ -6041,7 +6061,7 @@ export function useDesktopState() {
             }
             if (applied && areMessageFieldsEqual(applied, normalized)) initialBodyById.set(message.id, applied)
           }
-          removeSnapshotLiveMessages(threadId)
+          removeSnapshotLiveMessages(threadId, preview)
           replaceTurnIndexLookupForThread(threadId, snapshotLifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)
             ? recent.turnIndexByTurnId : { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...recent.turnIndexByTurnId })
           hasMoreOlderMessagesByThreadId.value = {
@@ -6156,7 +6176,7 @@ export function useDesktopState() {
         }
       }
 
-      if (!isHistoryWindow) removeSnapshotLiveMessages(threadId)
+      if (!isHistoryWindow) removeSnapshotLiveMessages(threadId, nextMessages)
 
       loadedMessagesByThreadId.value = {
         ...loadedMessagesByThreadId.value,
@@ -6414,7 +6434,7 @@ export function useDesktopState() {
         loadedVersionByThreadId.value = { ...loadedVersionByThreadId.value, [threadId]: lifecycleUnchanged ? currentThreadVersion(threadId) : '' }
         if (lifecycleUnchanged) lastMessageLoadAtByThreadId.set(threadId, Date.now())
         else lastMessageLoadAtByThreadId.delete(threadId)
-        removeSnapshotLiveMessages(threadId)
+        removeSnapshotLiveMessages(threadId, nextMessages)
         markThreadAsRead(threadId)
       } catch (loadError) {
         if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
@@ -6553,16 +6573,12 @@ export function useDesktopState() {
   async function selectThread(threadId: string): Promise<void> {
     const reopeningHistory = selectedThreadId.value !== threadId && historyWindowThreadIds.has(threadId)
     setSelectedThreadId(threadId)
-    const initialProviderId = readProviderIdForThread(threadId)
     void refreshModelPreferences({ includeProviderModels: true })
     void refreshSkills()
 
     try {
       if (reopeningHistory) await loadLatestMessages(threadId)
       else await loadMessages(threadId)
-      if (selectedThreadId.value === threadId && readProviderIdForThread(threadId) !== initialProviderId) {
-        void refreshModelPreferences({ includeProviderModels: true })
-      }
     } catch (unknownError) {
       const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       if (selectedThreadId.value === threadId) error.value = message
@@ -8132,6 +8148,7 @@ export function useDesktopState() {
     selectedThreadIsHistoryWindow,
     getLiveOverlayForThread,
     getLiveMessagesForThread,
+    getCurrentTurnMessagesForThread,
     sideConversationParentThreadId,
     sideConversationThreadId,
     sideConversationMessages,

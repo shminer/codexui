@@ -34,6 +34,7 @@
 27. While either sidebar is expanded/collapsed, expand the main composer. Confirm it fills only the main column on desktop and leaves both sidebar controls usable; repeat in light/dark themes and verify the mobile composer still uses the viewport.
 28. Open an empty parent and use the desktop icon rail to load collaboration history. Confirm the control remains available without current agents, a narrow workspace disables expansion without changing the saved preference, and widening restores the preferred expanded view.
 29. Deliver an activity path, then a newer nonempty result summary with no communications, then an unknown activity or empty state message. Confirm the summary remains the row preview, terminal status is not cleared by unknown activity, and communications remain deduplicated. Load an older page and confirm it does not overwrite the newer summary.
+30. Open a running child thread in the main conversation, return to its parent, and open the same child in the Agent sidebar. Stream same-ID reply, command and plan updates. Confirm the sidebar updates without duplicate rows even when restored rows exist in the main state cache. Delay the independent detail snapshot so it contains a longer reply or a newer command output cursor than the cache; confirm it is not shortened, and later current-turn deltas continue updating it. Browse an older Agent page and confirm these current-turn rows remain absent until returning to latest. Repeat on desktop and mobile.
 
 #### Expected Results
 - Collaboration participants from the active parent thread are listed, including known agent-to-agent communications.
@@ -46,6 +47,7 @@
 - Thread content is read-only and historic reasoning is collapsed by default.
 - Realtime thinking displays protocol reasoning summaries only.
 - Running details reuse the existing notification-fed live messages; no extra polling, history request or notification subscription is added. Merging is linear in the selected window plus its existing live rows. The agent detail remains read-only.
+- Current-turn restored rows are included in the same bounded realtime view as live rows. Same-ID reply prefixes preserve the more complete body, command output uses total length or offset-plus-length cursors, and terminal command status does not regress. Historical windows and idle detail merging keep their existing isolation.
 - Activity paths only fill empty previews. Nonempty result summaries replace older summaries even when the incoming snapshot has no communications; later activity or empty messages preserve the selected summary and its source.
 - Completing a known direct subagent refreshes its parent state without polling or a full thread-list scan, including after switching away and back.
 

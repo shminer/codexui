@@ -30,6 +30,8 @@ Thread conversation incremental older-turn loading.
 18. Start a new turn with a running command and reasoning while an older idle detail response is delayed. Release the response and confirm the new turn remains running, with its command, reasoning and queued/pending send intact.
 19. Retain an older question, send the same question again, and release a snapshot containing only the older turn. Confirm the pending send remains running with Thinking rather than being cleared by the old response; the main send path does not create an extra optimistic body row. Separately, restore a snapshot over a pending optimistic user row and confirm only its own persisted user turn replaces it, not an older same-text question.
 20. Repeat steps 16-19 in light and dark themes. Switch to another thread and reopen a retained history window; confirm one shared latest request completes before following resumes. A same-thread background wake must preserve history instead of jumping.
+21. Delay or fail body sync until completed replies A and C both remain in live state. Return a snapshot containing both, with each reply about 600,000 characters so the text budget only fits C. Confirm only C remains, A is not appended after C, and repeated silent/latest reads do not restore A from live state.
+22. Restore a running remote reply C without a local pending send. Load earlier A and keep both within the budget, then read A while C receives enough same-ID text to exceed the combined budget. Confirm the history body and reading anchor remain unchanged. Explicitly return to latest and confirm the full updated C appears once within the existing retention policy.
 
 #### Expected Results
 - Initial thread open remains bounded to the latest turn page.

@@ -1,3 +1,5 @@
+import type { UiMessage } from '../../types/codex'
+
 export const DEFAULT_DESKTOP_PANEL_WIDTH = 480
 export const MIN_DESKTOP_PANEL_WIDTH = 280
 export const MAX_DESKTOP_PANEL_WIDTH = 960
@@ -12,6 +14,38 @@ export function canExpandDesktopPanel(layoutWidth: number): boolean {
 
 export function isActiveSubagentStatus(status: string | undefined): boolean {
   return ACTIVE_SUBAGENT_STATUSES.has(status ?? '')
+}
+
+export function mergeCurrentSubagentMessages(snapshot: UiMessage[], current: UiMessage[]): UiMessage[] {
+  const messages = new Map(snapshot.map((message) => [message.id, message]))
+  for (const message of current) {
+    const existing = messages.get(message.id)
+    if (!existing) {
+      messages.set(message.id, message)
+      continue
+    }
+    let commandExecution = message.commandExecution ?? existing.commandExecution
+    if (existing.commandExecution && message.commandExecution) {
+      const snapshotCommand = existing.commandExecution
+      const currentCommand = message.commandExecution
+      const snapshotCursor = snapshotCommand.outputTotalLength
+        ?? (snapshotCommand.outputOffset ?? 0) + snapshotCommand.aggregatedOutput.length
+      const currentCursor = currentCommand.outputTotalLength
+        ?? (currentCommand.outputOffset ?? 0) + currentCommand.aggregatedOutput.length
+      const output = currentCursor > snapshotCursor
+        || (currentCursor === snapshotCursor && currentCommand.aggregatedOutput.length > snapshotCommand.aggregatedOutput.length)
+        ? currentCommand : snapshotCommand
+      const terminal = currentCommand.status !== 'inProgress' ? currentCommand
+        : snapshotCommand.status !== 'inProgress' ? snapshotCommand : output
+      commandExecution = { ...output, status: terminal.status, exitCode: terminal.exitCode }
+    }
+    messages.set(message.id, {
+      ...existing, ...message,
+      text: existing.text.startsWith(message.text) ? existing.text : message.text,
+      commandExecution,
+    })
+  }
+  return [...messages.values()]
 }
 
 export function clampDesktopPanelWidth(value: number, maximum = MAX_DESKTOP_PANEL_WIDTH): number {

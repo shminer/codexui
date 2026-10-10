@@ -9,8 +9,8 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toContain('if (detail.hasMoreNewer || !selectedAgent.value) return detail.messages')
     expect(source).toContain('selectedAgent.value && !selectedDetail.value?.hasMoreNewer')
     expect(source).toContain('props.liveMessagesForThread(selectedAgent.value.threadId)')
-    expect(source).toContain('new Map([...detail.messages, ...live].map(')
-    expect(app).toContain(':live-messages-for-thread="getLiveMessagesForThread"')
+    expect(source).toContain('mergeCurrentSubagentMessages(detail.messages, live)')
+    expect(app).toContain(':live-messages-for-thread="getCurrentTurnMessagesForThread"')
   })
   it('keeps the desktop agent sidebar resizable, collapsible, and persisted', async () => {
     const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')

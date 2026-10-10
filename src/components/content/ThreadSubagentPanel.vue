@@ -172,6 +172,7 @@ import {
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
   isActiveSubagentStatus,
+  mergeCurrentSubagentMessages,
   MAX_DESKTOP_PANEL_WIDTH,
   maximumDesktopPanelWidth,
   MIN_DESKTOP_PANEL_WIDTH,
@@ -242,7 +243,7 @@ const selectedMessages = computed(() => {
     const persistedIds = new Set(detail.messages.map((message) => message.id))
     return [...detail.messages, ...live.filter((message) => !persistedIds.has(message.id))]
   }
-  return [...new Map([...detail.messages, ...live].map((message) => [message.id, message])).values()]
+  return mergeCurrentSubagentMessages(detail.messages, live)
 })
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
