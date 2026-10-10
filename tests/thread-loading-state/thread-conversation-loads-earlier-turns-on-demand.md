@@ -25,6 +25,11 @@ Thread conversation incremental older-turn loading.
 13. In the oversized-turn thread, navigate from the latest window to the oldest window and then back to the latest. Record the visible turn IDs on each step. Confirm the oversized turn appears intact in both directions, occupies its own ordinary window, and allows continued navigation on either side.
 14. Load a final newer page containing an oversized middle turn. If the page is only partly displayed, confirm the newer-history control stays available. Allow a background refresh, confirm it preserves the reading window, and load the remaining newer history.
 15. Repeat steps 13-14 in the archived-thread preview and agent-detail panel, including a page containing raw turns with no displayable messages. Confirm each click advances the raw cursor rather than repeatedly requesting the same empty page.
+16. With only turn C retained, delay a refresh that returns turns A, B and C. Release the response and confirm the restored order is A, B, C, with one row per message ID and the server item order within each turn.
+17. During delayed detail and latest-page requests, stream more text for an existing reply and command output for an existing command. Release a shorter snapshot, then send another delta and completion. Confirm text/output does not regress, later deltas use the restored prefix, and each ID stays in its original position.
+18. Start a new turn with a running command and reasoning while an older idle detail response is delayed. Release the response and confirm the new turn remains running, with its command, reasoning and queued/pending send intact.
+19. Retain an older question, send the same question again, and release a snapshot containing only the older turn. Confirm the pending new question remains visible. When its own persisted user item arrives, confirm the optimistic item is replaced once.
+20. Repeat steps 16-19 in light and dark themes. Switch to another thread and reopen a retained history window; confirm one shared latest request completes before following resumes. A same-thread background wake must preserve history instead of jumping.
 
 #### Expected Results
 - Initial thread open remains bounded to the latest turn page.
@@ -36,8 +41,12 @@ Thread conversation incremental older-turn loading.
 - A stale turn anchor returns an explicit error rather than falsely indicating the end of history. Retrying preserves the selected paging direction.
 - Paging starts with the incoming turn nearest the current cursor. A large middle turn is never skipped to fill the window with smaller turns farther away.
 - The newer-history control and reading mode remain active while budget trimming leaves undisplayed turns, even when the server page reports no later page.
+- Snapshot restoration follows authoritative server turn indices and item order. Locally newer same-ID content survives delayed responses without duplicate rows or text-based sorting; older/newer paging continues to use its original direction.
+- Restored command output remains limited to the 64 Ki character tail with total length/offset metadata. Reply and command deltas retain the existing 50 ms batch interval after restoration.
+- Delayed idle snapshots do not clear a newer lifecycle or pending send. Explicit thread reopening restores latest, while background refresh and same-thread wakes preserve an active history window.
 
 #### Rollback/Cleanup
 - Closing the preview or switching threads releases disposable body caches; reopening reloads saved history. No source conversation is removed.
+- Release delayed mock responses and stop synthetic streaming before cleanup; restore the original theme and route. The test does not edit stored conversation history.
 
 ---

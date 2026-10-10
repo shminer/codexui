@@ -1429,11 +1429,12 @@ const props = withDefaults(defineProps<{
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   hasMorePersistedBelow?: boolean
+  isHistoryWindow?: boolean
   isLoadingPersistedBelow?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
-}>(), { recoverableHistory: true })
+}>(), { recoverableHistory: true, isHistoryWindow: false })
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]
@@ -1465,7 +1466,7 @@ const fileChangeRedoPatchIds = ref<Record<string, string[]>>({})
 const toolQuestionAnswers = ref<Record<string, string>>({})
 const toolQuestionOtherAnswers = ref<Record<string, string>>({})
 const mcpElicitationAnswers = ref<Record<string, string | number | boolean | string[]>>({})
-const autoFollowOutput = ref(true)
+const autoFollowOutput = ref(!props.isHistoryWindow && !props.hasMorePersistedBelow)
 const BOTTOM_THRESHOLD_PX = 16
 const CODE_LANGUAGE_ALIASES: Record<string, string> = {
   js: 'javascript',
@@ -1573,7 +1574,7 @@ const displayMessages = computed(() => props.messages.map((message) =>
 ))
 
 const showJumpToLatestButton = computed(
-  () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay) || props.hasMorePersistedBelow === true),
+  () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay) || props.isHistoryWindow || props.hasMorePersistedBelow === true),
 )
 
 function ensureHighlightJsLoaded(): Promise<void> {
@@ -4125,7 +4126,7 @@ function applyConversationScrollState(): void {
   const container = conversationListRef.value
   if (!container) return
 
-  if (autoFollowOutput.value) {
+  if (shouldLockToBottom()) {
     enforceBottomState()
     return
   }
@@ -4133,12 +4134,12 @@ function applyConversationScrollState(): void {
 
 function enforceBottomState(): void {
   const container = conversationListRef.value
-  if (!container) return
+  if (!container || !shouldLockToBottom()) return
   scrollToBottom()
 }
 
 function shouldLockToBottom(): boolean {
-  return autoFollowOutput.value
+  return autoFollowOutput.value && !props.isHistoryWindow && !props.hasMorePersistedBelow
 }
 
 function runBottomLockFrame(): void {
@@ -4183,11 +4184,14 @@ async function jumpToLatest(): Promise<void> {
   isLoadingLatest.value = true
   historyLoadError.value = ''
   try {
-    if (props.hasMorePersistedBelow) {
+    if (props.isHistoryWindow || props.hasMorePersistedBelow) {
       if (!props.loadLatestMessages) throw new Error('Latest message loading is not available.')
       await props.loadLatestMessages(threadId)
     }
     if (threadId !== props.activeThreadId || generation !== navigationGeneration) return
+    await nextTick()
+    if (threadId !== props.activeThreadId || generation !== navigationGeneration) return
+    if (props.isHistoryWindow || props.hasMorePersistedBelow) throw new Error('Latest message window is not available.')
     searchTurnMessages.value = []
     searchWindowEnd.value = undefined
     searchTargetId.value = ''
@@ -4447,6 +4451,14 @@ watch(
 )
 
 watch(
+  () => props.isHistoryWindow || props.hasMorePersistedBelow,
+  (historyWindow) => {
+    if (historyWindow) autoFollowOutput.value = false
+  },
+  { flush: 'sync' },
+)
+
+watch(
   () => props.activeThreadId,
   async () => {
     messageSourceGeneration += 1
@@ -4471,7 +4483,7 @@ watch(
     streamRenderTimer = null
     flushStreamingMarkdown()
     messageCopy.reset()
-    autoFollowOutput.value = true
+    autoFollowOutput.value = !props.isHistoryWindow && !props.hasMorePersistedBelow
     modalImageUrl.value = ''
     isLoadingMore.value = false
     isLoadingLatest.value = false
@@ -4479,6 +4491,10 @@ watch(
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
+    if (props.isHistoryWindow || props.hasMorePersistedBelow) {
+      await jumpToLatest()
+      return
+    }
     // Apply immediately for cached threads where isLoading never toggles.
     setLatestRenderWindow()
     await scheduleConversationScroll()
@@ -4490,7 +4506,7 @@ function onConversationScroll(): void {
   const container = conversationListRef.value
   if (!container || props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
   if (searchTargetId.value) return
-  autoFollowOutput.value = isAtBottom(container) && !hasMoreBelow.value
+  autoFollowOutput.value = isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value
   if (hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
     void loadMoreAbove()
   } else if (hasMoreBelow.value && container.scrollHeight - container.scrollTop - container.clientHeight < LOAD_MORE_SCROLL_THRESHOLD_PX) {

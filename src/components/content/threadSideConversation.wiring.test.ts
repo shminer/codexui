@@ -9,6 +9,8 @@ describe('ThreadSideConversation wiring', () => {
     expect(source).toContain(':load-earlier-messages="loadEarlierMessages"')
     expect(source).toContain(':load-later-messages="loadLaterMessages"')
     expect(source).toContain(':load-latest-messages="loadLatestMessages"')
+    expect(source).toContain('isHistoryWindow?: boolean')
+    expect(source).toContain(':is-history-window="isHistoryWindow"')
     expect(source).toContain('v-show="!pendingRequests[0]"')
     expect(source).not.toContain(':recoverable-history="false"')
     expect(source).not.toMatch(/<ThreadComposer\s+v-if/u)

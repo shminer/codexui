@@ -60,6 +60,7 @@
             :has-more-persisted-above="hasMoreOlder"
             :is-loading-persisted-above="loadingOlder"
             :has-more-persisted-below="hasMoreNewer"
+            :is-history-window="isHistoryWindow"
             :is-loading-persisted-below="loadingNewer"
             :load-earlier-messages="loadEarlierMessages"
             :load-later-messages="loadLaterMessages"
@@ -176,6 +177,7 @@ const props = defineProps<{
   historyTruncated: boolean
   hasMoreOlder: boolean
   hasMoreNewer: boolean
+  isHistoryWindow?: boolean
   loadingOlder: boolean
   loadingNewer: boolean
   loadEarlierMessages: (threadId: string) => Promise<void>

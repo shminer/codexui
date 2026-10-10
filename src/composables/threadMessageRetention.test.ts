@@ -18,6 +18,14 @@ describe('thread message retention', () => {
     expect(retained).toMatchObject({ removedOlder: true, removedNewer: false })
   })
 
+  it('retains the latest end of a restored chronological snapshot without sorting by timestamps', () => {
+    const messages = turns(22).slice(18 * 2)
+    const retained = retainThreadMessageWindow(messages, { maxTurns: 2, maxBytes: ACTIVE_THREAD_TEXT_BUDGET, direction: 'latest' })
+    expect(retained.messages.map((message) => message.id)).toEqual(['user-20', 'answer-20', 'user-21', 'answer-21'])
+    expect(retained.messages.map((message) => message.turnIndex)).toEqual([20, 20, 21, 21])
+    expect(retained).toMatchObject({ removedOlder: true, removedNewer: false })
+  })
+
   it('keeps the older end while reading backwards and releases the newer end', () => {
     const retained = retainThreadMessageWindow(turns(30), { maxTurns: 20, maxBytes: 2 * 1024 * 1024, direction: 'earliest' })
     expect(retained.messages.at(-1)?.id).toBe('answer-19')
