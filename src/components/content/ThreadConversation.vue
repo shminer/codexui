@@ -811,7 +811,7 @@
         </div>
       </li>
       </template>
-      <li v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more">
+      <li v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more conversation-load-more-later">
         <button type="button" class="load-more-button" :disabled="isLoadingMore || isLoadingPersistedBelow" @click="loadMoreBelow">{{ isLoadingMore || isLoadingPersistedBelow ? 'Loading…' : 'Load later messages' }}</button>
       </li>
       <li v-if="historyLoadError" class="conversation-history-error" role="status">{{ historyLoadError }}</li>
@@ -4586,6 +4586,10 @@ onBeforeUnmount(() => {
 
 .conversation-load-more {
   @apply flex justify-center py-3 m-0;
+}
+
+.conversation-load-more-later {
+  @apply pb-20;
 }
 
 .conversation-history-error {

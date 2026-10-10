@@ -55,4 +55,10 @@ describe('ThreadConversation render-window wiring', () => {
     expect(source).toContain("if ((message.messageType ?? '').endsWith('.live')) return blocks")
     expect(source).toContain('100 - (Date.now() - lastStreamRenderAt)')
   })
+
+  it('reserves space below newer pagination for the floating jump control', async () => {
+    const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
+    expect(source).toContain('class="conversation-load-more conversation-load-more-later"')
+    expect(source).toMatch(/\.conversation-load-more-later\s*\{\s*@apply pb-20;/u)
+  })
 })
