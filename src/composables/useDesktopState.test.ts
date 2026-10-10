@@ -4386,6 +4386,162 @@ describe('bounded thread working sets', () => {
     gatewayMocks.getLatestThreadMessages.mockResolvedValue(page(20, 20))
   })
 
+  async function runningHistoryState() {
+    const setup = await setupTurnLifecycleNotificationState('thread-1')
+    const current: UiMessage[] = [
+      { id: 'C', role: 'assistant', text: 'c', turnId: 'turn-C', turnIndex: 1, messageType: 'agentMessage' },
+      { id: 'cmd', role: 'system', text: 'run', turnId: 'turn-C', turnIndex: 1, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'inProgress', aggregatedOutput: 'output', exitCode: null } },
+      { id: 'turn-C:plan', role: 'assistant', text: 'plan', turnId: 'turn-C', turnIndex: 1, messageType: 'plan' },
+    ]
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: current, inProgress: true, activeTurnId: 'turn-C', hasMoreOlder: true, turnIndexByTurnId: { 'turn-C': 1 } })
+    await setup.state.loadMessages('thread-1')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({ messages: [{ id: 'A', role: 'user', text: 'question', turnId: 'turn-A', turnIndex: 0 }], hasMoreOlder: false, turnIndexByTurnId: { 'turn-A': 0 } })
+    await setup.state.loadOlderMessages()
+    return { ...setup, current }
+  }
+
+  it.each([false, true])('absorbs hidden same-ID updates before leaving history on a final newer page with rows=%s', async (hasRows) => {
+    vi.useFakeTimers()
+    const { state, emit } = await runningHistoryState()
+    const history = state.messages.value
+    const params = { threadId: 'thread-1', turnId: 'turn-C' }
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'C', delta: 'd' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd', delta: 'd' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'd' } })
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value).toEqual(history)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(2, hasRows ? 1 : 0))
+    await state.loadNewerMessages()
+    expect(gatewayMocks.getNewerThreadMessages).toHaveBeenCalledWith('thread-1', 'turn-C')
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
+    const rows = state.messages.value
+    expect(rows.map(message => message.id)).toEqual(['A', 'C', 'cmd', 'turn-C:plan', ...(hasRows ? ['message-2'] : [])])
+    expect(rows.find(message => message.id === 'C')?.text).toBe('cd')
+    expect(rows.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput).toBe('outputd')
+    expect(rows.find(message => message.id === 'turn-C:plan')?.text).toBe('pland')
+    expect(state.getLiveMessagesForThread('thread-1')).toEqual([])
+    expect(new Set(rows.map(message => message.id)).size).toBe(rows.length)
+    state.stopPolling()
+  })
+
+  it('retains anchor command completion across an idle history sync and the final empty newer page', async () => {
+    vi.useFakeTimers()
+    const { state, emit, current } = await runningHistoryState()
+    const params = { threadId: 'thread-1', turnId: 'turn-C' }
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'cmd', type: 'commandExecution', command: 'run', status: 'completed', aggregatedOutput: 'finished', exitCode: 0 } } })
+    emit({ method: 'turn/completed', params: { ...params, turn: { id: 'turn-C', status: 'completed' } } })
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: current, inProgress: false, activeTurnId: '', hasMoreOlder: true, turnIndexByTurnId: { 'turn-C': 1 } })
+    await state.loadMessages('thread-1', { force: true, silent: true })
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution?.status).toBe('inProgress')
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(2, 0))
+    await state.loadNewerMessages()
+    expect(state.messages.value.find(message => message.id === 'cmd')?.commandExecution).toMatchObject({ status: 'completed', aggregatedOutput: 'finished', exitCode: 0 })
+    expect(state.messages.value.filter(message => message.id === 'cmd')).toHaveLength(1)
+    state.stopPolling()
+  })
+
+  it('keeps hidden anchor updates while newer pages remain and absorbs them at the final boundary', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await runningHistoryState()
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'thread-1', turnId: 'turn-C', itemId: 'C', delta: 'd' } })
+    vi.advanceTimersByTime(50)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(2, 1, true))
+    await state.loadNewerMessages()
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(true)
+    expect(state.messages.value.find(message => message.id === 'C')?.text).toBe('c')
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(3, 0))
+    await state.loadNewerMessages()
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
+    expect(state.messages.value.filter(message => message.id === 'C')).toEqual([expect.objectContaining({ text: 'cd' })])
+    state.stopPolling()
+  })
+
+  it.each(['cached', 'uncached', 'history', 'oversized'] as const)('rebases a %s child from its independent snapshot before applying another delta', async (kind) => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('child', '/tmp/project')])
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'a', turnId: 'child-turn', turnIndex: 1, messageType: 'agentMessage' }
+    if (kind !== 'uncached') {
+      state.primeSelectedThread('child')
+      gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [reply], inProgress: true, activeTurnId: 'child-turn', hasMoreOlder: true, turnIndexByTurnId: { 'child-turn': 1 } })
+      await state.loadMessages('child')
+      if (kind === 'history') {
+        gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce({ messages: [{ id: 'older', role: 'user', text: 'question', turnId: 'older-turn', turnIndex: 0 }], hasMoreOlder: false, turnIndexByTurnId: { 'older-turn': 0 } })
+        await state.loadOlderMessages()
+      }
+    }
+    state.primeSelectedThread('thread-1')
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {}, subagents: [{ threadId: 'child', prompt: '', message: '', status: 'running' }] })
+    await state.loadMessages('thread-1')
+    const text = kind === 'oversized' ? 'a'.repeat(300_000) : 'abc'
+    state.prepareSubagentSnapshot('child')([
+      { ...reply, text },
+      { id: 'cmd', role: 'system', text: 'run', turnId: 'child-turn', turnIndex: 1, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'inProgress', aggregatedOutput: 'snapshot output', exitCode: null } },
+      { id: 'child-turn:plan', role: 'assistant', text: 'snapshot plan', turnId: 'child-turn', turnIndex: 1, messageType: 'plan' },
+    ])
+    emit({ method: 'item/agentMessage/delta', params: { threadId: 'child', turnId: 'child-turn', itemId: 'reply', delta: 'd' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { threadId: 'child', turnId: 'child-turn', itemId: 'cmd', delta: 'd' } })
+    emit({ method: 'item/plan/delta', params: { threadId: 'child', turnId: 'child-turn', delta: 'd' } })
+    vi.advanceTimersByTime(50)
+    const visible = state.getCurrentTurnMessagesForThread('child')
+    expect(visible.find(message => message.id === 'reply')?.text).toBe(`${text}d`)
+    expect(visible.find(message => message.id === 'cmd')?.commandExecution?.aggregatedOutput).toBe('snapshot outputd')
+    expect(visible.find(message => message.id === 'child-turn:plan')?.text).toBe('snapshot pland')
+    expect(visible).toHaveLength(3)
+    if (kind === 'history') {
+      state.primeSelectedThread('child')
+      expect(state.selectedThreadIsHistoryWindow.value).toBe(true)
+      expect(state.messages.value.find(message => message.id === 'reply')?.text).toBe('a')
+    }
+    state.stopPolling()
+  })
+
+  it('protects child deltas and completed replacement text received during an independent snapshot read', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'a', turnId: 'turn', turnIndex: 0, messageType: 'agentMessage' }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [reply], inProgress: true, activeTurnId: 'turn', hasMoreOlder: false, turnIndexByTurnId: { turn: 0 } })
+    await state.loadMessages('thread-1')
+    const accept = state.prepareSubagentSnapshot('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'turn' }
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: 'd' } })
+    accept([reply])
+    expect(state.messages.value[0]?.text).toBe('ad')
+    const acceptCompleted = state.prepareSubagentSnapshot('thread-1')
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'replacement' } } })
+    acceptCompleted([reply])
+    expect(state.messages.value[0]?.text).toBe('replacement')
+    state.stopPolling()
+  })
+
+  it('rejects a child snapshot after a new lifecycle starts', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const accept = state.prepareSubagentSnapshot('thread-1')
+    emit({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'new-turn' } } })
+    emit({ method: 'item/completed', params: { threadId: 'thread-1', turnId: 'new-turn', item: { id: 'new', type: 'agentMessage', text: 'new body' } } })
+    accept([{ id: 'old', role: 'assistant', text: 'old body', turnId: 'old-turn', turnIndex: 0 }])
+    expect(state.getCurrentTurnMessagesForThread('thread-1').map(message => message.id)).toEqual(['new'])
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking')
+    state.stopPolling()
+  })
+
+  it('does not shorten a cached child prefix or command tail when the independent snapshot is stale before the read', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('child')
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'abc', turnId: 'turn', turnIndex: 0, messageType: 'agentMessage' }
+    const command: UiMessage = { id: 'cmd', role: 'system', text: 'run', turnId: 'turn', turnIndex: 0, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'completed', aggregatedOutput: 'full output', outputTotalLength: 100, exitCode: 0 } }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ model: '', modelProvider: '', messages: [reply, command], inProgress: true, activeTurnId: 'turn', hasMoreOlder: false, turnIndexByTurnId: { turn: 0 } })
+    await state.loadMessages('child')
+    state.prepareSubagentSnapshot('child')([
+      { ...reply, text: 'a' },
+      { ...command, commandExecution: { ...command.commandExecution!, status: 'inProgress', aggregatedOutput: 'old', outputTotalLength: 3, exitCode: null } },
+    ])
+    expect(state.getCurrentTurnMessagesForThread('child').find(message => message.id === 'reply')?.text).toBe('abc')
+    expect(state.getCurrentTurnMessagesForThread('child').find(message => message.id === 'cmd')?.commandExecution)
+      .toMatchObject({ aggregatedOutput: 'full output', outputTotalLength: 100, status: 'completed', exitCode: 0 })
+    state.stopPolling()
+  })
+
   it.each(['detail', 'latest'] as const)('releases absorbed live rows that the %s snapshot budget discards', async (kind) => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     const messages: UiMessage[] = ['A', 'C'].map((id, turnIndex) => ({

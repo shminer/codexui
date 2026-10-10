@@ -2467,23 +2467,80 @@ export function useDesktopState() {
     return insertTurnSummaryMessages(combined, summaries, inHistoryWindow ? undefined : current)
   }
   const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
-  function getLiveMessagesForThread(threadId: string): UiMessage[] {
-    const rows = [
+  function getAllLiveMessagesForThread(threadId: string): UiMessage[] {
+    return [
       ...(livePlanMessagesByThreadId.value[threadId] ?? []),
       ...(liveCommandsByThreadId.value[threadId] ?? []),
       ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
       ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
     ]
+  }
+  function getLiveMessagesForThread(threadId: string): UiMessage[] {
+    const rows = getAllLiveMessagesForThread(threadId)
     const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || rows.at(-1)?.turnId
     return rows.filter((message) => !message.turnId || message.turnId === turnId)
   }
   function getCurrentTurnMessagesForThread(threadId: string): UiMessage[] {
     const live = getLiveMessagesForThread(threadId)
-    const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || live.at(-1)?.turnId
+    const body = persistedMessagesByThreadId.value[threadId] ?? []
+    const turnId = activeTurnIdByThreadId.value[threadId] || turnSummaryByThreadId.value[threadId]?.turnId || live.at(-1)?.turnId || body.at(-1)?.turnId
     const persisted = turnId
-      ? (persistedMessagesByThreadId.value[threadId] ?? []).filter((message) => message.turnId === turnId)
+      ? body.filter((message) => message.turnId === turnId)
       : []
     return [...new Map([...persisted, ...live].map((message) => [message.id, message])).values()]
+  }
+  function prepareSubagentSnapshot(threadId: string): (messages: UiMessage[]) => void {
+    // Rebase the notification prefix while protecting updates received during this read.
+    flushPendingContentDeltas(threadId)
+    const generation = threadBodyGeneration.get(threadId) ?? 0
+    const lifecycleRevision = threadLifecycleRevisionByThreadId.get(threadId) ?? 0
+    const initialLive = new Map(getAllLiveMessagesForThread(threadId).map((message) => [message.id, message]))
+    const initialBody = new Map([...(persistedMessagesByThreadId.value[threadId] ?? []), ...initialLive.values()].map((message) => [message.id, message]))
+    const nextTurnIndex = nextTurnIndexByThreadId.get(threadId) ?? 0
+    return (snapshot) => {
+      if (!snapshot.length || (threadBodyGeneration.get(threadId) ?? 0) !== generation
+        || (threadLifecycleRevisionByThreadId.get(threadId) ?? 0) !== lifecycleRevision
+        || isKnownSideConversationThread(threadId)) return
+      flushPendingContentDeltas(threadId)
+      const current = persistedMessagesByThreadId.value[threadId] ?? []
+      const live = getAllLiveMessagesForThread(threadId)
+      const indices = { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}) }
+      const protectedInitialBody = new Map(initialBody)
+      for (const message of snapshot) {
+        if (message.turnId && typeof message.turnIndex === 'number') indices[message.turnId] = message.turnIndex
+        const baseline = initialBody.get(message.id)
+        if (!baseline) continue
+        const fullerText = baseline.role === 'assistant' && message.role === 'assistant'
+          && baseline.text.length > message.text.length && baseline.text.startsWith(message.text)
+        let fullerCommand = false
+        if (baseline.commandExecution && message.commandExecution) {
+          const previous = baseline.commandExecution
+          const incoming = message.commandExecution
+          const previousCursor = previous.outputTotalLength ?? (previous.outputOffset ?? 0) + previous.aggregatedOutput.length
+          const incomingCursor = incoming.outputTotalLength ?? (incoming.outputOffset ?? 0) + incoming.aggregatedOutput.length
+          fullerCommand = previousCursor > incomingCursor
+            || (previousCursor === incomingCursor && previous.aggregatedOutput.length > incoming.aggregatedOutput.length)
+            || (previous.status !== 'inProgress' && incoming.status === 'inProgress')
+        }
+        if (fullerText || fullerCommand) protectedInitialBody.delete(message.id)
+      }
+      const merged = mergeMessageSnapshot([...current, ...live], snapshot, protectedInitialBody, live, initialLive, {
+        preserveMissing: true, turnIndexByTurnId: indices,
+        pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
+      })
+      if (!historyWindowThreadIds.has(threadId) && setPersistedMessagesForThread(threadId, merged)) {
+        removeSnapshotLiveMessages(threadId, merged)
+        return
+      }
+      const snapshotIds = new Set(snapshot.map((message) => message.id))
+      const turnId = activeTurnIdByThreadId.value[threadId] || snapshot.at(-1)?.turnId
+      const rebased = merged.filter((message) => snapshotIds.has(message.id) && (!turnId || message.turnId === turnId))
+      const commands = rebased.filter((message) => message.commandExecution).map((message) => ({ ...message, commandExecution: limitCommandExecutionOutput(message.commandExecution!) }))
+      liveCommandsByThreadId.value = { ...liveCommandsByThreadId.value, [threadId]: mergeMessages(liveCommandsByThreadId.value[threadId] ?? [], commands, { preserveMissing: true }) }
+      setLivePlanMessagesForThread(threadId, mergeMessages(livePlanMessagesByThreadId.value[threadId] ?? [], rebased.filter((message) => message.plan || message.messageType?.startsWith('plan')), { preserveMissing: true }))
+      setLiveFileChangeMessagesForThread(threadId, mergeMessages(liveFileChangeMessagesByThreadId.value[threadId] ?? [], rebased.filter((message) => message.messageType === 'fileChange'), { preserveMissing: true }))
+      setLiveAgentMessagesForThread(threadId, mergeMessages(liveAgentMessagesByThreadId.value[threadId] ?? [], rebased.filter((message) => message.role === 'assistant' && !message.commandExecution && !message.plan && !message.messageType?.startsWith('plan') && message.messageType !== 'fileChange'), { preserveMissing: true }))
+    }
   }
   const isSideConversationOpen = computed(() => sideConversationParentThreadId.value.length > 0)
   const sideConversationMessages = computed<UiMessage[]>(() => {
@@ -3950,17 +4007,26 @@ export function useDesktopState() {
 
   function clearCompletedTurnLiveState(threadId: string): void {
     if (!threadId) return
-    clearLivePlansForThread(threadId)
+    if (!historyWindowThreadIds.has(threadId)) clearLivePlansForThread(threadId)
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
     activeReasoningItemIdByThreadId.delete(threadId)
-    if (liveCommandsByThreadId.value[threadId]) {
-      liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-    }
+    clearCompletedLiveCommands(threadId)
     if (activeTurnIdByThreadId.value[threadId]) {
       activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
     }
     clearPendingTurnRequest(threadId)
+  }
+
+  function clearCompletedLiveCommands(threadId: string): void {
+    const current = liveCommandsByThreadId.value[threadId]
+    if (!current) return
+    const retainedIds = historyWindowThreadIds.has(threadId)
+      ? new Set((persistedMessagesByThreadId.value[threadId] ?? []).map((message) => message.id)) : null
+    const retained = retainedIds ? current.filter((message) => retainedIds.has(message.id)) : []
+    liveCommandsByThreadId.value = retained.length
+      ? { ...liveCommandsByThreadId.value, [threadId]: retained }
+      : omitKey(liveCommandsByThreadId.value, threadId)
   }
 
   function normalizePlanStepStatus(value: unknown): UiPlanStep['status'] {
@@ -5474,9 +5540,7 @@ export function useDesktopState() {
         shouldAutoScrollOnNextAgentEvent = false
       }
       clearLiveReasoningForThread(notificationThreadId)
-      if (liveCommandsByThreadId.value[notificationThreadId]) {
-        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, notificationThreadId)
-      }
+      clearCompletedLiveCommands(notificationThreadId)
     }
 
   }
@@ -6371,6 +6435,10 @@ export function useDesktopState() {
     const body = persistedMessagesByThreadId.value[threadId] ?? []
     const afterTurnId = threadWindowBoundsByThreadId.get(threadId)?.last ?? [...body].reverse().find((message) => message.turnId)?.turnId
     if (!afterTurnId) return loadLatestMessages(threadId)
+    flushPendingContentDeltas(threadId)
+    const initialLive = new Map(getAllLiveMessagesForThread(threadId).map((message) => [message.id, message]))
+    const initialBody = new Map([...body, ...initialLive.values()].map((message) => [message.id, message]))
+    const nextTurnIndex = nextTurnIndexByThreadId.get(threadId) ?? 0
     const generation = threadBodyGeneration.get(threadId) ?? 0
     loadingNewerMessagesByThreadId.value = { ...loadingNewerMessagesByThreadId.value, [threadId]: true }
     try {
@@ -6381,12 +6449,24 @@ export function useDesktopState() {
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
       extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'newer')
       const merged = mergeMessages(persistedMessagesByThreadId.value[threadId] ?? [], page.messages, { preserveMissing: true })
-      setPersistedMessagesForThread(threadId, merged, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))
-      if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) historyWindowThreadIds.delete(threadId)
+      if (!setPersistedMessagesForThread(threadId, merged, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))) return
+      if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) {
+        const retained = persistedMessagesByThreadId.value[threadId] ?? []
+        const live = getAllLiveMessagesForThread(threadId)
+        const pageIds = new Set(page.messages.map((message) => message.id))
+        // The exclusive newer cursor omits live updates to the anchor turn.
+        const pageInitialLive = new Map([...initialLive].filter(([id]) => pageIds.has(id)))
+        const latest = mergeMessageSnapshot([...retained, ...live], retained, initialBody, live, pageInitialLive, {
+          preserveMissing: true, turnIndexByTurnId: { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId },
+          pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
+        })
+        if (!setPersistedMessagesForThread(threadId, latest, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))) return
+        if (!hasMoreNewerMessagesByThreadId.value[threadId]) {
+          removeSnapshotLiveMessages(threadId, latest)
+          historyWindowThreadIds.delete(threadId)
+        }
+      }
       rebindLiveFileChangeTurnIndices(threadId)
-      removeLiveCommandsPersistedIn(threadId, page.messages)
-      removeLiveFileChangesPersistedIn(threadId, page.messages)
-      setLiveAgentMessagesForThread(threadId, removeRedundantLiveAgentMessages(liveAgentMessagesByThreadId.value[threadId] ?? [], page.messages))
     } catch (loadError) {
       if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
       error.value = loadError instanceof Error ? loadError.message : 'Failed to load newer messages'
@@ -8149,6 +8229,7 @@ export function useDesktopState() {
     getLiveOverlayForThread,
     getLiveMessagesForThread,
     getCurrentTurnMessagesForThread,
+    prepareSubagentSnapshot,
     sideConversationParentThreadId,
     sideConversationThreadId,
     sideConversationMessages,

@@ -24,16 +24,48 @@ function page(start: number, count: number): ThreadTurnPage {
   }
 }
 
-function windowFor(id = ref('thread')) {
+function windowFor(id = ref('thread'), prepareSnapshot?: Parameters<typeof useThreadHistoryWindow>[1]) {
   const scope = effectScope()
   scopes.push(scope)
-  return { id, state: scope.run(() => useThreadHistoryWindow(id))! }
+  return { id, state: scope.run(() => useThreadHistoryWindow(id, prepareSnapshot))! }
 }
 
 beforeEach(() => { vi.resetAllMocks() })
 afterEach(() => { for (const scope of scopes.splice(0)) scope.stop() })
 
 describe('read-only thread history windows', () => {
+  it('rebases only an accepted latest window, not older or partially retained pages', async () => {
+    const accept = vi.fn()
+    const prepare = vi.fn(() => accept)
+    api.latest.mockResolvedValue(page(80, 20))
+    api.older.mockResolvedValue(page(70, 10))
+    api.newer.mockResolvedValue(page(90, 10))
+    const { state } = windowFor(ref('thread'), prepare)
+    await state.loadLatest()
+    expect(prepare).toHaveBeenCalledWith('thread')
+    expect(accept).toHaveBeenCalledWith(state.detail.value?.messages)
+    await state.loadOlder()
+    expect(accept).toHaveBeenCalledTimes(1)
+    await state.loadNewer()
+    expect(accept).toHaveBeenCalledTimes(2)
+    expect(accept).toHaveBeenLastCalledWith(page(90, 10).messages)
+  })
+
+  it('does not apply an obsolete snapshot callback after changing the selected thread', async () => {
+    const accepts = new Map([['thread', vi.fn()], ['other-thread', vi.fn()]])
+    let finish!: (value: ThreadTurnPage) => void
+    api.latest.mockReturnValueOnce(new Promise<ThreadTurnPage>((resolve) => { finish = resolve }))
+    api.latest.mockResolvedValueOnce({ ...page(0, 1), hasMoreNewer: false })
+    const { id, state } = windowFor(ref('thread'), threadId => accepts.get(threadId)!)
+    const old = state.loadLatest()
+    id.value = 'other-thread'
+    await state.loadLatest()
+    finish(page(80, 20))
+    await old
+    expect(accepts.get('thread')).not.toHaveBeenCalled()
+    expect(accepts.get('other-thread')).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves the latest empty running turn behind while browsing older messages', async () => {
     const latest = { ...page(100, 0), messages: [], inProgress: true, activeTurnId: 'turn-100', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-100': 100 } }
     api.latest.mockResolvedValue(latest)
@@ -115,6 +147,7 @@ describe('read-only thread history windows', () => {
   })
 
   it('keeps newer paging available for unseen turns in an end page', async () => {
+    const accept = vi.fn()
     const oversizedText = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
     const endPage = (start: number) => {
       const result = { ...page(start, 30 - start), hasMoreNewer: false }
@@ -126,15 +159,17 @@ describe('read-only thread history windows', () => {
     api.newer.mockResolvedValueOnce(endPage(20))
     api.newer.mockResolvedValueOnce(endPage(25))
     api.newer.mockResolvedValueOnce(endPage(26))
-    const { state } = windowFor()
+    const { state } = windowFor(ref('thread'), () => accept)
     await state.loadLatest()
     await state.loadNewer()
     expect(state.detail.value?.hasMoreNewer).toBe(true)
+    expect(accept).not.toHaveBeenCalled()
     await state.loadNewer()
     expect(state.detail.value?.messages[0]?.turnId).toBe('turn-25')
     expect(state.detail.value?.hasMoreNewer).toBe(true)
     await state.loadNewer()
     expect(state.detail.value?.hasMoreNewer).toBe(false)
+    expect(accept).toHaveBeenCalledTimes(1)
     expect(state.detail.value?.messages.map((message) => message.turnId)).toEqual(['turn-26', 'turn-27', 'turn-28', 'turn-29'])
     expect(api.newer.mock.calls).toEqual([['thread', 'turn-19'], ['thread', 'turn-24'], ['thread', 'turn-25']])
   })

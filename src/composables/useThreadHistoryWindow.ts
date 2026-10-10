@@ -7,7 +7,10 @@ import {
   retainThreadMessageWindow,
 } from './threadMessageRetention'
 
-export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
+export function useThreadHistoryWindow(
+  threadId: Readonly<Ref<string>>,
+  prepareLatestSnapshot?: (threadId: string) => (messages: ThreadTurnPage['messages']) => void,
+) {
   const detail = ref<ThreadTurnPage | null>(null)
   const loading = ref(false)
   const loadingOlder = ref(false)
@@ -33,6 +36,7 @@ export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
     const anchor = direction === 'older' ? olderAnchor : newerAnchor
     if (direction !== 'latest' && !anchor) return
     const request = ++generation
+    const acceptSnapshot = prepareLatestSnapshot?.(id)
     lastDirection = direction
     loading.value = direction === 'latest'
     loadingOlder.value = direction === 'older'
@@ -72,6 +76,7 @@ export function useThreadHistoryWindow(threadId: Readonly<Ref<string>>) {
         startTurnIndex: indices[olderAnchor] ?? (direction === 'newer' ? previous!.startTurnIndex : page.startTurnIndex),
         nextTurnIndex: direction === 'latest' ? page.nextTurnIndex : Math.max(previous?.nextTurnIndex ?? 0, page.nextTurnIndex ?? 0),
       }
+      if (!detail.value.hasMoreNewer) acceptSnapshot?.(direction === 'latest' ? window.messages : page.messages)
     } catch (failure) {
       if (request !== generation || id !== threadId.value) return
       error.value = failure instanceof Error ? failure.message : 'Failed to load conversation history'

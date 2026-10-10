@@ -1105,6 +1105,7 @@
           :cwd="composerCwd"
           :live-overlay-for-thread="getLiveOverlayForThread"
           :live-messages-for-thread="getCurrentTurnMessagesForThread"
+          :prepare-snapshot-for-thread="prepareSubagentSnapshot"
         />
       </section>
     </template>
@@ -1422,6 +1423,7 @@ const {
   sideConversationCollaborationMode,
   getLiveOverlayForThread,
   getCurrentTurnMessagesForThread,
+  prepareSubagentSnapshot,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,

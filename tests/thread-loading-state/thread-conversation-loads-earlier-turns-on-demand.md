@@ -32,6 +32,8 @@ Thread conversation incremental older-turn loading.
 20. Repeat steps 16-19 in light and dark themes. Switch to another thread and reopen a retained history window; confirm one shared latest request completes before following resumes. A same-thread background wake must preserve history instead of jumping.
 21. Delay or fail body sync until completed replies A and C both remain in live state. Return a snapshot containing both, with each reply about 600,000 characters so the text budget only fits C. Confirm only C remains, A is not appended after C, and repeated silent/latest reads do not restore A from live state.
 22. Restore a running remote reply C without a local pending send. Load earlier A and keep both within the budget, then read A while C receives enough same-ID text to exceed the combined budget. Confirm the history body and reading anchor remain unchanged. Explicitly return to latest and confirm the full updated C appears once within the existing retention policy.
+23. Restore reply C, a running command and a plan in the newest turn, then load earlier A. Stream same-ID text, command output and plan deltas while reading A. Load newer history to its final boundary, including the case where the exclusive cursor returns no rows. Confirm each ID appears once with its updated content. Repeat with a nonempty final page and with an intermediate page that still has newer history; intermediate pages must keep the frozen reading content and hidden updates.
+24. While reading the history window from step 23, complete the restored command and its turn. Allow an idle background sync before loading the final newer page. Confirm the old reading row remains unchanged until history mode ends, then displays the completed output/status/exit code once. Command cleanup must retain only updates to command IDs still in the reading window.
 
 #### Expected Results
 - Initial thread open remains bounded to the latest turn page.
@@ -46,6 +48,10 @@ Thread conversation incremental older-turn loading.
 - Snapshot restoration follows authoritative server turn indices and item order. Locally newer same-ID content survives delayed responses without duplicate rows or text-based sorting; older/newer paging continues to use its original direction.
 - Restored command output remains limited to the 64 Ki character tail with total length/offset metadata. Reply and command deltas retain the existing 50 ms batch interval after restoration.
 - Delayed idle snapshots do not clear a newer lifecycle or pending send. Explicit thread reopening restores latest, while background refresh and same-thread wakes preserve an active history window.
+- At the final newer boundary, hidden updates are merged into the retained body before history mode ends. Budget trimming that leaves newer turns undisplayed keeps history mode active. Completed anchor-command updates survive idle sync until this merge.
+
+#### Verification Boundary
+- Steps 23-24 have new mock regression cases, including empty/nonempty final pages, intermediate-page isolation and command completion across idle sync. These cases have not been executed in this repair session; only no-emit type and diff checks are permitted.
 
 #### Rollback/Cleanup
 - Closing the preview or switching threads releases disposable body caches; reopening reloads saved history. No source conversation is removed.

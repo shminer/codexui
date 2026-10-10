@@ -185,6 +185,7 @@ const props = defineProps<{
   cwd: string
   liveOverlayForThread: (threadId: string) => UiLiveOverlay | null
   liveMessagesForThread: (threadId: string) => UiMessage[]
+  prepareSnapshotForThread: (threadId: string) => (messages: UiMessage[]) => void
 }>()
 
 const DESKTOP_PANEL_WIDTH_KEY = 'codex-web-local.subagent-panel-width.v1'
@@ -212,7 +213,7 @@ const {
   loading: agentWindowLoading,
   loadLatest: loadAgentLatestMessages, loadOlder: loadAgentOlderMessages,
   loadNewer: loadAgentNewerMessages, reset: resetAgentWindow, retry: retryAgentHistory,
-} = useThreadHistoryWindow(selectedThreadId)
+} = useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)
 let detailRequestId = 0
 let historyRequestId = 0
 const historyAgents = ref<UiSubagent[]>([])

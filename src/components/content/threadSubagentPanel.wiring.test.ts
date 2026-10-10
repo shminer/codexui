@@ -11,6 +11,8 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toContain('props.liveMessagesForThread(selectedAgent.value.threadId)')
     expect(source).toContain('mergeCurrentSubagentMessages(detail.messages, live)')
     expect(app).toContain(':live-messages-for-thread="getCurrentTurnMessagesForThread"')
+    expect(app).toContain(':prepare-snapshot-for-thread="prepareSubagentSnapshot"')
+    expect(source).toContain('useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)')
   })
   it('keeps the desktop agent sidebar resizable, collapsible, and persisted', async () => {
     const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
@@ -64,7 +66,7 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toContain('const selectedAgent = computed(() => allAgents.value.find(')
     expect(source).toContain('getThreadCollaborationPage(props.parentThreadId, historyCursor.value)')
     expect(source).toContain('!loadingOlder.value && !loadingNewer.value && !agentWindowLoading.value')
-    expect(source).toContain('useThreadHistoryWindow(selectedThreadId)')
+    expect(source).toContain('useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)')
     expect(source).not.toContain('void selectAgent(threadId)')
     expect(source).toContain('<Teleport v-if="isMobile" to="#thread-subagent-header-target">')
     expect(source).toContain('class="subagent-header-trigger"')
