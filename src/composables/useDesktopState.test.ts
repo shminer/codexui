@@ -4456,6 +4456,61 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
+  it.each([false, true])('rebases intermediate newer-page live prefixes and protects updates during the read=%s', async (updateDuringRead) => {
+    vi.useFakeTimers()
+    const { state, emit } = await runningHistoryState()
+    const params = { threadId: 'thread-1', turnId: 'turn-R' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-R' } } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: 'a' } })
+    emit({ method: 'item/started', params: { ...params, item: { id: 'cmd-R', type: 'commandExecution', command: 'run' } } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd-R', delta: 'a' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'a' } })
+    vi.advanceTimersByTime(50)
+    let finish!: (value: unknown) => void
+    gatewayMocks.getNewerThreadMessages.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const loading = state.loadNewerMessages()
+    if (updateDuringRead) {
+      emit({ method: 'item/completed', params: { ...params, item: { id: 'R', type: 'agentMessage', text: 'replacement' } } })
+      emit({ method: 'item/completed', params: { ...params, item: { id: 'cmd-R', type: 'commandExecution', command: 'run', status: 'completed', aggregatedOutput: 'finished', exitCode: 0 } } })
+      emit({ method: 'item/plan/delta', params: { ...params, delta: 'z' } })
+    }
+    finish({
+      ...page(2, 1, true), turnIndexByTurnId: { 'turn-R': 2 },
+      messages: [
+        { id: 'R', role: 'assistant', text: 'abc', turnId: 'turn-R', turnIndex: 2, messageType: 'agentMessage' },
+        { id: 'cmd-R', role: 'system', text: 'run', turnId: 'turn-R', turnIndex: 2, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'inProgress', aggregatedOutput: 'abc', exitCode: null } },
+        { id: 'turn-R:plan', role: 'assistant', text: 'abc', turnId: 'turn-R', turnIndex: 2, messageType: 'plan' },
+      ],
+    })
+    await loading
+    const replyText = updateDuringRead ? 'replacement' : 'abc'
+    const output = updateDuringRead ? 'finished' : 'abc'
+    const planText = updateDuringRead ? 'az' : 'abc'
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(true)
+    expect(state.messages.value.find(message => message.id === 'R')?.text).toBe(replyText)
+    expect(state.getLiveMessagesForThread('thread-1').find(message => message.id === 'R')?.text).toBe(replyText)
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: 'd' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd-R', delta: 'd' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'd' } })
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value.find(message => message.id === 'R')?.text).toBe(replyText)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(3, 0))
+    await state.loadNewerMessages()
+    expect(gatewayMocks.getNewerThreadMessages.mock.calls.slice(-2)).toEqual([
+      ['thread-1', 'turn-C'], ['thread-1', 'turn-R'],
+    ])
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
+    const rows = state.messages.value
+    expect(rows.find(message => message.id === 'R')?.text).toBe(`${replyText}d`)
+    expect(rows.find(message => message.id === 'cmd-R')?.commandExecution).toMatchObject({
+      aggregatedOutput: `${output}d`, status: updateDuringRead ? 'completed' : 'inProgress', exitCode: updateDuringRead ? 0 : null,
+    })
+    expect(rows.find(message => message.id === 'turn-R:plan')?.text).toBe(`${planText}d`)
+    expect(rows.map(message => message.id)).toEqual(['A', 'C', 'cmd', 'turn-C:plan', 'R', 'cmd-R', 'turn-R:plan'])
+    expect(state.getLiveMessagesForThread('thread-1')).toEqual([])
+    state.stopPolling()
+  })
+
   it.each(['cached', 'uncached', 'history', 'oversized'] as const)('rebases a %s child from its independent snapshot before applying another delta', async (kind) => {
     vi.useFakeTimers()
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('child', '/tmp/project')])

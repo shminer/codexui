@@ -6448,12 +6448,30 @@ export function useDesktopState() {
       hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: page.hasMoreNewer === true }
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
       extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'newer')
-      const merged = mergeMessages(persistedMessagesByThreadId.value[threadId] ?? [], page.messages, { preserveMissing: true })
+      const pageIds = new Set(page.messages.map((message) => message.id))
+      const current = persistedMessagesByThreadId.value[threadId] ?? []
+      const pageLive = getAllLiveMessagesForThread(threadId).filter((message) => pageIds.has(message.id))
+      const pageMessages = mergeMessageSnapshot([...current.filter((message) => pageIds.has(message.id)), ...pageLive], page.messages,
+        initialBody, pageLive, initialLive, {
+          turnIndexByTurnId: { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId },
+          pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
+        })
+      const merged = mergeMessages(current, pageMessages, { preserveMissing: true })
       if (!setPersistedMessagesForThread(threadId, merged, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))) return
+      // Rebase covered live rows even on intermediate pages; later deltas prefer live.
+      const rebasedById = new Map(pageMessages.map((message) => [message.id, message]))
+      for (const state of [livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]) {
+        const previous = state.value[threadId] ?? []
+        const next = previous.map((message) => {
+          const rebased = rebasedById.get(message.id)
+          if (!rebased) return message
+          return rebased.commandExecution ? { ...rebased, commandExecution: limitCommandExecutionOutput(rebased.commandExecution) } : rebased
+        })
+        if (!areMessageArraysEqual(previous, next)) state.value = { ...state.value, [threadId]: next }
+      }
       if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) {
         const retained = persistedMessagesByThreadId.value[threadId] ?? []
         const live = getAllLiveMessagesForThread(threadId)
-        const pageIds = new Set(page.messages.map((message) => message.id))
         // The exclusive newer cursor omits live updates to the anchor turn.
         const pageInitialLive = new Map([...initialLive].filter(([id]) => pageIds.has(id)))
         const latest = mergeMessageSnapshot([...retained, ...live], retained, initialBody, live, pageInitialLive, {
