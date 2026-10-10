@@ -1,9 +1,14 @@
 export const DEFAULT_DESKTOP_PANEL_WIDTH = 480
 export const MIN_DESKTOP_PANEL_WIDTH = 280
 export const MAX_DESKTOP_PANEL_WIDTH = 960
+export const DESKTOP_PANEL_COLLAPSED_WIDTH = 44
 
 const MIN_DESKTOP_THREAD_SPACE = 332
 const ACTIVE_SUBAGENT_STATUSES = new Set(['pendingInit', 'running'])
+
+export function canExpandDesktopPanel(layoutWidth: number): boolean {
+  return layoutWidth >= MIN_DESKTOP_THREAD_SPACE + MIN_DESKTOP_PANEL_WIDTH
+}
 
 export function isActiveSubagentStatus(status: string | undefined): boolean {
   return ACTIVE_SUBAGENT_STATUSES.has(status ?? '')

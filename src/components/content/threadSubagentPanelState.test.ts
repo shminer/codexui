@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_DESKTOP_PANEL_WIDTH,
+  canExpandDesktopPanel,
+  DESKTOP_PANEL_COLLAPSED_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
   isActiveSubagentStatus,
@@ -28,6 +30,15 @@ describe('desktop subagent sidebar width', () => {
     expect(maximumDesktopPanelWidth(763)).toBe(431)
     expect(effectiveDesktopPanelWidth(960, 763)).toBe(431)
     expect(effectiveDesktopPanelWidth(480, 1440)).toBe(480)
+  })
+
+  it('only expands when the workspace leaves the minimum conversation width', () => {
+    expect(canExpandDesktopPanel(611)).toBe(false)
+    expect(canExpandDesktopPanel(612)).toBe(true)
+    expect(effectiveDesktopPanelWidth(960, 612)).toBe(280)
+    expect(376 - DESKTOP_PANEL_COLLAPSED_WIDTH).toBe(332)
+    expect(canExpandDesktopPanel(376)).toBe(false)
+    expect(effectiveDesktopPanelWidth(960, 1440)).toBe(960)
   })
 })
 

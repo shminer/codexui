@@ -1,136 +1,152 @@
 <template>
-  <Teleport to="#thread-subagent-header-target">
+  <Teleport v-if="isMobile" to="#thread-subagent-header-target">
     <button
-      v-if="parentThreadId && (!isMobile || !mobileSheetOpen)"
+      v-if="parentThreadId && !mobileSheetOpen"
       type="button"
       class="subagent-header-trigger"
       :aria-label="`Show ${allAgents.length} agents`"
       :title="`Show ${allAgents.length} agents`"
       @click="toggleSubagentPanel"
     >
-      <IconTablerLayoutSidebarFilled v-if="isMobile || desktopPanelCollapsed" class="subagent-header-trigger-icon" />
-      <IconTablerLayoutSidebar v-else class="subagent-header-trigger-icon" />
+      <IconTablerLayoutSidebarFilled class="subagent-header-trigger-icon" />
     </button>
   </Teleport>
 
   <Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">
     <div
-      v-if="allAgents.length > 0 || historyOpened"
+      v-if="parentThreadId && (!isMobile || allAgents.length > 0 || historyOpened)"
       ref="desktopHostRef"
       class="subagent-panel-host"
-      :class="{ 'is-desktop-collapsed': !isMobile && desktopPanelCollapsed }"
+      :class="{ 'is-desktop-collapsed': !isMobile && !desktopPanelExpanded }"
       :style="desktopHostStyle"
     >
-      <div
-        v-if="!isMobile && !desktopPanelCollapsed"
-        class="subagent-panel-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize agents sidebar"
-        tabindex="0"
-        :aria-valuemin="MIN_DESKTOP_PANEL_WIDTH"
-        :aria-valuemax="desktopPanelMaximum"
-        :aria-valuenow="desktopPanelRenderedWidth"
-        @pointerdown="onDesktopResizePointerDown"
-        @keydown="onDesktopResizerKeyDown"
-      />
+      <div v-if="!isMobile" class="subagent-desktop-toolbar">
+        <button
+          type="button"
+          class="subagent-header-trigger"
+          :aria-label="`Show ${allAgents.length} agents`"
+          :aria-expanded="desktopPanelExpanded"
+          :title="desktopPanelCanExpand ? `Show ${allAgents.length} agents` : 'Agents sidebar needs more space'"
+          :disabled="!desktopPanelCanExpand"
+          @click="toggleSubagentPanel"
+        >
+          <IconTablerLayoutSidebar v-if="desktopPanelExpanded" class="subagent-header-trigger-icon" />
+          <IconTablerLayoutSidebarFilled v-else class="subagent-header-trigger-icon" />
+        </button>
+      </div>
+      <div v-show="isMobile || desktopPanelExpanded" class="subagent-panel-body">
+        <div
+          v-if="!isMobile && desktopPanelExpanded"
+          class="subagent-panel-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize agents sidebar"
+          tabindex="0"
+          :aria-valuemin="MIN_DESKTOP_PANEL_WIDTH"
+          :aria-valuemax="desktopPanelMaximum"
+          :aria-valuenow="desktopPanelRenderedWidth"
+          @pointerdown="onDesktopResizePointerDown"
+          @keydown="onDesktopResizerKeyDown"
+        />
 
-      <aside
-        class="subagent-panel"
-        :class="{ 'is-mobile-open': isMobile && mobileSheetOpen }"
-        @click.self="closeMobileSheet"
-      >
-        <section class="subagent-panel-surface" @click.stop>
-          <div v-if="isMobile && mobileSheetOpen" class="subagent-sheet-handle" aria-hidden="true" />
-          <header class="subagent-panel-header">
-            <button
-              v-if="selectedAgent"
-              type="button"
-              class="subagent-icon-button"
-              aria-label="Back to agents"
-              title="Back to agents"
-              @click="closeDetail"
-            >
-              <IconTablerChevronLeft />
-            </button>
-            <div class="subagent-header-copy">
-              <p class="subagent-panel-title">{{ selectedAgent ? `Agent ${selectedAgentIndex + 1}` : 'Agents' }}</p>
-              <p v-if="selectedAgent" class="subagent-detail-status" :data-status="selectedAgent.status">{{ selectedAgent.status }}</p>
-            </div>
-            <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ allAgents.length }}</span>
-            <button
-              v-if="isMobile && mobileSheetOpen"
-              type="button"
-              class="subagent-icon-button"
-              aria-label="Close agents"
-              title="Close agents"
-              @click="mobileSheetOpen = false"
-            >
-              <IconTablerX />
-            </button>
-          </header>
-
-          <div v-if="!selectedAgent" class="thread-feature-modes" role="group" aria-label="Agent status">
-            <button type="button" :aria-pressed="agentView === 'running'" @click="agentView = 'running'">Running ({{ activeAgents.length }})</button>
-            <button type="button" :aria-pressed="agentView === 'history'" @click="agentView = 'history'; if (!historyStarted) loadHistory()">History ({{ allAgents.length - activeAgents.length }})</button>
-          </div>
-          <div v-if="!selectedAgent" class="subagent-list">
-            <button
-              v-for="(agent, index) in visibleAgents"
-              :key="agent.threadId"
-              type="button"
-              class="subagent-row"
-              :data-status="agent.status"
-              @click="selectAgent(agent.threadId)"
-            >
-              <span class="subagent-row-title">
-                <span class="subagent-status-dot" :data-status="agent.status" />
-                <span>Agent {{ index + 1 }}</span>
-              </span>
-              <span class="subagent-row-status">{{ agent.status }}</span>
-              <span class="subagent-row-preview">{{ agent.message || agent.prompt || 'No task details' }}</span>
-            </button>
-            <p v-if="!visibleAgents.length" class="thread-feature-status">No agents</p>
-            <p v-if="historyError" class="thread-feature-error" role="alert">{{ historyError }}</p>
-            <p v-if="historyUnsupported" class="thread-feature-status">Loaded collaboration only</p>
-            <button v-if="!historyComplete && !historyUnsupported" class="thread-feature-action" type="button" :disabled="historyLoading" @click="loadHistory">{{ historyLoading ? 'Loading...' : historyStarted ? 'Load older collaboration' : 'Load history' }}</button>
-            <button v-if="historyUnsupported" class="thread-feature-action" type="button" @click="historyUnsupported = false; loadHistory()">Retry</button>
-          </div>
-
-          <template v-else>
-            <p v-if="selectedAgent.prompt" class="subagent-detail-prompt">{{ selectedAgent.prompt }}</p>
-            <details v-if="selectedAgent.communications?.length" class="subagent-communications">
-              <summary>Collaboration ({{ selectedAgent.communications.length }})</summary>
-              <div v-for="event in selectedAgent.communications" :key="event.id" class="subagent-communication">
-                <strong>{{ event.tool }} · {{ event.status }}</strong>
-                <small>{{ event.senderThreadId }} -&gt; {{ event.receiverThreadIds.join(', ') }}</small>
-                <pre v-if="event.prompt">{{ event.prompt }}</pre>
-                <template v-for="(state, id) in event.agentsStates" :key="id"><small>{{ id }} · {{ state.status }}</small><pre v-if="state.message">{{ state.message }}</pre></template>
+        <aside
+          class="subagent-panel"
+          :class="{ 'is-mobile-open': isMobile && mobileSheetOpen }"
+          @click.self="closeMobileSheet"
+        >
+          <section class="subagent-panel-surface" @click.stop>
+            <div v-if="isMobile && mobileSheetOpen" class="subagent-sheet-handle" aria-hidden="true" />
+            <header class="subagent-panel-header">
+              <button
+                v-if="selectedAgent"
+                type="button"
+                class="subagent-icon-button"
+                aria-label="Back to agents"
+                title="Back to agents"
+                @click="closeDetail"
+              >
+                <IconTablerChevronLeft />
+              </button>
+              <div class="subagent-header-copy">
+                <p class="subagent-panel-title">{{ selectedAgent ? `Agent ${selectedAgentIndex + 1}` : 'Agents' }}</p>
+                <p v-if="selectedAgent" class="subagent-detail-status" :data-status="selectedAgent.status">{{ selectedAgent.status }}</p>
               </div>
-            </details>
-            <p v-if="loadingThreadId === selectedAgent.threadId" class="subagent-detail-loading">Loading agent thread...</p>
-            <p v-if="detailError" class="subagent-detail-error">{{ detailError }} <button type="button" @click="retryAgentWindow">Retry</button></p>
-            <ThreadConversation
-              v-if="selectedDetail"
-              class="subagent-conversation"
-              :messages="selectedMessages"
-              :pending-requests="[]"
-              :live-overlay="selectedLiveOverlay"
-              :is-loading="false"
-              :active-thread-id="selectedAgent.threadId"
-              :cwd="cwd"
-              :readonly="true"
-              :has-more-persisted-above="selectedDetail.hasMoreOlder"
-              :is-loading-persisted-above="loadingOlder"
-              :load-earlier-messages="loadAgentOlderMessages"
-              :has-more-persisted-below="selectedDetail.hasMoreNewer"
-              :is-loading-persisted-below="loadingNewer"
-              :load-later-messages="loadAgentNewerMessages"
-              :load-latest-messages="loadAgentLatestMessages"
-            />
-          </template>
-        </section>
-      </aside>
+              <span v-if="!selectedAgent && (!isMobile || !mobileSheetOpen)" class="subagent-panel-count">{{ allAgents.length }}</span>
+              <button
+                v-if="isMobile && mobileSheetOpen"
+                type="button"
+                class="subagent-icon-button"
+                aria-label="Close agents"
+                title="Close agents"
+                @click="mobileSheetOpen = false"
+              >
+                <IconTablerX />
+              </button>
+            </header>
+
+            <div v-if="!selectedAgent" class="thread-feature-modes" role="group" aria-label="Agent status">
+              <button type="button" :aria-pressed="agentView === 'running'" @click="agentView = 'running'">Running ({{ activeAgents.length }})</button>
+              <button type="button" :aria-pressed="agentView === 'history'" @click="agentView = 'history'; if (!historyStarted) loadHistory()">History ({{ allAgents.length - activeAgents.length }})</button>
+            </div>
+            <div v-if="!selectedAgent" class="subagent-list">
+              <button
+                v-for="(agent, index) in visibleAgents"
+                :key="agent.threadId"
+                type="button"
+                class="subagent-row"
+                :data-status="agent.status"
+                @click="selectAgent(agent.threadId)"
+              >
+                <span class="subagent-row-title">
+                  <span class="subagent-status-dot" :data-status="agent.status" />
+                  <span>Agent {{ index + 1 }}</span>
+                </span>
+                <span class="subagent-row-status">{{ agent.status }}</span>
+                <span class="subagent-row-preview">{{ agent.message || agent.prompt || 'No task details' }}</span>
+              </button>
+              <p v-if="!visibleAgents.length" class="thread-feature-status">No agents</p>
+              <p v-if="historyError" class="thread-feature-error" role="alert">{{ historyError }}</p>
+              <p v-if="historyUnsupported" class="thread-feature-status">Loaded collaboration only</p>
+              <button v-if="!historyComplete && !historyUnsupported" class="thread-feature-action" type="button" :disabled="historyLoading" @click="loadHistory">{{ historyLoading ? 'Loading...' : historyStarted ? 'Load older collaboration' : 'Load history' }}</button>
+              <button v-if="historyUnsupported" class="thread-feature-action" type="button" @click="historyUnsupported = false; loadHistory()">Retry</button>
+            </div>
+
+            <template v-else>
+              <p v-if="selectedAgent.prompt" class="subagent-detail-prompt">{{ selectedAgent.prompt }}</p>
+              <details v-if="selectedAgent.communications?.length" class="subagent-communications">
+                <summary>Collaboration ({{ selectedAgent.communications.length }})</summary>
+                <div v-for="event in selectedAgent.communications" :key="event.id" class="subagent-communication">
+                  <strong>{{ event.tool }} · {{ event.status }}</strong>
+                  <small>{{ event.senderThreadId }} -&gt; {{ event.receiverThreadIds.join(', ') }}</small>
+                  <pre v-if="event.prompt">{{ event.prompt }}</pre>
+                  <template v-for="(state, id) in event.agentsStates" :key="id"><small>{{ id }} · {{ state.status }}</small><pre v-if="state.message">{{ state.message }}</pre></template>
+                </div>
+              </details>
+              <p v-if="loadingThreadId === selectedAgent.threadId" class="subagent-detail-loading">Loading agent thread...</p>
+              <p v-if="detailError" class="subagent-detail-error">{{ detailError }} <button type="button" @click="retryAgentWindow">Retry</button></p>
+              <ThreadConversation
+                v-if="selectedDetail"
+                class="subagent-conversation"
+                :messages="selectedMessages"
+                :pending-requests="[]"
+                :live-overlay="selectedLiveOverlay"
+                :is-loading="false"
+                :active-thread-id="selectedAgent.threadId"
+                :cwd="cwd"
+                :readonly="true"
+                :has-more-persisted-above="selectedDetail.hasMoreOlder"
+                :is-loading-persisted-above="loadingOlder"
+                :load-earlier-messages="loadAgentOlderMessages"
+                :has-more-persisted-below="selectedDetail.hasMoreNewer"
+                :is-history-window="selectedDetail.hasMoreNewer === true"
+                :is-loading-persisted-below="loadingNewer"
+                :load-later-messages="loadAgentNewerMessages"
+                :load-latest-messages="loadAgentLatestMessages"
+              />
+            </template>
+          </section>
+        </aside>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -150,6 +166,8 @@ import IconTablerX from '../icons/IconTablerX.vue'
 import ThreadConversation from './ThreadConversation.vue'
 import {
   clampDesktopPanelWidth,
+  canExpandDesktopPanel,
+  DESKTOP_PANEL_COLLAPSED_WIDTH,
   DEFAULT_DESKTOP_PANEL_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
@@ -228,8 +246,10 @@ const selectedMessages = computed(() => {
 })
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
+const desktopPanelCanExpand = computed(() => canExpandDesktopPanel(desktopLayoutWidth.value))
+const desktopPanelExpanded = computed(() => desktopPanelCanExpand.value && !desktopPanelCollapsed.value && (allAgents.value.length > 0 || historyOpened.value))
 const desktopHostStyle = computed<Record<string, string>>(() => ({
-  '--subagent-panel-width': `${desktopPanelRenderedWidth.value}px`,
+  '--subagent-panel-width': `${desktopPanelExpanded.value ? desktopPanelRenderedWidth.value : DESKTOP_PANEL_COLLAPSED_WIDTH}px`,
 }))
 
 function loadDesktopPanelWidth(): number {
@@ -256,11 +276,15 @@ function toggleDesktopPanel(): void {
 }
 
 function toggleSubagentPanel(): void {
+  if (!isMobile.value && !desktopPanelCanExpand.value) return
   const openingEmptyPanel = !allAgents.value.length && !historyOpened.value
-  if (openingEmptyPanel) { historyOpened.value = true; desktopPanelCollapsed.value = false }
+  if (openingEmptyPanel) {
+    historyOpened.value = true
+    if (!isMobile.value && desktopPanelCollapsed.value) toggleDesktopPanel()
+  }
   if (isMobile.value) mobileSheetOpen.value = true
   else if (!openingEmptyPanel) toggleDesktopPanel()
-  if ((isMobile.value || !desktopPanelCollapsed.value) && !historyStarted.value) void loadHistory()
+  if ((isMobile.value || desktopPanelExpanded.value) && !historyStarted.value) void loadHistory()
 }
 
 async function loadHistory(): Promise<void> {
@@ -288,7 +312,7 @@ function closeMobileSheet(): void {
 }
 
 function readDesktopLayoutWidth(): number {
-  const measuredWidth = desktopHostRef.value?.parentElement?.getBoundingClientRect().width ?? 0
+  const measuredWidth = desktopHostRef.value?.closest<HTMLElement>('.content-root')?.getBoundingClientRect().width ?? 0
   if (measuredWidth > 0) desktopLayoutWidth.value = measuredWidth
   return measuredWidth > 0 ? measuredWidth : desktopLayoutWidth.value
 }
@@ -301,7 +325,7 @@ function onDesktopLayoutResize(entries: ResizeObserverEntry[]): void {
 function observeDesktopLayout(host: HTMLElement | null): void {
   desktopLayoutResizeObserver?.disconnect()
   desktopLayoutResizeObserver = null
-  const layout = host?.parentElement
+  const layout = isMobile.value ? null : host?.closest<HTMLElement>('.content-root')
   if (!layout) return
 
   const width = layout.getBoundingClientRect().width
@@ -463,8 +487,8 @@ watch(() => props.parentThreadId, () => {
   agentView.value = 'running'
 })
 
-watch(desktopHostRef, (host) => {
-  observeDesktopLayout(host)
+watch(() => [desktopHostRef.value, isMobile.value, mobileSheetOpen.value], () => {
+  observeDesktopLayout(desktopHostRef.value)
 }, { flush: 'post' })
 
 watch(isMobile, (mobile) => {
@@ -491,12 +515,21 @@ onBeforeUnmount(() => {
   @apply hidden min-h-0 min-w-0 flex-1 overflow-hidden rounded-md border border-slate-200 bg-white;
 }
 
+.subagent-desktop-toolbar {
+  @apply flex h-14 shrink-0 items-start justify-end;
+  padding: 16px 12px 0 5px;
+}
+
+.subagent-panel-body {
+  @apply flex min-h-0 min-w-0 flex-1;
+}
+
 .subagent-panel-surface {
   @apply flex min-h-0 min-w-0 w-full flex-1 flex-col;
 }
 
 .subagent-header-trigger {
-  @apply inline-flex h-6.75 w-6.75 shrink-0 items-center justify-center rounded-md border border-transparent bg-transparent text-zinc-600 transition hover:border-zinc-200 hover:bg-zinc-50;
+  @apply inline-flex h-6.75 w-6.75 shrink-0 items-center justify-center rounded-md border border-transparent bg-transparent text-zinc-600 transition hover:border-zinc-200 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .subagent-header-trigger-icon,
@@ -615,19 +648,12 @@ onBeforeUnmount(() => {
 
 @media (min-width: 768px) {
   .subagent-panel-host {
-    @apply relative flex min-h-0 shrink-0;
-    width: min(var(--subagent-panel-width, 480px), calc(100% - 20.75rem));
-    min-width: 17.5rem;
+    @apply relative flex min-h-0 min-w-0 shrink-0 flex-col;
+    width: var(--subagent-panel-width, 44px);
   }
 
-  .subagent-panel-host.is-desktop-collapsed {
-    width: 0;
-    min-width: 0;
-    margin-left: -0.75rem;
-  }
-
-  .subagent-panel-host.is-desktop-collapsed .subagent-panel {
-    @apply hidden;
+  .subagent-panel-body {
+    padding: 4px 12px 16px 0;
   }
 
   .subagent-panel {
@@ -660,6 +686,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .subagent-panel-host {
+    display: contents;
+  }
+
+  .subagent-panel-body {
     display: contents;
   }
 

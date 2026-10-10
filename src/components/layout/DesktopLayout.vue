@@ -11,7 +11,7 @@
     </Teleport>
 
     <template v-if="!isMobile">
-      <aside v-if="!isSidebarCollapsed" class="desktop-sidebar">
+      <aside v-if="!isSidebarCollapsed" ref="desktopSidebarRef" class="desktop-sidebar">
         <slot name="sidebar" />
       </aside>
       <button
@@ -36,9 +36,11 @@ import { useMobile } from '../../composables/useMobile'
 const props = withDefaults(
   defineProps<{
     isSidebarCollapsed?: boolean
+    minMainWidth?: number
   }>(),
   {
     isSidebarCollapsed: false,
+    minMainWidth: 0,
   },
 )
 
@@ -66,6 +68,7 @@ function loadSidebarWidth(): number {
 }
 
 const sidebarWidth = ref(loadSidebarWidth())
+const desktopSidebarRef = ref<HTMLElement | null>(null)
 
 const layoutStyle = computed(() => {
   if (isMobile.value || props.isSidebarCollapsed) {
@@ -75,7 +78,9 @@ const layoutStyle = computed(() => {
     }
   }
   return {
-    '--sidebar-width': `${sidebarWidth.value}px`,
+    '--sidebar-width': props.minMainWidth > 0
+      ? `min(${sidebarWidth.value}px, max(${MIN_SIDEBAR_WIDTH}px, calc(100% - ${props.minMainWidth}px - 1px)))`
+      : `${sidebarWidth.value}px`,
     '--layout-columns': 'var(--sidebar-width) 1px minmax(0, 1fr)',
   }
 })
@@ -88,7 +93,7 @@ function saveSidebarWidth(value: number): void {
 function onResizeHandleMouseDown(event: MouseEvent): void {
   event.preventDefault()
   const startX = event.clientX
-  const startWidth = sidebarWidth.value
+  const startWidth = desktopSidebarRef.value?.getBoundingClientRect().width ?? sidebarWidth.value
 
   const onMouseMove = (moveEvent: MouseEvent) => {
     const delta = moveEvent.clientX - startX

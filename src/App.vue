@@ -1,5 +1,5 @@
 <template>
-  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed" @close-sidebar="setSidebarCollapsed(true)">
+  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed" :min-main-width="showThreadSubagentPanel ? 376 : 0" @close-sidebar="setSidebarCollapsed(true)">
     <template #sidebar>
       <section class="sidebar-root">
         <div
@@ -527,6 +527,7 @@
         }"
         :style="contentStyle"
       >
+        <div class="content-main-column">
         <span v-if="isVirtualKeyboardOpen" class="content-keyboard-spacer" aria-hidden="true" />
         <ContentHeader :title="contentTitle" :accent="isSkillsRoute || isAutomationsRoute">
           <template #leading>
@@ -588,7 +589,7 @@
               @load-commit-files="loadThreadCommitFiles"
               @open-commit-file="onOpenContentHeaderCommitFile"
             />
-            <span id="thread-subagent-header-target" class="content-header-subagent-target" />
+            <span v-if="isMobile" id="thread-subagent-header-target" class="content-header-subagent-target" />
           </template>
         </ContentHeader>
 
@@ -997,6 +998,7 @@
                       :is-loading-persisted-above="isLoadingOlderMessages"
                       :load-earlier-messages="loadOlderMessages"
                       :has-more-persisted-below="hasMoreNewerMessages"
+                      :is-history-window="selectedThreadIsHistoryWindow"
                       :is-loading-persisted-below="isLoadingNewerMessages"
                       :load-later-messages="loadNewerMessages"
                       :load-latest-messages="loadLatestMessages"
@@ -1006,13 +1008,6 @@
                       @reference-resource="onReferenceResource"
                       @respond-server-request="onRespondServerRequest" />
                   </div>
-                  <ThreadSubagentPanel
-                    :parent-thread-id="composerThreadContextId"
-                    :agents="selectedThreadSubagents"
-                    :cwd="composerCwd"
-                    :live-overlay-for-thread="getLiveOverlayForThread"
-                    :live-messages-for-thread="getLiveMessagesForThread"
-                  />
                 </div>
 
                 <div class="composer-with-queue">
@@ -1102,6 +1097,15 @@
             </div>
           </template>
         </section>
+        </div>
+        <ThreadSubagentPanel
+          v-if="showThreadSubagentPanel"
+          :parent-thread-id="composerThreadContextId"
+          :agents="selectedThreadSubagents"
+          :cwd="composerCwd"
+          :live-overlay-for-thread="getLiveOverlayForThread"
+          :live-messages-for-thread="getLiveMessagesForThread"
+        />
       </section>
     </template>
   </DesktopLayout>
@@ -1116,6 +1120,7 @@
     :history-truncated="sideConversationHistoryTruncated"
     :has-more-older="sideConversationHasMoreOlder"
     :has-more-newer="sideConversationHasMoreNewer"
+    :is-history-window="sideConversationIsHistoryWindow"
     :loading-older="sideConversationLoadingOlder"
     :loading-newer="sideConversationLoadingNewer"
     :load-earlier-messages="loadOlderMessages"
@@ -1393,12 +1398,14 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedThreadSubagents,
+  selectedThreadIsHistoryWindow,
   selectedLiveOverlay,
   sideConversationThreadId,
   sideConversationMessages,
   sideConversationHistoryTruncated,
   sideConversationHasMoreOlder,
   sideConversationHasMoreNewer,
+  sideConversationIsHistoryWindow,
   sideConversationLoadingOlder,
   sideConversationLoadingNewer,
   sideConversationQueuedMessages,
@@ -1442,6 +1449,7 @@ const {
   isUpdatingSpeedMode,
   error: desktopError,
   refreshAll,
+  refreshAncillaryState,
   refreshSkills,
   selectThread,
   ensureThreadMessagesLoaded,
@@ -1743,6 +1751,8 @@ let isAccountStatePollInFlight = false
 let accountStateRequestEpoch = 0
 let externalCodexAuthAvailable = false
 let externalAuthImportAttempted = false
+let isStartupAuthRefreshPending = true
+let isAppDisposed = false
 let existingFolderBrowseRequestId = 0
 
 const routeThreadId = computed(() => {
@@ -1826,6 +1836,9 @@ const isTerminalKeyboardLayoutActive = computed(() => (
 const directoryCwd = computed(() => selectedThread.value?.cwd?.trim() ?? newThreadCwd.value.trim())
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
 const showThreadContextBadge = computed(() => !isHomeRoute.value && !isSkillsRoute.value && !isAutomationsRoute.value && selectedThreadId.value.trim().length > 0)
+const showThreadSubagentPanel = computed(() => (
+  route.name === 'thread' && !(isReviewPaneOpen.value && selectedThreadId.value && composerCwd.value)
+))
 const isAccountSwitchBlocked = computed(() =>
   isSendingMessage.value ||
   isInterruptingTurn.value ||
@@ -2164,7 +2177,6 @@ onMounted(() => {
   void refreshDefaultProjectName()
   void refreshTelegramConfig()
   void refreshTelegramStatus()
-  void loadFreeModeStatus()
   void refreshThreadTerminalStatus()
   void refreshTerminalQuickCommands()
 })
@@ -2180,6 +2192,7 @@ watch(visibleFeedbackErrors, (values, oldValues) => {
 })
 
 onUnmounted(() => {
+  isAppDisposed = true
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('keydown', onWindowKeyDown)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
@@ -2231,6 +2244,7 @@ watch(accounts, () => {
 }, { deep: true })
 
 watch(accountRateLimitSnapshots, () => {
+  if (isStartupAuthRefreshPending || isAppDisposed) return
   void maybeImportExternalCodexAuthAccount().then((imported) => {
     if (!imported) return
     void refreshAll({
@@ -4554,7 +4568,7 @@ async function clearFreeModeCustomKey(): Promise<void> {
   }
 }
 
-async function loadFreeModeStatus(): Promise<void> {
+async function loadFreeModeStatus(options: { deferRefresh?: boolean } = {}): Promise<boolean> {
   try {
     const previousProvider = selectedProvider.value
     const status = await getFreeModeStatus()
@@ -4580,6 +4594,7 @@ async function loadFreeModeStatus(): Promise<void> {
       externalAuthImportAttempted = false
     }
     const providerChanged = selectedProvider.value !== previousProvider
+    if (options.deferRefresh) return providerChanged
     if (providerChanged) {
       await refreshAll({
         includeSelectedThreadMessages: false,
@@ -4595,8 +4610,10 @@ async function loadFreeModeStatus(): Promise<void> {
         awaitAncillaryRefreshes: true,
       })
     }
+    return providerChanged
   } catch {
     // Ignore — free mode status unknown
+    return false
   }
 }
 
@@ -4651,25 +4668,54 @@ function onSelectCollaborationMode(mode: 'default' | 'plan'): void {
 }
 
 async function initialize(): Promise<void> {
-  await router.isReady()
+  try {
+    await router.isReady()
+    if (isAppDisposed) return
+    const initialThreadId = route.name === 'thread' ? routeThreadId.value : ''
+    primeSelectedThread(initialThreadId, { persist: Boolean(initialThreadId) })
 
-  if (route.name === 'thread' && routeThreadId.value) {
-    primeSelectedThread(routeThreadId.value)
-  } else if (route.name === 'home' || route.name === 'skills' || route.name === 'automations') {
-    primeSelectedThread('', { persist: false })
-  }
+    const accountsReady = loadAccountsState({ silent: true }).then(() => {
+      if (!isAppDisposed && initialThreadId && route.name === 'thread'
+        && routeThreadId.value === initialThreadId && selectedThreadId.value === initialThreadId) startPolling()
+    })
+    const providerReady = loadFreeModeStatus({ deferRefresh: true })
+    const threadsReady = refreshAll({
+      includeSelectedThreadMessages: false,
+      includeAncillaryRefreshes: false,
+    })
+    if (initialThreadId) {
+      void ensureThreadMessagesLoaded(initialThreadId).catch(() => {
+        // The conversation receives its loading error from useDesktopState.
+      })
+    }
+    const [, providerChanged] = await Promise.all([accountsReady, providerReady, threadsReady])
+    if (isAppDisposed) return
 
-  await loadAccountsState({ silent: true })
-  await refreshAll({
-    includeSelectedThreadMessages: false,
-  })
-  await applyLaunchProjectPathFromUrl()
-  hasInitialized.value = true
-  if (route.name === 'thread' && routeThreadId.value) {
-    void selectThread(routeThreadId.value)
+    await applyLaunchProjectPathFromUrl()
+    if (isAppDisposed) return
+    const currentThreadId = route.name === 'thread' ? routeThreadId.value : ''
+    primeSelectedThread(currentThreadId, { persist: Boolean(currentThreadId) })
+    if (currentThreadId && currentThreadId !== initialThreadId) {
+      void ensureThreadMessagesLoaded(currentThreadId).catch(() => {})
+    }
+    if (isAppDisposed) return
+    hasInitialized.value = true
+    syncThreadSelectionWithRoute()
+    startPolling()
+
+    await refreshAncillaryState({ providerChanged, includeProviderModels: true })
+    if (isAppDisposed) return
+    if (await maybeImportExternalCodexAuthAccount()) {
+      if (isAppDisposed) return
+      await refreshAll({
+        includeSelectedThreadMessages: false,
+        providerChanged: true,
+        awaitAncillaryRefreshes: true,
+      })
+    }
+  } finally {
+    isStartupAuthRefreshPending = false
   }
-  syncThreadSelectionWithRoute()
-  startPolling()
 }
 
 function syncThreadSelectionWithRoute(): void {
@@ -5001,6 +5047,20 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-hidden bg-white;
+}
+
+.content-main-column {
+  @apply relative flex flex-1 flex-col min-h-0 min-w-0;
+}
+
+@media (min-width: 768px) {
+  .content-root {
+    flex-direction: row;
+  }
+
+  .content-main-column :deep(.thread-composer:has(.thread-composer-input-wrap--expanded)) {
+    position: absolute;
+  }
 }
 
 .content-root.is-virtual-keyboard-open {
