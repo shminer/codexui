@@ -44,6 +44,19 @@ When switching providers, the model dropdown should only show models from the ne
 - A configuration-only model outside the visible catalog is not appended.
 - The selected upstream model remains valid after reload.
 
+### Saved Defaults And Existing Threads
+
+Prerequisites: save distinct model and Thinking defaults for two accounts on the same provider; keep an existing thread whose persisted model is absent from the latest catalog.
+
+1. Put a stale non-Codex model in the Codex new-chat provider slot and open a new chat.
+2. Switch accounts and providers, then reload each new-chat screen.
+3. Open the existing thread with the catalog-excluded model.
+4. Open a Zen thread while Codex is the runtime provider, then return to the new-chat screen.
+
+Expected: new-chat defaults are validated against their provider catalog; valid account/provider defaults outrank legacy global choices. Existing thread models remain selected even when absent from the catalog. Browsing a different provider does not overwrite the runtime provider's saved new-chat default or mix it into the current menu. Background refreshes still load the required external-provider catalog. Thinking defaults remain account/provider scoped.
+
+Cleanup: restore the original per-account selections and remove any temporary stale storage values.
+
 #### Rollback/Cleanup
 - Restore the prior `model` and `model_provider` values in `~/.codex/config.toml` if temporary values were used.
 

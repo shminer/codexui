@@ -2922,7 +2922,7 @@ export function useDesktopState() {
       const selectedThreadContextId = toThreadContextId(targetThreadId)
       let modelReasoningEfforts: Record<string, ReasoningEffort[]> | null = null
       const modelIds = await getAvailableModelIds({
-        includeProviderModels: isProviderBacked && options?.includeProviderModels !== false,
+        includeProviderModels: isProviderBacked,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
         onModelCatalog: (models) => {
@@ -2946,21 +2946,34 @@ export function useDesktopState() {
         ? normalizedConfiguredModelId
         : ''
       const isNewThreadContext = selectedThreadContextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT
-      const selectedModel = threadScopedModelId
-        || (isNewThreadContext ? providerScopedModelId : readModelIdForThread(targetThreadId))
-        || configuredModelId
-        || modelIds[0]
-        || ''
-      availableModelIds.value = selectedModel && !modelIds.includes(selectedModel)
-        ? [...modelIds, selectedModel]
-        : [...modelIds]
-      if (selectedModel) {
-        if (isNewThreadContext) {
-          setSelectedModelIdForThread(targetThreadId, selectedModel)
-        } else {
-          selectedModelId.value = readProviderCompatibleSelectedModel(selectedModel)
-          ensureAvailableReasoningEffort(selectedModelId.value, selectedReasoningEffort.value)
-        }
+      const catalogModelIds = new Set(modelIds)
+      const allowConfiguredFallback = isProviderBacked && !options?.providerChanged && Boolean(configuredModelId)
+      const validConfiguredModelId = catalogModelIds.has(configuredModelId) || allowConfiguredFallback
+        ? configuredModelId
+        : ''
+      const savedNewThreadModelId = catalogModelIds.has(providerScopedModelId)
+        ? providerScopedModelId
+        : targetProviderId === 'codex' && catalogModelIds.has(threadScopedModelId) ? threadScopedModelId : ''
+      const selectedModel = (isNewThreadContext ? savedNewThreadModelId : threadScopedModelId)
+        || validConfiguredModelId || modelIds[0] || ''
+      availableModelIds.value = selectedModel && !catalogModelIds.has(selectedModel)
+        ? [...modelIds, selectedModel] : [...modelIds]
+      if (isNewThreadContext) {
+        setSelectedModelIdForThread(targetThreadId, selectedModel)
+      } else {
+        selectedModelId.value = readProviderCompatibleSelectedModel(selectedModel)
+        ensureAvailableReasoningEffort(selectedModelId.value, selectedReasoningEffort.value)
+      }
+
+      const runtimeModelContextId = toProviderModelContextId(normalizedProviderId, accountId)
+      if (
+        targetProviderId !== normalizedProviderId && normalizedConfiguredModelId
+        && !normalizeStoredModelId(selectedModelIdByContext.value[runtimeModelContextId])
+      ) {
+        const nextModelMap = cloneStringKeyedRecord(selectedModelIdByContext.value)
+        nextModelMap[runtimeModelContextId] = normalizedConfiguredModelId
+        selectedModelIdByContext.value = nextModelMap
+        saveSelectedModelMap(nextModelMap)
       }
 
       const storedEffort = readSelectedReasoningEffort(

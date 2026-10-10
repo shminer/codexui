@@ -1628,12 +1628,16 @@ describe('turn completion lifecycle', () => {
         prompt: '',
         status: 'shutdown',
         message: '/root/agent-1',
+        messageSource: 'activity',
+        communications: [],
       },
       {
         threadId: 'agent-2',
         prompt: '',
-        status: 'pendingInit',
+        status: 'unknown',
         message: '/root/agent-2',
+        messageSource: 'activity',
+        communications: [],
       },
     ])
   })
@@ -3194,6 +3198,49 @@ describe('provider model selection', () => {
     expect(state.readModelIdForThread('')).toBe('gpt-5.6')
   })
 
+  it('prefers the account provider model over a valid legacy new-chat model', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        '__new-thread__': 'gpt-5.5',
+        '__new-thread-provider__::account-a::codex': 'gpt-5.6',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.6'])
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    expect(state.selectedModelId.value).toBe('gpt-5.6')
+    expect(state.readModelIdForThread('')).toBe('gpt-5.6')
+  })
+
+  it('keeps an existing thread model absent from the refreshed visible catalog', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({ 'existing-thread': 'persisted-model' }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    const state = useDesktopState()
+    state.primeSelectedThread('existing-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    expect(state.selectedModelId.value).toBe('persisted-model')
+    expect(state.readModelIdForThread('existing-thread')).toBe('persisted-model')
+    expect(state.availableModelIds.value).toEqual(['gpt-5.5', 'persisted-model'])
+  })
+
+  it.each([false, true])('limits configuration-only provider fallback when providerChanged is %s', async (providerChanged) => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'configured-only', providerId: 'custom', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['listed-model'])
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true, providerChanged })
+    expect(state.selectedModelId.value).toBe(providerChanged ? 'listed-model' : 'configured-only')
+    expect(state.availableModelIds.value).toEqual(providerChanged ? ['listed-model'] : ['listed-model', 'configured-only'])
+  })
+
   it('does not apply a new-chat Thinking default to an existing thread', async () => {
     installTestWindow({
       'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({
@@ -3265,9 +3312,12 @@ describe('provider model selection', () => {
     gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
     type ModelConfig = { model: string, providerId: string, reasoningEffort: 'high', speedMode: 'standard' }
     let resolveAccountA: (config: ModelConfig) => void = () => {}
+    let markAccountAStarted: () => void = () => {}
+    const accountAStarted = new Promise<void>((resolve) => { markAccountAStarted = resolve })
     gatewayMocks.getCurrentModelConfig
       .mockImplementationOnce(() => new Promise<ModelConfig>((resolve) => {
         resolveAccountA = resolve
+        markAccountAStarted()
       }))
       .mockResolvedValueOnce({
         model: 'gpt-5.6',
@@ -3280,7 +3330,7 @@ describe('provider model selection', () => {
     const state = useDesktopState()
     state.setActiveAccountStorageId('account-a')
     const accountARefresh = state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
-    await flushMicrotasks()
+    await accountAStarted
     state.setActiveAccountStorageId('account-b')
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     resolveAccountA({
@@ -3421,6 +3471,7 @@ describe('provider model selection', () => {
       includeProviderModels: true,
       requireProviderModels: true,
       providerId: 'opencode-zen',
+      onModelCatalog: expect.any(Function),
     })
     expect(state.availableModelIds.value).toEqual([
       'big-pickle',
@@ -3478,9 +3529,30 @@ describe('provider model selection', () => {
       includeProviderModels: true,
       requireProviderModels: true,
       providerId: 'opencode-zen',
+      onModelCatalog: expect.any(Function),
     })
     expect(state.availableModelIds.value).toEqual(['big-pickle', 'ring-2.6-1t-free'])
     expect(state.selectedModelId.value).toBe('big-pickle')
+  })
+
+  it('does not overwrite the runtime provider default while browsing a different provider thread', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::account-a::codex': 'gpt-5.6',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.4-mini', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['big-pickle'])
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'big-pickle', modelProvider: 'opencode-zen', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    state.primeSelectedThread('zen-thread')
+    await state.loadMessages('zen-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    expect(state.readModelIdForThread('')).toBe('gpt-5.6')
+    expect(state.selectedModelId.value).toBe('big-pickle')
+    expect(state.availableModelIds.value).toEqual(['big-pickle'])
   })
 
   it('captures the active provider when creating a new thread', async () => {

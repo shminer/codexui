@@ -14,6 +14,7 @@ export type UiSubagent = {
   prompt: string
   status: string
   message: string
+  messageSource?: 'activity' | 'summary'
   communications?: UiAgentCommunication[]
 }
 
@@ -29,11 +30,15 @@ export function mergeSubagents(previous: UiSubagent[], incoming: UiSubagent[]): 
   const agents = new Map(previous.map((agent) => [agent.threadId, agent]))
   for (const agent of incoming) {
     const existing = agents.get(agent.threadId)
+    const messageAgent = agent.message && (agent.messageSource !== 'activity' || !existing?.message)
+      ? agent
+      : existing?.message ? existing : agent
     agents.set(agent.threadId, {
       ...agent,
       prompt: existing?.prompt || agent.prompt,
       status: agent.status === 'unknown' ? existing?.status ?? agent.status : agent.status,
-      message: agent.communications?.length ? agent.message || existing?.message || '' : existing?.message || agent.message,
+      message: messageAgent.message,
+      messageSource: messageAgent.messageSource,
       communications: [...new Map([...(existing?.communications ?? []), ...(agent.communications ?? [])].map((event) => [event.id, event])).values()],
     })
   }
@@ -61,7 +66,11 @@ export function collectSubagents(entries: Array<{ item: unknown; turnId: string 
       const status = kind === 'started' || kind === 'resumed' ? 'running' : kind === 'interrupted' ? 'shutdown' : kind === 'completed' ? 'completed' : kind === 'failed' ? 'errored' : 'unknown'
       const agent = getAgent(threadId)
       if (status !== 'unknown') agent.status = status
-      if (!agent.message) agent.message = text(item.agentPath)
+      const agentPath = text(item.agentPath)
+      if (!agent.message && agentPath) {
+        agent.message = agentPath
+        agent.messageSource = 'activity'
+      }
       continue
     }
     if (item.type !== 'collabAgentToolCall' || !text(item.id)) continue
@@ -83,7 +92,10 @@ export function collectSubagents(entries: Array<{ item: unknown; turnId: string 
       const state = agentsStates[threadId]
       if (state?.status && state.status !== 'unknown') agent.status = state.status
       else if (agent.status === 'unknown' && communication.tool === 'spawnAgent' && receiverThreadIds.includes(threadId)) agent.status = 'pendingInit'
-      if (state?.message) agent.message = state.message
+      if (state?.message) {
+        agent.message = state.message
+        agent.messageSource = 'summary'
+      }
       communications.get(threadId)!.set(communication.id, communication)
     }
   }

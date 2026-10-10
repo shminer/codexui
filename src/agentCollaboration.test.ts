@@ -40,4 +40,34 @@ describe('agent collaboration history', () => {
     expect(mergeSubagents(latest, unknown)[0]?.status).toBe('completed')
     expect(unknown.map((agent) => agent.threadId)).toEqual(['a'])
   })
+
+  it('accepts a newer summary without communications and keeps its source with the selected body', () => {
+    const previous = [{ threadId: 'a', prompt: 'Task A', status: 'running', message: '/root/a', messageSource: 'activity' as const }]
+    const incoming = [{ threadId: 'a', prompt: '', status: 'completed', message: 'Gateway checked' }]
+    expect(mergeSubagents(previous, incoming)[0]).toMatchObject({ message: 'Gateway checked', messageSource: undefined, prompt: 'Task A' })
+    const activity = [{ ...previous[0]!, message: '/root/new-path', status: 'unknown' }]
+    expect(mergeSubagents(incoming, activity)[0]).toMatchObject({ message: 'Gateway checked', messageSource: undefined, status: 'completed' })
+  })
+
+  it('retains summaries across activity and empty messages while preserving missing agents', () => {
+    const previous = collectSubagents([{ item: completed, turnId: 'new' }], 'parent')
+    const activity = collectSubagents([{ item: { type: 'subAgentActivity', agentThreadId: 'a', kind: 'interacted', agentPath: '/root/a' }, turnId: 'new' }], 'parent')
+    expect(mergeSubagents(previous, activity)[0]).toMatchObject({ message: 'Result A', messageSource: 'summary', status: 'completed' })
+    expect(mergeSubagents(previous, [{ threadId: 'a', prompt: '', status: 'unknown', message: '' }])[0]).toMatchObject({ message: 'Result A', messageSource: 'summary' })
+    expect(mergeSubagents(previous, [])).toEqual(previous)
+    expect(mergeSubagents([{ threadId: 'a', prompt: '', status: 'unknown', message: '' }], activity)[0]).toMatchObject({ message: '/root/a', messageSource: 'activity' })
+  })
+
+  it('keeps summaries regardless of activity order and only initializes explicit spawn receivers', () => {
+    const activity = { item: { type: 'subAgentActivity', agentThreadId: 'a', kind: 'interacted', agentPath: '/root/a' }, turnId: 'turn' }
+    const summary = { item: completed, turnId: 'turn' }
+    for (const entries of [[activity, summary, activity], [summary, activity]]) {
+      expect(collectSubagents(entries, 'parent')[0]).toMatchObject({ message: 'Result A', messageSource: 'summary', status: 'completed' })
+    }
+    const unknownActivity = collectSubagents([activity], 'parent')
+    expect(unknownActivity[0]).toMatchObject({ status: 'unknown', messageSource: 'activity' })
+    expect(collectSubagents([{ item: { ...spawn, agentsStates: {} }, turnId: 'turn' }], 'parent')[0]?.status).toBe('pendingInit')
+    expect(collectSubagents([{ item: { ...spawn, tool: 'sendMessage', agentsStates: {} }, turnId: 'turn' }], 'parent')[0]?.status).toBe('unknown')
+    expect(collectSubagents([{ item: { ...activity.item, agentPath: '' }, turnId: 'turn' }], 'parent')[0]?.messageSource).toBeUndefined()
+  })
 })
