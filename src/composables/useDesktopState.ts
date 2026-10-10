@@ -802,7 +802,7 @@ function mergeMessages(
   return areMessageArraysEqual(previous, merged) ? previous : merged
 }
 
-function mergeMessageSnapshot(
+export function mergeMessageSnapshot(
   previous: UiMessage[],
   incoming: UiMessage[],
   initialById: ReadonlyMap<string, UiMessage>,
@@ -864,7 +864,9 @@ function mergeMessageSnapshot(
   })
   // Restored rows use snapshot anchors; older/newer paging keeps its directional merge.
   const turns = new Map<string, { first: number; last: number; index?: number }>()
+  let hasSnapshotUser = false
   snapshot.forEach((message, ordinal) => {
+    if (message.role === 'user') hasSnapshotUser = true
     if (!message.turnId) return
     const previousTurn = turns.get(message.turnId)
     turns.set(message.turnId, {
@@ -874,6 +876,20 @@ function mergeMessageSnapshot(
   })
   const indexedTurns = [...turns.values()].filter((turn): turn is typeof turn & { index: number } => typeof turn.index === 'number')
     .sort((first, second) => first.index - second.index)
+  const snapshotOrdinalById = new Map(snapshot.map((message, ordinal) => [message.id, ordinal]))
+  const previousAnchors = new Map<string, number>()
+  let precedingOrdinal: number | undefined
+  for (const message of previousById.values()) {
+    const ordinal = snapshotOrdinalById.get(message.id)
+    if (typeof ordinal === 'number') precedingOrdinal = ordinal + 1
+    else if (typeof precedingOrdinal === 'number') previousAnchors.set(message.id, precedingOrdinal)
+  }
+  let followingOrdinal: number | undefined
+  for (const message of [...previousById.values()].reverse()) {
+    const ordinal = snapshotOrdinalById.get(message.id)
+    if (typeof ordinal === 'number') followingOrdinal = ordinal
+    else if (typeof followingOrdinal === 'number' && !previousAnchors.has(message.id)) previousAnchors.set(message.id, followingOrdinal)
+  }
   const extras = [...previousById.values()].filter((message) => {
     if (incomingById.has(message.id)) return false
     if (isOptimisticUserMessage(message)) {
@@ -892,11 +908,19 @@ function mergeMessageSnapshot(
     const secondIndex = turnIndex(second) ?? Number.POSITIVE_INFINITY
     return firstIndex === secondIndex ? 0 : firstIndex - secondIndex
   })
+  const isInitialQuestionSnapshot = previousById.size === 1 && options.nextTurnIndex === 0
+    && indexedTurns.length === 0 && !hasSnapshotUser
   const inserts = new Map<number, UiMessage[]>()
   for (const message of extras) {
     const index = turnIndex(message)
-    let ordinal = message.turnId ? (turns.get(message.turnId)?.last ?? -1) + 1 : 0
-    if (!ordinal) {
+    const matchingTurn = message.turnId ? turns.get(message.turnId) : undefined
+    let ordinal = matchingTurn ? matchingTurn.last + 1 : undefined
+    if (ordinal === undefined && index === undefined) {
+      const isInitialQuestion = isOptimisticUserMessage(message) && initialById.has(message.id)
+        && isInitialQuestionSnapshot
+      ordinal = previousAnchors.get(message.id) ?? (isInitialQuestion ? 0 : snapshot.length)
+    }
+    if (ordinal === undefined) {
       let low = 0
       let high = indexedTurns.length
       while (low < high) {
@@ -1739,6 +1763,7 @@ export function useDesktopState() {
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
   let hasLoadedPersistedQueueState = false
+  let persistedQueueStatePromise: Promise<void> | null = null
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
   const availableModelReasoningEfforts = ref<Record<string, ReasoningEffort[]>>({})
@@ -1825,6 +1850,9 @@ export function useDesktopState() {
   const discardedSideConversationThreadIds = new Set<string>()
 
   const threadTitleById = ref<Record<string, string>>({})
+  let hasLoadedThreadTitleCache = false
+  let threadTitleCachePromise: Promise<void> | null = null
+  let threadTitleCacheRequestEpoch = 0
 
   const installedSkills = ref<SkillInfo[]>([])
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
@@ -5555,16 +5583,40 @@ export function useDesktopState() {
     }
   }
 
-  async function loadThreadTitleCacheIfNeeded(options: { force?: boolean } = {}): Promise<void> {
-    if (options.force !== true && Object.keys(threadTitleById.value).length > 0) return
-    try {
-      const cache = await getThreadTitleCache()
-      if (Object.keys(cache.titles).length > 0) {
-        threadTitleById.value = cache.titles
-      }
-    } catch {
-      // Title cache is optional; keep UI functional.
+  function loadThreadTitleCacheIfNeeded(options: { force?: boolean } = {}): Promise<void> {
+    if (options.force !== true) {
+      if (threadTitleCachePromise) return threadTitleCachePromise
+      if (hasLoadedThreadTitleCache) return Promise.resolve()
     }
+    const epoch = ++threadTitleCacheRequestEpoch
+    const initialTitles = { ...threadTitleById.value }
+    const promise = (async () => {
+      try {
+        const cache = await getThreadTitleCache()
+        if (epoch !== threadTitleCacheRequestEpoch) return
+        hasLoadedThreadTitleCache = true
+        const currentTitles = threadTitleById.value
+        const nextTitles = Object.keys(cache.titles).length > 0 ? { ...cache.titles } : { ...currentTitles }
+        for (const threadId of new Set([...Object.keys(initialTitles), ...Object.keys(currentTitles)])) {
+          if (currentTitles[threadId] === initialTitles[threadId]) continue
+          if (currentTitles[threadId] === undefined) delete nextTitles[threadId]
+          else nextTitles[threadId] = currentTitles[threadId]
+        }
+        if (Object.keys(nextTitles).length !== Object.keys(currentTitles).length
+          || Object.entries(nextTitles).some(([threadId, title]) => currentTitles[threadId] !== title)) {
+          threadTitleById.value = nextTitles
+          applyThreadFlags()
+        }
+      } catch {
+        // Title cache is optional; keep UI functional.
+      } finally {
+        if (epoch === threadTitleCacheRequestEpoch) {
+          threadTitleCachePromise = null
+        }
+      }
+    })()
+    threadTitleCachePromise = promise
+    return promise
   }
 
   async function loadWorkspaceRootsStateForThreadList(): Promise<WorkspaceRootsState | null> {
@@ -5679,16 +5731,26 @@ export function useDesktopState() {
     }).finally(() => { pendingQueueMutations -= 1 })
   }
 
-  async function loadPersistedQueueStateIfNeeded(): Promise<void> {
-    if (hasLoadedPersistedQueueState) return
-    hasLoadedPersistedQueueState = true
-    try {
-      const revision = queueMutationRevision
-      const state = await getThreadQueueState()
-      if (!pendingQueueMutations && revision === queueMutationRevision) queuedMessagesByThreadId.value = state
-    } catch {
-      // Backend queue state is optional during startup.
-    }
+  function loadPersistedQueueStateIfNeeded(): Promise<void> {
+    if (persistedQueueStatePromise) return persistedQueueStatePromise
+    if (hasLoadedPersistedQueueState) return Promise.resolve()
+    const revision = queueMutationRevision
+    const promise = Promise.resolve().then(async () => {
+      try {
+        const state = await getThreadQueueState()
+        if (persistedQueueStatePromise !== promise) return
+        if (!pendingQueueMutations && revision === queueMutationRevision) queuedMessagesByThreadId.value = state
+      } catch {
+        // Backend queue state is optional during startup.
+      } finally {
+        if (persistedQueueStatePromise === promise) {
+          hasLoadedPersistedQueueState = true
+          persistedQueueStatePromise = null
+        }
+      }
+    })
+    persistedQueueStatePromise = promise
+    return promise
   }
 
   function removeArchivedThreadFromLoadedLists(threadId: string): void {
@@ -5804,6 +5866,7 @@ export function useDesktopState() {
       hasLoadedThreads.value &&
       Date.now() - lastThreadListLoadAt < RECENT_THREAD_LIST_LOAD_REUSE_MS
     ) {
+      void loadThreadTitleCacheIfNeeded()
       return
     }
 
@@ -5813,10 +5876,11 @@ export function useDesktopState() {
     }
 
     try {
+      const titleCache = loadThreadTitleCacheIfNeeded({ force: options.force === true })
       const [page, rootsState] = await Promise.all([
         getThreadGroupsPage(),
         loadWorkspaceRootsStateForThreadList(),
-        loadThreadTitleCacheIfNeeded({ force: options.force === true }),
+        options.force === true ? titleCache : Promise.resolve(),
       ])
       loadedThreadListRootsState = rootsState
       const groups = page.groups
@@ -6443,15 +6507,16 @@ export function useDesktopState() {
   }
 
   async function refreshAll(
-    options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean } = {},
+    options: { includeSelectedThreadMessages?: boolean; includeAncillaryRefreshes?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean } = {},
   ) {
     error.value = ''
     codexCliMissingError.value = ''
     const includeSelectedThreadMessages = options.includeSelectedThreadMessages !== false
+    const includeAncillaryRefreshes = options.includeAncillaryRefreshes !== false
     const awaitAncillaryRefreshes = options.awaitAncillaryRefreshes === true
 
     try {
-      await loadPersistedQueueStateIfNeeded()
+      void loadPersistedQueueStateIfNeeded()
       await loadThreads({ force: options.forceThreadRefresh === true })
       void loadThreadGoal(selectedThreadId.value)
       if (includeSelectedThreadMessages) {
@@ -6464,12 +6529,12 @@ export function useDesktopState() {
           }
         }
       }
-      if (awaitAncillaryRefreshes) {
+      if (includeAncillaryRefreshes && awaitAncillaryRefreshes) {
         await refreshAncillaryState({
           providerChanged: options.providerChanged,
           includeProviderModels: options.providerChanged === true || awaitAncillaryRefreshes,
         })
-      } else {
+      } else if (includeAncillaryRefreshes) {
         scheduleAncillaryStateRefresh({
           providerChanged: options.providerChanged,
           includeProviderModels: false,
@@ -7976,6 +8041,11 @@ export function useDesktopState() {
     queuedMessagesByThreadId.value = {}
     queueProcessingByThreadId.value = {}
     queueMutationRevision += 1
+    hasLoadedPersistedQueueState = false
+    persistedQueueStatePromise = null
+    threadTitleCacheRequestEpoch += 1
+    hasLoadedThreadTitleCache = false
+    threadTitleCachePromise = null
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
     threadGoalByThreadId.value = {}
@@ -8111,6 +8181,7 @@ export function useDesktopState() {
 
     error,
     refreshAll,
+    refreshAncillaryState,
     refreshSkills,
     selectThread,
     loadMessages,

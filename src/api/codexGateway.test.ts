@@ -1,5 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getSkillsList, getThreadDetail, getThreadGoal, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getSkillsList, getThreadDetail, getThreadGoal, getThreadTitleCache, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+
+describe('thread title cache request failures', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('propagates a network failure so the title cache can retry', async () => {
+    const failure = new TypeError('Network unavailable')
+    const fetch = vi.fn().mockRejectedValue(failure)
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(getThreadTitleCache()).rejects.toBe(failure)
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('/codex-api/thread-titles')
+  })
+
+  it.each([401, 503])('rejects HTTP %s instead of returning an empty cache', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
+
+    await expect(getThreadTitleCache()).rejects.toThrow('Failed to load thread title cache')
+  })
+
+  it('preserves a successful empty title cache', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ data: { titles: {}, order: [] } })))
+
+    await expect(getThreadTitleCache()).resolves.toEqual({ titles: {}, order: [] })
+  })
+})
 
 describe('mock skill paths through frontend lists', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -638,6 +663,7 @@ describe('getCurrentModelConfig', () => {
       upstreamCatalogProviderIds: ['codex_local_access'],
       reasoningEffort: '',
       speedMode: 'standard',
+      developerInstructions: '',
     })
   })
 

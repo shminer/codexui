@@ -6,9 +6,10 @@ import {
   findAdjacentThreadId,
   removeThreadFromGroups,
   isThreadUnreadByLastRead,
+  mergeMessageSnapshot,
   useDesktopState,
 } from './useDesktopState'
-import type { UiProjectGroup } from '../types/codex'
+import type { UiMessage, UiProjectGroup } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
 import { CodexApiError } from '../api/codexErrors'
 import { EPHEMERAL_MESSAGE_CHARS } from './ephemeralMessageWindow'
@@ -1281,6 +1282,258 @@ describe('Codex CLI availability', () => {
 })
 
 describe('startup request deduplication', () => {
+  it('renders the first thread page without waiting for slow queue or titles and coalesces their initial reads', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    let finishQueue: (value: unknown) => void = () => {}
+    let finishTitles: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadQueueState.mockImplementationOnce(() => new Promise(resolve => { finishQueue = resolve }))
+    gatewayMocks.getThreadTitleCache.mockImplementationOnce(() => new Promise(resolve => { finishTitles = resolve }))
+    const state = useDesktopState()
+    await Promise.all([
+      state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false }),
+      state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false }),
+    ])
+    expect(state.projectGroups.value[0]?.threads[0]?.id).toBe('thread-1')
+    expect(state.isLoadingThreads.value).toBe(false)
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(1)
+    finishQueue({ 'thread-1': [{ id: 'queued', text: 'queued', imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' }] })
+    finishTitles({ titles: { 'thread-1': 'Saved title' } })
+    await flushMicrotasks()
+    expect(state.selectedThreadQueuedMessages.value.map(message => message.id)).toEqual(['queued'])
+    expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Saved title')
+  })
+
+  it.each(['queue', 'titles'] as const)('keeps first-page loading independent of a delayed %s failure', async (kind) => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    let reject: (cause: Error) => void = () => {}
+    const api = kind === 'queue' ? gatewayMocks.getThreadQueueState : gatewayMocks.getThreadTitleCache
+    api.mockImplementationOnce(() => new Promise((_resolve, rejectRequest) => { reject = rejectRequest }))
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    expect(state.selectedThread.value?.id).toBe('thread-1')
+    expect(state.isLoadingThreads.value).toBe(false)
+    reject(new Error(`${kind} unavailable`))
+    await flushMicrotasks()
+    expect(state.error.value).toBe('')
+    expect(state.projectGroups.value[0]?.threads[0]?.id).toBe('thread-1')
+  })
+
+  it('does not schedule ancillary work when startup owns a later explicit refresh', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false, awaitAncillaryRefreshes: true })
+    expect(window.setTimeout).not.toHaveBeenCalled()
+    for (const api of [gatewayMocks.getCurrentModelConfig, gatewayMocks.getAvailableModelIds, gatewayMocks.getAccountRateLimits, gatewayMocks.getAvailableCollaborationModes, gatewayMocks.getSkillsList]) {
+      expect(api).not.toHaveBeenCalled()
+    }
+    await state.refreshAncillaryState({ includeProviderModels: true })
+    for (const api of [gatewayMocks.getCurrentModelConfig, gatewayMocks.getAvailableModelIds, gatewayMocks.getAccountRateLimits, gatewayMocks.getAvailableCollaborationModes, gatewayMocks.getSkillsList]) {
+      expect(api).toHaveBeenCalledTimes(1)
+    }
+    expect(state.availableModelIds.value).toEqual(['gpt-5.5'])
+  })
+
+  it('shares a pending title read across later list reads and reuses an empty completed cache', async () => {
+    installTestWindow()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadTitleCache.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const state = useDesktopState()
+    try {
+      await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+      nowSpy.mockReturnValue(4000)
+      await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+      expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(2)
+      expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(1)
+      finish({ titles: {} })
+      await flushMicrotasks()
+      nowSpy.mockReturnValue(7000)
+      await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+      expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(1)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('retries a failed initial title read on the next ordinary list refresh', async () => {
+    installTestWindow()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getThreadTitleCache
+      .mockRejectedValueOnce(new Error('temporary title failure'))
+      .mockResolvedValueOnce({ titles: { 'thread-1': 'Recovered title' } })
+    const state = useDesktopState()
+    try {
+      await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+      nowSpy.mockReturnValue(4000)
+      await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+      await flushMicrotasks()
+      expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(2)
+      expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Recovered title')
+      expect(state.error.value).toBe('')
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('removes unchanged stale title keys when a forced nonempty cache replaces the snapshot', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project'), thread('thread-2', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getThreadTitleCache
+      .mockResolvedValueOnce({ titles: { 'thread-1': 'Old cached title' } })
+      .mockResolvedValueOnce({ titles: { 'thread-2': 'Imported second title' } })
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    expect(state.projectGroups.value[0]?.threads.find(row => row.id === 'thread-1')?.title).toBe('Old cached title')
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false, forceThreadRefresh: true })
+    const titles = state.projectGroups.value.flatMap(group => group.threads).map(row => [row.id, row.title])
+    expect(titles).toContainEqual(['thread-1', 'thread-1'])
+    expect(titles).toContainEqual(['thread-2', 'Imported second title'])
+  })
+
+  it('does not let the initial title snapshot overwrite a later forced import snapshot', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    let finishInitial: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadTitleCache
+      .mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve }))
+      .mockResolvedValueOnce({ titles: { 'thread-1': 'Imported title' } })
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false, forceThreadRefresh: true })
+    expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Imported title')
+    finishInitial({ titles: { 'thread-1': 'Old title' } })
+    await flushMicrotasks()
+    expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Imported title')
+    expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([false, true])('preserves a local rename made during title loading with force=%s', async (force) => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project'), thread('thread-2', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.renameThread.mockResolvedValue(undefined)
+    gatewayMocks.persistThreadTitle.mockResolvedValue(undefined)
+    const state = useDesktopState()
+    if (force) await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    let finish: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadTitleCache.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const refreshing = state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false, forceThreadRefresh: force })
+    await flushMicrotasks()
+    await state.renameThreadById('thread-1', 'Local rename')
+    finish({ titles: { 'thread-1': 'Stale title', 'thread-2': 'Saved second title' } })
+    await refreshing
+    await flushMicrotasks()
+    const titles = state.projectGroups.value.flatMap(group => group.threads).map(row => [row.id, row.title])
+    expect(titles).toContainEqual(['thread-1', 'Local rename'])
+    expect(titles).toContainEqual(['thread-2', 'Saved second title'])
+  })
+
+  it('preserves a generated title while the initial title snapshot is still pending', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    let finishTitles: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadTitleCache.mockImplementationOnce(() => new Promise(resolve => { finishTitles = resolve }))
+    gatewayMocks.startThread.mockResolvedValue({ threadId: 'generated', model: '', modelProvider: '' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-generated')
+    gatewayMocks.generateThreadTitle.mockResolvedValue('Generated title')
+    gatewayMocks.persistThreadTitle.mockResolvedValue(undefined)
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    expect(await state.sendMessageToNewThread('First message', '/tmp/project')).toBe('generated')
+    await flushMicrotasks()
+    finishTitles({ titles: { generated: 'Stale generated title' } })
+    await flushMicrotasks()
+    expect(state.selectedThread.value?.title).toBe('Generated title')
+  })
+
+  it('discards a delayed initial queue snapshot after a local enqueue mutation', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '', modelProvider: '', messages: [], inProgress: true, activeTurnId: 'running-turn', hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+    let finishQueue: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadQueueState.mockImplementationOnce(() => new Promise(resolve => { finishQueue = resolve }))
+    gatewayMocks.mutateThreadQueue.mockImplementation(async (_threadId, operation) => ({ data: { 'thread-1': [operation.message] } }))
+    const state = useDesktopState()
+    await state.refreshAll({ includeAncillaryRefreshes: false })
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    await state.sendMessageToSelectedThread('Queued locally', [], [], 'queue')
+    expect(gatewayMocks.mutateThreadQueue).toHaveBeenCalledWith('thread-1', expect.objectContaining({
+      type: 'add', message: expect.objectContaining({ text: 'Queued locally' }),
+    }))
+    expect(state.selectedThreadQueuedMessages.value.map(message => message.text)).toEqual(['Queued locally'])
+    finishQueue({})
+    await flushMicrotasks()
+    expect(state.selectedThreadQueuedMessages.value.map(message => message.text)).toEqual(['Queued locally'])
+  })
+
+  it('restarts queue and title loaders after stopPolling without letting old responses settle the new loaders', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-1', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    let finishOldQueue: (value: unknown) => void = () => {}
+    let finishNewQueue: (value: unknown) => void = () => {}
+    let finishOldTitles: (value: unknown) => void = () => {}
+    let finishNewTitles: (value: unknown) => void = () => {}
+    gatewayMocks.getThreadQueueState
+      .mockImplementationOnce(() => new Promise(resolve => { finishOldQueue = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNewQueue = resolve }))
+    gatewayMocks.getThreadTitleCache
+      .mockImplementationOnce(() => new Promise(resolve => { finishOldTitles = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNewTitles = resolve }))
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    state.stopPolling()
+    state.startPolling()
+    pollingCleanups.push(() => state.stopPolling())
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(2)
+    const queued = (text: string) => ({ id: text, text, imageUrls: [], skills: [], fileAttachments: [], collaborationMode: 'default' })
+    finishOldQueue({ 'thread-1': [queued('old')] })
+    finishOldTitles({ titles: { 'thread-1': 'Old title' } })
+    await flushMicrotasks()
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+    expect(state.selectedThread.value?.title).toBe('thread-1')
+    await state.refreshAll({ includeSelectedThreadMessages: false, includeAncillaryRefreshes: false })
+    expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(2)
+    finishNewQueue({ 'thread-1': [queued('new')] })
+    finishNewTitles({ titles: { 'thread-1': 'New title' } })
+    await flushMicrotasks()
+    expect(state.selectedThreadQueuedMessages.value.map(message => message.id)).toEqual(['new'])
+    expect(state.selectedThread.value?.title).toBe('New title')
+  })
+
   it('reloads cached thread titles on forced thread refresh', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
@@ -3677,29 +3930,34 @@ describe('provider model selection', () => {
       turnIndexByTurnId: {},
     })
 
-    const state = useDesktopState()
-    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
-    await state.sendMessageToNewThread('hi', '/tmp/project')
-    state.startPolling()
-    expect(notificationHandler).toBeDefined()
-    notificationHandler!({
-      method: 'turn/completed',
-      params: {
-        threadId: 'mini-thread',
-        turn: { id: 'turn-1', status: 'completed' },
-      },
-    })
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    try {
+      const state = useDesktopState()
+      await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+      await state.sendMessageToNewThread('hi', '/tmp/project')
+      state.startPolling()
+      expect(notificationHandler).toBeDefined()
+      notificationHandler!({
+        method: 'turn/completed',
+        params: {
+          threadId: 'mini-thread',
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
 
-    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('mini-thread')
-    expect(state.messages.value.map((message) => `${message.role}:${message.text}`)).toEqual([
-      'user:hi',
-      'system:Worked for <1s',
-      'assistant:Hi.',
-    ])
+      expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('mini-thread')
+      expect(state.messages.value.map((message) => `${message.role}:${message.text}`)).toEqual([
+        'user:hi',
+        'system:Worked for <1s',
+        'assistant:Hi.',
+      ])
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 
   it('surfaces selected thread load failures and still refreshes models', async () => {
@@ -4245,7 +4503,7 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
-  it('keeps a repeated optimistic question when the snapshot only contains its older turn', async () => {
+  it('keeps a repeated main send pending when the snapshot only contains its older turn', async () => {
     const { state } = await setupTurnLifecycleNotificationState('thread-1')
     const snapshot = { ...page(20, 1), model: '', modelProvider: '', subagents: [] }
     gatewayMocks.getThreadDetail.mockResolvedValue(snapshot)
@@ -4254,12 +4512,39 @@ describe('bounded thread working sets', () => {
     gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve }))
     const sending = state.sendMessageToSelectedThread('Question 20')
     await flushMicrotasks()
-    await state.loadMessages('thread-1', { force: true })
-    expect(state.messages.value.filter(message => message.role === 'user' && message.text === 'Question 20')).toHaveLength(2)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
     expect(state.selectedThread.value?.inProgress).toBe(true)
+    await state.loadMessages('thread-1', { force: true })
+    expect(state.messages.value.filter(message => message.role === 'user' && message.text === 'Question 20')).toHaveLength(1)
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking')
     finishSend('turn-21')
     await sending
     state.stopPolling()
+  })
+
+  it('replaces a repeated optimistic question only when its own user turn appears in the snapshot', () => {
+    const older = page(20, 1).messages[0]
+    const optimistic: UiMessage = { id: 'optimistic-new', role: 'user', text: older.text, messageType: 'userMessage.optimistic' }
+    const previous: UiMessage[] = [older, optimistic]
+    const initialById = new Map(previous.map(message => [message.id, message]))
+    const options = { turnIndexByTurnId: { 'turn-20': 20, 'turn-21': 21 }, nextTurnIndex: 21 }
+    const retained = mergeMessageSnapshot(previous, [older], initialById, [], new Map(), options)
+    expect(retained.map(message => message.id)).toEqual([older.id, optimistic.id])
+    const ownUser = { ...older, id: 'new-user', turnId: 'turn-21', turnIndex: 21 }
+    const restored = mergeMessageSnapshot(retained, [older, ownUser], initialById, [], new Map(), options)
+    expect(restored.map(message => message.id)).toEqual([older.id, ownUser.id])
+  })
+
+  it('positions unknown-turn local rows relative to retained snapshot IDs', () => {
+    const first = page(20, 1).messages[0]
+    const last = page(21, 1).messages[0]
+    const optimistic: UiMessage = { id: 'optimistic-new', role: 'user', text: 'New question', messageType: 'userMessage.optimistic' }
+    const previous: UiMessage[] = [first, optimistic, last]
+    const restored = mergeMessageSnapshot(previous, [first, last], new Map(previous.map(message => [message.id, message])), [], new Map(), {
+      turnIndexByTurnId: { 'turn-20': 20, 'turn-21': 21 }, nextTurnIndex: 22,
+    })
+    expect(restored.map(message => message.id)).toEqual([first.id, optimistic.id, last.id])
   })
 
   it('restores a wider resumed snapshot after the recent preview without keeping the preview first', async () => {

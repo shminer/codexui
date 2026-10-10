@@ -3988,14 +3988,10 @@ async function setNativeThreadPinned(threadId: string, pinned: boolean): Promise
 }
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
-  try {
-    const response = await fetch('/codex-api/thread-titles')
-    if (!response.ok) return { titles: {}, order: [] }
-    const envelope = (await response.json()) as { data?: ThreadTitleCache }
-    return envelope.data ?? { titles: {}, order: [] }
-  } catch {
-    return { titles: {}, order: [] }
-  }
+  const response = await fetch('/codex-api/thread-titles')
+  if (!response.ok) throw new Error('Failed to load thread title cache')
+  const envelope = (await response.json()) as { data?: ThreadTitleCache }
+  return envelope.data ?? { titles: {}, order: [] }
 }
 
 export async function persistThreadTitle(id: string, title: string): Promise<void> {
