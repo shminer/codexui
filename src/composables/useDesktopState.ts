@@ -802,6 +802,29 @@ function mergeMessages(
   return areMessageArraysEqual(previous, merged) ? previous : merged
 }
 
+function protectFullerSnapshotBaseline(initialById: ReadonlyMap<string, UiMessage>, snapshot: UiMessage[]): Map<string, UiMessage> {
+  const protectedBaseline = new Map(initialById)
+  for (const message of snapshot) {
+    const baseline = initialById.get(message.id)
+    if (!baseline) continue
+    const fullerText = baseline.role === 'assistant' && message.role === 'assistant'
+      && baseline.text.length > message.text.length && baseline.text.startsWith(message.text)
+    let fullerCommand = false
+    if (baseline.commandExecution && message.commandExecution) {
+      const previous = baseline.commandExecution
+      const incoming = message.commandExecution
+      const previousCursor = previous.outputTotalLength ?? (previous.outputOffset ?? 0) + previous.aggregatedOutput.length
+      const incomingCursor = incoming.outputTotalLength ?? (incoming.outputOffset ?? 0) + incoming.aggregatedOutput.length
+      fullerCommand = previousCursor > incomingCursor
+        || (previousCursor === incomingCursor && previous.aggregatedOutput.length > incoming.aggregatedOutput.length)
+        || (previous.status !== 'inProgress' && incoming.status === 'inProgress')
+    }
+    // Missing baseline IDs make the merger protect already-newer local rows.
+    if (fullerText || fullerCommand) protectedBaseline.delete(message.id)
+  }
+  return protectedBaseline
+}
+
 export function mergeMessageSnapshot(
   previous: UiMessage[],
   incoming: UiMessage[],
@@ -846,8 +869,10 @@ export function mergeMessageSnapshot(
       const localCommand = limitCommandExecutionOutput(local.commandExecution)
       const snapshotCursor = snapshotCommand.outputTotalLength ?? (snapshotCommand.outputOffset ?? 0) + snapshotCommand.aggregatedOutput.length
       const localCursor = localCommand.outputTotalLength ?? (localCommand.outputOffset ?? 0) + localCommand.aggregatedOutput.length
+      const snapshotOutputIsNewer = snapshotCursor > localCursor
+        || (snapshotCursor === localCursor && snapshotCommand.aggregatedOutput.length >= localCommand.aggregatedOutput.length)
       commandExecution = {
-        ...(snapshotCursor >= localCursor ? snapshotCommand : localCommand),
+        ...(snapshotOutputIsNewer ? snapshotCommand : localCommand),
         ...(snapshotCommand.status !== 'inProgress'
           ? { status: snapshotCommand.status, exitCode: snapshotCommand.exitCode }
           : { status: localCommand.status, exitCode: localCommand.exitCode }),
@@ -2505,24 +2530,9 @@ export function useDesktopState() {
       const current = persistedMessagesByThreadId.value[threadId] ?? []
       const live = getAllLiveMessagesForThread(threadId)
       const indices = { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}) }
-      const protectedInitialBody = new Map(initialBody)
+      const protectedInitialBody = protectFullerSnapshotBaseline(initialBody, snapshot)
       for (const message of snapshot) {
         if (message.turnId && typeof message.turnIndex === 'number') indices[message.turnId] = message.turnIndex
-        const baseline = initialBody.get(message.id)
-        if (!baseline) continue
-        const fullerText = baseline.role === 'assistant' && message.role === 'assistant'
-          && baseline.text.length > message.text.length && baseline.text.startsWith(message.text)
-        let fullerCommand = false
-        if (baseline.commandExecution && message.commandExecution) {
-          const previous = baseline.commandExecution
-          const incoming = message.commandExecution
-          const previousCursor = previous.outputTotalLength ?? (previous.outputOffset ?? 0) + previous.aggregatedOutput.length
-          const incomingCursor = incoming.outputTotalLength ?? (incoming.outputOffset ?? 0) + incoming.aggregatedOutput.length
-          fullerCommand = previousCursor > incomingCursor
-            || (previousCursor === incomingCursor && previous.aggregatedOutput.length > incoming.aggregatedOutput.length)
-            || (previous.status !== 'inProgress' && incoming.status === 'inProgress')
-        }
-        if (fullerText || fullerCommand) protectedInitialBody.delete(message.id)
       }
       const merged = mergeMessageSnapshot([...current, ...live], snapshot, protectedInitialBody, live, initialLive, {
         preserveMissing: true, turnIndexByTurnId: indices,
@@ -6452,7 +6462,7 @@ export function useDesktopState() {
       const current = persistedMessagesByThreadId.value[threadId] ?? []
       const pageLive = getAllLiveMessagesForThread(threadId).filter((message) => pageIds.has(message.id))
       const pageMessages = mergeMessageSnapshot([...current.filter((message) => pageIds.has(message.id)), ...pageLive], page.messages,
-        initialBody, pageLive, initialLive, {
+        protectFullerSnapshotBaseline(initialBody, page.messages), pageLive, initialLive, {
           turnIndexByTurnId: { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId },
           pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
         })

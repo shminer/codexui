@@ -4511,6 +4511,80 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
+  it.each([false, true])('protects fuller live content that predates a stale newer-page read with final=%s', async (finalPage) => {
+    vi.useFakeTimers()
+    const { state, emit } = await runningHistoryState()
+    const params = { threadId: 'thread-1', turnId: 'turn-R' }
+    const commands: UiMessage[] = [
+      { id: 'cmd-output', role: 'system', text: 'run', turnId: 'turn-R', turnIndex: 2, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'completed', aggregatedOutput: 'full output', outputOffset: 89, outputTotalLength: 100, exitCode: 0 } },
+      { id: 'cmd-tail', role: 'system', text: 'run', turnId: 'turn-R', turnIndex: 2, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'completed', aggregatedOutput: 'full output', outputOffset: 89, outputTotalLength: 100, exitCode: 0 } },
+      { id: 'cmd-status', role: 'system', text: 'run', turnId: 'turn-R', turnIndex: 2, messageType: 'commandExecution', commandExecution: { command: 'run', cwd: null, status: 'completed', aggregatedOutput: 'abc', outputOffset: 0, outputTotalLength: 3, exitCode: 0 } },
+    ]
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-R' } } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: 'abc' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'abc' } })
+    for (const command of commands) {
+      emit({ method: 'item/completed', params: { ...params, item: { id: command.id, type: 'commandExecution', ...command.commandExecution } } })
+    }
+    vi.advanceTimersByTime(50)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({
+      ...page(2, 1, !finalPage), turnIndexByTurnId: { 'turn-R': 2 },
+      messages: [
+        { id: 'R', role: 'assistant', text: 'a', turnId: 'turn-R', turnIndex: 2, messageType: 'agentMessage' },
+        { ...commands[0], commandExecution: { ...commands[0]!.commandExecution!, aggregatedOutput: 'old', outputOffset: 0, outputTotalLength: 3 } },
+        { ...commands[1], commandExecution: { ...commands[1]!.commandExecution!, aggregatedOutput: 'put', outputOffset: 97 } },
+        { ...commands[2], commandExecution: { ...commands[2]!.commandExecution!, status: 'inProgress', exitCode: null } },
+        { id: 'turn-R:plan', role: 'assistant', text: 'a', turnId: 'turn-R', turnIndex: 2, messageType: 'plan' },
+      ],
+    })
+    await state.loadNewerMessages()
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(!finalPage)
+    const current = state.getCurrentTurnMessagesForThread('thread-1')
+    expect(current.find(message => message.id === 'R')?.text).toBe('abc')
+    expect(current.find(message => message.id === 'turn-R:plan')?.text).toBe('abc')
+    for (const command of commands) {
+      expect(current.find(message => message.id === command.id)?.commandExecution).toMatchObject(command.commandExecution!)
+    }
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: 'd' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'd' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'cmd-output', delta: 'd' } })
+    vi.advanceTimersByTime(50)
+    if (!finalPage) {
+      gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(3, 0))
+      await state.loadNewerMessages()
+    }
+    const rows = state.messages.value
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
+    expect(rows.find(message => message.id === 'R')?.text).toBe('abcd')
+    expect(rows.find(message => message.id === 'turn-R:plan')?.text).toBe('abcd')
+    expect(rows.find(message => message.id === 'cmd-output')?.commandExecution).toMatchObject({
+      aggregatedOutput: 'full outputd', outputOffset: 89, outputTotalLength: 101, status: 'completed', exitCode: 0,
+    })
+    expect(new Set(rows.map(message => message.id)).size).toBe(rows.length)
+    expect(state.getLiveMessagesForThread('thread-1')).toEqual([])
+    state.stopPolling()
+  })
+
+  it('accepts a shorter non-prefix reply replacement from a newer page', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await runningHistoryState()
+    const params = { threadId: 'thread-1', turnId: 'turn-R' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-R' } } })
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: 'draft answer' } })
+    vi.advanceTimersByTime(50)
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({
+      ...page(2, 1), turnIndexByTurnId: { 'turn-R': 2 },
+      messages: [{ id: 'R', role: 'assistant', text: 'done', turnId: 'turn-R', turnIndex: 2, messageType: 'agentMessage' }],
+    })
+    await state.loadNewerMessages()
+    expect(state.messages.value.find(message => message.id === 'R')?.text).toBe('done')
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'R', delta: '!' } })
+    vi.advanceTimersByTime(50)
+    expect(state.messages.value.find(message => message.id === 'R')?.text).toBe('done!')
+    expect(state.getLiveMessagesForThread('thread-1')).toEqual([])
+    state.stopPolling()
+  })
+
   it.each(['cached', 'uncached', 'history', 'oversized'] as const)('rebases a %s child from its independent snapshot before applying another delta', async (kind) => {
     vi.useFakeTimers()
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('child', '/tmp/project')])
@@ -4920,6 +4994,21 @@ describe('bounded thread working sets', () => {
     const ownUser = { ...older, id: 'new-user', turnId: 'turn-21', turnIndex: 21 }
     const restored = mergeMessageSnapshot(retained, [older, ownUser], initialById, [], new Map(), options)
     expect(restored.map(message => message.id)).toEqual([older.id, ownUser.id])
+  })
+
+  it.each([100, 101])('selects protected command output by cursor before tail length for snapshot cursor=%s', (snapshotCursor) => {
+    const local: UiMessage = {
+      id: 'cmd', role: 'system', text: 'run', turnId: 'turn-20', turnIndex: 20,
+      commandExecution: { command: 'run', cwd: null, status: 'inProgress', aggregatedOutput: 'full output', outputOffset: 89, outputTotalLength: 100, exitCode: null },
+    }
+    const snapshot: UiMessage = {
+      ...local,
+      commandExecution: { ...local.commandExecution!, aggregatedOutput: 'put', outputOffset: snapshotCursor - 3, outputTotalLength: snapshotCursor },
+    }
+    const merged = mergeMessageSnapshot([local], [snapshot], new Map(), [local], new Map(), {
+      turnIndexByTurnId: { 'turn-20': 20 }, nextTurnIndex: 21,
+    })
+    expect(merged[0]?.commandExecution).toMatchObject(snapshotCursor === 100 ? local.commandExecution! : snapshot.commandExecution!)
   })
 
   it('positions unknown-turn local rows relative to retained snapshot IDs', () => {
