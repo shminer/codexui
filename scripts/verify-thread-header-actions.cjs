@@ -166,9 +166,7 @@ async function main() {
         await expect.poll(() => fixture.calls.filter((call) => call.path.endsWith('/input')).length).toBeGreaterThan(0)
         const input = fixture.calls.find((call) => call.path.endsWith('/input'))
         assert.equal(input.body.data, 'pnpm test\r')
-        // The existing floating window can cover the trigger; the menu must still work above it.
-        await trigger.focus(); await page.keyboard.press('Enter')
-        await menu.getByRole('menuitem', { name: terminalLabel, exact: true }).click()
+        await choose(terminalLabel)
         await menu.getByRole('menuitem', { name: language === 'en' ? 'Hide terminal' : '隐藏终端', exact: true }).click()
         await expect(page.locator('.thread-terminal-panel')).toHaveCount(0)
         await choose(resourcesLabel)

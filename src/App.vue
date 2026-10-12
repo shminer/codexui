@@ -1031,6 +1031,7 @@
                     class="content-thread-terminal-panel"
                     :thread-id="selectedThreadId"
                     :cwd="composerCwd"
+                    :top-inset="isMobile ? 48 : 56"
                     @hide="onHideSelectedThreadTerminal"
                     @terminal-focus-change="onTerminalFocusChange"
                   />
