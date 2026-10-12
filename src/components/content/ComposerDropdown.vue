@@ -13,6 +13,7 @@
       <IconTablerChevronDown class="composer-dropdown-chevron" />
     </button>
 
+    <Teleport :to="ownerDocument?.body ?? 'body'" :disabled="!teleportMenu">
     <div
       v-if="isOpen"
       ref="menuWrapRef"
@@ -20,6 +21,7 @@
       :class="{
         'composer-dropdown-menu-wrap-up': openDirection === 'up',
         'composer-dropdown-menu-wrap-down': openDirection === 'down',
+        'composer-dropdown-menu-wrap-teleported': teleportMenu,
       }"
       :style="menuWrapStyle"
     >
@@ -53,6 +55,7 @@
 
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
@@ -73,6 +76,7 @@ const props = defineProps<{
   disabled?: boolean
   selectedPrefixIcon?: Component | null
   iconOnly?: boolean
+  teleportMenu?: boolean
   openDirection?: 'up' | 'down'
   menuAlign?: 'start' | 'end'
   enableSearch?: boolean
@@ -197,7 +201,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 
   const target = event.target
   if (!target) return
-  if (root.contains(target as Node)) return
+  if (root.contains(target as Node) || menuWrapRef.value?.contains(target as Node)) return
   isOpen.value = false
   searchQuery.value = ''
 }
@@ -258,6 +262,10 @@ onBeforeUnmount(() => {
 
 .composer-dropdown-menu-wrap {
   @apply absolute left-0 z-50;
+}
+
+.composer-dropdown-menu-wrap.composer-dropdown-menu-wrap-teleported {
+  @apply z-[270];
 }
 
 .composer-dropdown-menu-wrap-down {

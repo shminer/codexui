@@ -8,7 +8,7 @@
 1. Search the marker in the sidebar; confirm a flat result list without project paths, snippets or match positions. Open an initially unloaded hit.
 2. Search an ordered-character abbreviation of a title; confirm exact results precede fuzzy results. Load more and rapidly change the query.
 3. Switch Active/Archived; confirm scope isolation and no late response from the previous scope.
-4. Use Find in thread for old Chinese and emoji-containing messages. Navigate forward/backward across match pages and confirm message outline and snippet mark.
+4. In the main conversation, open the left three-dot menu and select Find in thread (会话内搜索) for old Chinese and emoji-containing messages. Navigate forward/backward across match pages and confirm message outline and snippet mark.
 5. Confirm an unloaded match loads only its turn and that normal history, fork, streaming and latest-message navigation still work after closing search.
 6. Change thread/query while a target request is pending. Verify no stale result or target is applied.
 7. Verify unsupported full-text shows Title search only; unsupported in-thread search has an explicit status. Network/auth/timeouts show errors, not silent empty results or downgrade. Retry after recovery.

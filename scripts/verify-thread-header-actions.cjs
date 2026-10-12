@@ -15,8 +15,8 @@ const threads = ['mock-header-a', 'mock-header-b'].map((id) => ({
   ] }],
 }))
 const labels = {
-  en: ['New conversation', 'Terminal', 'Find in thread', 'Thread resources'],
-  'zh-CN': ['新建对话', '终端', '会话内搜索', '线程资源'],
+  en: ['New conversation', 'Find in thread', 'Thread resources'],
+  'zh-CN': ['新建对话', '会话内搜索', '线程资源'],
 }
 
 async function setup(page, theme, language, terminalAvailable = true) {
@@ -93,23 +93,32 @@ function expensive(calls) {
 
 async function main() {
   await mkdir(output, { recursive: true })
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined })
   const results = []
   try {
     for (const viewport of [{ width: 1440, height: 1000 }, { width: 768, height: 1024 }, { width: 375, height: 812 }]) {
       for (const theme of ['light', 'dark']) for (const language of ['en', 'zh-CN']) {
         const page = await browser.newPage({ viewport })
         const fixture = await setup(page, theme, language)
-        const [newLabel, terminalLabel, searchLabel, resourcesLabel] = labels[language]
+        const [newLabel, searchLabel, resourcesLabel] = labels[language]
         const trigger = page.locator('.thread-header-actions-trigger')
         const menu = page.locator('.thread-header-actions-panel')
         const choose = async (label) => { await trigger.click(); await menu.getByRole('menuitem', { name: label, exact: true }).click() }
+        const terminal = page.locator('.content-header-terminal-command')
+        const chooseTerminal = async (label) => {
+          await terminal.locator('.composer-dropdown-trigger').click()
+          await expect(page.locator('.composer-dropdown-menu-wrap-teleported')).toHaveCSS('z-index', '270')
+          await page.locator('.composer-dropdown-menu-wrap-teleported').getByRole('button', { name: label, exact: true }).click()
+        }
         await page.goto(`${base}/#/thread/${threads[0].id}`)
         await page.locator(`[data-message-id="${threads[0].id}-reply"]`).waitFor()
         await page.waitForTimeout(700)
         await expect(page.locator('.content-header .content-title')).toHaveCount(0)
         await expect(page.locator('.content-header [aria-label="Start new thread"], .content-header [aria-label="新建线程"]')).toHaveCount(0)
-        await expect(page.locator('.content-header-terminal-command')).toHaveCount(0)
+        await expect(terminal).toBeVisible()
+        await expect(page.locator('.content-leading .thread-header-actions-trigger')).toBeVisible()
+        const triggerBox = await trigger.boundingBox(), terminalBox = await terminal.boundingBox()
+        assert.ok(triggerBox.x + triggerBox.width <= terminalBox.x, 'menu is left of the independent terminal')
         await expect(page.locator('.thread-conversation-tools')).toBeHidden()
         await expect(page.locator('.header-git-trigger')).toBeVisible()
         assert.ok((await page.title()).includes(threads[0].name), 'browser title preserved')
@@ -119,10 +128,8 @@ async function main() {
         assert.equal(await page.evaluate(() => window.__headerListeners.size), 1)
         assert.deepEqual(await menu.getByRole('menuitem').allTextContents(), labels[language])
         await page.keyboard.press('End'); await expect(menu.getByRole('menuitem').last()).toBeFocused()
-        await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowRight')
-        await expect(menu.getByRole('menuitem').first()).toHaveText(language === 'en' ? 'Back' : '返回')
-        await page.keyboard.press('ArrowLeft')
-        await expect(menu.getByRole('menuitem', { name: terminalLabel, exact: true })).toBeFocused()
+        await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown')
+        await expect(menu.getByRole('menuitem', { name: searchLabel, exact: true })).toBeFocused()
         await page.keyboard.press('Escape'); await expect(trigger).toBeFocused(); await expect(menu).toHaveCount(0)
         assert.equal(await page.evaluate(() => window.__headerListeners.size), 0)
         await trigger.click(); await page.locator('.conversation-list').click({ position: { x: 10, y: 10 } })
@@ -135,6 +142,7 @@ async function main() {
         await page.screenshot({ path: screenshot })
         const bounds = await menu.boundingBox()
         assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= viewport.width, 'menu fits viewport')
+        assert.ok(Math.abs(bounds.x - triggerBox.x) <= 1, 'menu aligns with the left edge of its trigger')
         const bg = await menu.evaluate((el) => getComputedStyle(el).backgroundColor)
         assert.equal(bg, theme === 'dark' ? 'rgb(24, 24, 27)' : 'rgb(255, 255, 255)')
         await menu.getByRole('menuitem', { name: searchLabel, exact: true }).click()
@@ -161,13 +169,11 @@ async function main() {
         await choose(searchLabel)
         await page.locator('.thread-search-bar input').press('Escape')
         await expect(page.locator('.thread-conversation-tools')).toBeHidden()
-        await choose(terminalLabel)
-        await menu.getByRole('menuitem', { name: 'Mock test command' }).click()
+        await chooseTerminal('Mock test command')
         await expect.poll(() => fixture.calls.filter((call) => call.path.endsWith('/input')).length).toBeGreaterThan(0)
         const input = fixture.calls.find((call) => call.path.endsWith('/input'))
         assert.equal(input.body.data, 'pnpm test\r')
-        await choose(terminalLabel)
-        await menu.getByRole('menuitem', { name: language === 'en' ? 'Hide terminal' : '隐藏终端', exact: true }).click()
+        await chooseTerminal(language === 'en' ? 'Hide terminal' : '隐藏终端')
         await expect(page.locator('.thread-terminal-panel')).toHaveCount(0)
         await choose(resourcesLabel)
         await resources.getByRole('button', { name: language === 'en' ? 'Load history' : '加载历史', exact: true }).click()
@@ -218,7 +224,8 @@ async function main() {
     await page.goto(`${base}/#/thread/${threads[0].id}`)
     await page.locator(`[data-message-id="${threads[0].id}-reply"]`).waitFor()
     await page.locator('.thread-header-actions-trigger').click()
-    await expect(page.getByRole('menuitem', { name: 'Terminal', exact: true })).toBeDisabled()
+    await expect(page.locator('.content-header-terminal-command')).toHaveCount(0)
+    await expect(page.getByRole('menuitem')).toHaveCount(3)
     await page.keyboard.press('Tab')
     await expect(page.locator('.thread-header-actions-panel')).toHaveCount(0)
     assert.equal(await page.evaluate(() => window.__headerListeners.size), 0)

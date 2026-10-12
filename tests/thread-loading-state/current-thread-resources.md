@@ -7,7 +7,7 @@
 
 #### Steps
 1. Open the thread without opening Resources. Confirm no resource-history request occurs during thread startup or token streaming.
-2. Open Resources and inspect Attachments and Related files. Confirm currently loaded attachments, images, generated files, changed files, and linked files appear with duplicates merged by normalized path/URL.
+2. In the main conversation, open the left three-dot menu and select Thread resources (线程资源). Inspect Attachments and Related files. Confirm currently loaded attachments, images, generated files, changed files, and linked files appear with duplicates merged by normalized path/URL.
 3. Click Load history, then Load more. Inspect `/codex-api/thread-resources`: each page contains metadata and a cursor, with no message bodies or base64 image payloads. Confirm coverage changes from Partial history to History loaded only when pagination ends.
 4. Open a source/Markdown file, an image and an HTML file. Confirm editing versus preview dispatch is correct. Download a disposable resource and check the file content/name.
 5. Reference a local resource and a remote image URL. Confirm only the composer draft changes, no message is sent, and repeated local references are deduplicated. Missing/out-of-root local files produce an error rather than entering the draft.

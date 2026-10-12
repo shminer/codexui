@@ -539,6 +539,12 @@
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
+            <ThreadHeaderActions v-if="route.name === 'thread'"
+              :context-key="`${routeThreadId}:${selectedThreadId}:${isReviewPaneOpen}`"
+              :panels-available="Boolean(selectedThread) && selectedThreadId === routeThreadId && !isReviewPaneOpen"
+              @new-conversation="onStartNewThreadFromToolbar"
+              @search="threadConversationRef?.openSearch()"
+              @resources="threadConversationRef?.openResources()" />
             <span v-if="isSkillsRoute" class="skills-route-header-icon" aria-hidden="true">
               <IconTablerBolt />
             </span>
@@ -548,7 +554,7 @@
           </template>
           <template #actions>
             <ComposerDropdown
-              v-if="canShowTerminalToggle && route.name !== 'thread'"
+              v-if="canShowTerminalToggle"
               class="content-header-terminal-command"
               :class="{ 'is-open': isComposerTerminalOpen }"
               :model-value="terminalHeaderDropdownValue"
@@ -556,6 +562,7 @@
               :placeholder="terminalCommandPlaceholder"
               :selected-prefix-icon="IconTablerTerminal"
               :icon-only="true"
+              :teleport-menu="true"
               menu-align="end"
               :empty-label="t('No commands')"
               @update:model-value="onSelectHeaderTerminalCommand"
@@ -590,15 +597,6 @@
               @open-commit-file="onOpenContentHeaderCommitFile"
             />
             <span v-if="isMobile" id="thread-subagent-header-target" class="content-header-subagent-target" />
-            <ThreadHeaderActions v-if="route.name === 'thread'"
-              :context-key="`${routeThreadId}:${selectedThreadId}:${isReviewPaneOpen}`"
-              :terminal-available="canShowTerminalToggle"
-              :panels-available="Boolean(selectedThread) && selectedThreadId === routeThreadId && !isReviewPaneOpen"
-              :terminal-commands="terminalHeaderDropdownOptions"
-              @new-conversation="onStartNewThreadFromToolbar"
-              @terminal="onSelectHeaderTerminalCommand"
-              @search="threadConversationRef?.openSearch()"
-              @resources="threadConversationRef?.openResources()" />
           </template>
         </ContentHeader>
 
@@ -5264,20 +5262,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .content-header-terminal-command.is-open :deep(.composer-dropdown-trigger) {
   @apply border-zinc-300 bg-zinc-100 text-zinc-950;
-}
-
-.content-header-terminal-command :deep(.composer-dropdown-menu-wrap) {
-  left: auto;
-  right: 0;
-}
-
-.content-header-terminal-command :deep(.composer-dropdown-menu) {
-  width: min(18rem, calc(100vw - 1rem));
-  min-width: min(14rem, calc(100vw - 1rem));
-}
-
-.content-header-terminal-command :deep(.composer-dropdown-option) {
-  @apply block truncate;
 }
 
 .content-header-terminal-command :deep(.composer-dropdown-trigger) {
