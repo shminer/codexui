@@ -1,24 +1,24 @@
 <template>
-  <div class="thread-resources-toolbar">
-    <button class="thread-feature-icon" type="button" aria-label="Thread resources" title="Thread resources" :aria-expanded="open" @click="toggle"><IconTablerFolder /></button>
-    <section v-if="open" class="thread-resources-panel" aria-label="Thread resources">
-      <div class="thread-feature-modes" role="group" aria-label="Resource category">
-        <button type="button" :aria-pressed="kind === 'attachment'" @click="kind = 'attachment'">Attachments</button>
-        <button type="button" :aria-pressed="kind === 'file'" @click="kind = 'file'">Related files</button>
-        <button class="thread-feature-icon" type="button" aria-label="Close resources" title="Close resources" @click="open = false"><IconTablerX /></button>
+  <div v-if="showTrigger || open" class="thread-resources-toolbar" :class="{ 'is-external': !showTrigger }">
+    <button v-if="showTrigger" class="thread-feature-icon" type="button" :aria-label="t('Thread resources')" :title="t('Thread resources')" :aria-expanded="open" @click="toggle"><IconTablerFolder /></button>
+    <section v-if="open" class="thread-resources-panel" :aria-label="t('Thread resources')">
+      <div class="thread-feature-modes" role="group" :aria-label="t('Resource category')">
+        <button type="button" :aria-pressed="kind === 'attachment'" @click="kind = 'attachment'">{{ t('Attachments') }}</button>
+        <button type="button" :aria-pressed="kind === 'file'" @click="kind = 'file'">{{ t('Related files') }}</button>
+        <button class="thread-feature-icon" type="button" :aria-label="t('Close resources')" :title="t('Close resources')" @click="close"><IconTablerX /></button>
       </div>
-      <p class="thread-feature-status">{{ resources.length }} resources · {{ complete ? 'History loaded' : 'Partial history' }}</p>
+      <p class="thread-feature-status">{{ t('{count} resources', { count: resources.length }) }} · {{ t(complete ? 'History loaded' : 'Partial history') }}</p>
       <p v-if="error" class="thread-feature-error" role="alert">{{ error }}</p>
-      <p v-if="unsupported" class="thread-feature-status">Loaded messages only</p>
+      <p v-if="unsupported" class="thread-feature-status">{{ t('Loaded messages only') }}</p>
       <div v-for="resource in visibleResources" :key="resource.key" class="thread-resource-row">
         <a class="thread-resource-name" :href="openUrl(resource)" :title="resource.path || resource.url" target="_blank" rel="noopener">{{ resource.label }}</a>
-        <a class="thread-feature-icon" :href="downloadUrl(resource)" :download="resource.label" :target="resource.url ? '_blank' : undefined" rel="noopener" title="Download" aria-label="Download"><IconTablerArrowUp class="thread-resource-download" /></a>
-        <button class="thread-feature-icon" type="button" title="Reference in composer" aria-label="Reference in composer" :disabled="busy" @click="reference(resource)"><IconTablerCopy /></button>
-        <button class="thread-feature-icon" type="button" title="Source message" aria-label="Source message" :disabled="busy || !resource.itemId || !resource.turnId" @click="locate(resource)"><IconTablerArrowBackUp /></button>
+        <a class="thread-feature-icon" :href="downloadUrl(resource)" :download="resource.label" :target="resource.url ? '_blank' : undefined" rel="noopener" :title="t('Download')" :aria-label="t('Download')"><IconTablerArrowUp class="thread-resource-download" /></a>
+        <button class="thread-feature-icon" type="button" :title="t('Reference in composer')" :aria-label="t('Reference in composer')" :disabled="busy" @click="reference(resource)"><IconTablerCopy /></button>
+        <button class="thread-feature-icon" type="button" :title="t('Source message')" :aria-label="t('Source message')" :disabled="busy || !resource.itemId || !resource.turnId" @click="locate(resource)"><IconTablerArrowBackUp /></button>
       </div>
-      <p v-if="!visibleResources.length" class="thread-feature-status">No resources</p>
-      <button v-if="!unsupported && !complete" class="thread-feature-action" type="button" :disabled="busy" @click="loadHistory">{{ busy ? 'Loading...' : started ? 'Load more' : 'Load history' }}</button>
-      <button class="thread-feature-action" type="button" :disabled="busy" @click="refresh">Refresh</button>
+      <p v-if="!visibleResources.length" class="thread-feature-status">{{ t('No resources') }}</p>
+      <button v-if="!unsupported && !complete" class="thread-feature-action" type="button" :disabled="busy" @click="loadHistory">{{ t(busy ? 'Loading...' : started ? 'Load more' : 'Load history') }}</button>
+      <button class="thread-feature-action" type="button" :disabled="busy" @click="refresh">{{ t('Refresh') }}</button>
     </section>
   </div>
 </template>
@@ -26,6 +26,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { UiMessage } from '../../types/codex'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import { limitThreadCommandOutputs } from '../../commandOutput'
 import { getThreadResourcePage, getThreadResourceSource } from '../../api/codexGateway'
 import { isNativeHistoryUnsupported } from '../../api/threadSearch'
@@ -36,8 +37,9 @@ import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 
-const props = defineProps<{ threadId: string; cwd: string; messages: UiMessage[] }>()
-const emit = defineEmits<{ reference: [resource: UiThreadResource]; locate: [value: { threadId: string; itemId: string; messages: UiMessage[] }] }>()
+const props = withDefaults(defineProps<{ threadId: string; cwd: string; messages: UiMessage[]; showTrigger?: boolean }>(), { showTrigger: true })
+const emit = defineEmits<{ reference: [resource: UiThreadResource]; locate: [value: { threadId: string; itemId: string; messages: UiMessage[] }]; openChange: [open: boolean] }>()
+const { t } = useUiLanguage()
 const open = ref(false)
 const kind = ref<'attachment' | 'file'>('attachment')
 const loaded = ref<UiThreadResource[]>([])
@@ -61,7 +63,9 @@ function downloadUrl(resource: UiThreadResource): string {
 function updateLoaded(): void {
   if (open.value) loaded.value = projectMessageResources(props.messages, props.cwd)
 }
-function toggle(): void { open.value = !open.value; updateLoaded() }
+function openPanel(): void { if (!props.threadId) return; open.value = true; updateLoaded() }
+function close(): void { open.value = false; generation += 1; busy.value = false }
+function toggle(): void { if (open.value) close(); else openPanel() }
 
 async function loadHistory(): Promise<void> {
   if (busy.value || complete.value || unsupported.value) return
@@ -109,7 +113,7 @@ async function locate(resource: UiThreadResource): Promise<void> {
       ? [] : limitThreadCommandOutputs(await getThreadResourceSource(props.threadId, resource.turnId, resource.itemId))
     if (request !== generation) return
     emit('locate', { threadId: props.threadId, itemId: resource.itemId, messages })
-    open.value = false
+    close()
   } catch (failure) {
     if (request === generation) error.value = failure instanceof Error ? failure.message : 'Source message is missing'
   } finally { if (request === generation) busy.value = false }
@@ -126,13 +130,14 @@ function refresh(): void {
 }
 watch(() => props.messages.length, updateLoaded)
 watch(() => props.threadId, () => {
-  generation += 1
-  open.value = false
+  close()
   loaded.value = []
   history.value = []
   cursor.value = null
   started.value = complete.value = unsupported.value = busy.value = false
   error.value = ''
 })
+watch(open, (value) => emit('openChange', value), { flush: 'sync' })
+defineExpose({ open: openPanel, close })
 onBeforeUnmount(() => { generation += 1 })
 </script>

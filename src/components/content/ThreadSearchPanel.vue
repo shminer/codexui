@@ -1,18 +1,18 @@
 <template>
-  <div class="thread-search-tools">
+  <div v-if="showTrigger || open" class="thread-search-tools">
     <div class="thread-search-bar">
-      <button class="thread-feature-icon" type="button" aria-label="Find in thread" title="Find in thread" :aria-pressed="open" @click="toggle"><IconTablerSearch /></button>
+      <button v-if="showTrigger" class="thread-feature-icon" type="button" :aria-label="t('Find in thread')" :title="t('Find in thread')" :aria-pressed="open" @click="toggle"><IconTablerSearch /></button>
       <template v-if="open">
-        <input ref="input" v-model="query" type="search" placeholder="Find in thread" aria-label="Find in thread" @keydown.escape="close" @keydown.enter.prevent="navigate(index + ($event.shiftKey ? -1 : 1))" />
+        <input ref="input" v-model="query" type="search" :placeholder="t('Find in thread')" :aria-label="t('Find in thread')" @keydown.escape="close" @keydown.enter.prevent="navigate(index + ($event.shiftKey ? -1 : 1))" />
         <span class="thread-feature-status" aria-live="polite">{{ hits.length ? index + 1 : 0 }} / {{ hits.length }}{{ nextCursor ? '+' : '' }}</span>
-        <button class="thread-feature-icon" type="button" aria-label="Previous match" title="Previous match" :disabled="busy || !hits.length || index === 0" @click="navigate(index - 1)"><IconTablerChevronDown class="thread-search-previous" /></button>
-        <button class="thread-feature-icon" type="button" aria-label="Next match" title="Next match" :disabled="busy || (!nextCursor && index + 1 >= hits.length)" @click="navigate(index + 1)"><IconTablerChevronDown /></button>
-        <button class="thread-feature-icon" type="button" aria-label="Close search" title="Close search" @click="close"><IconTablerX /></button>
+        <button class="thread-feature-icon" type="button" :aria-label="t('Previous match')" :title="t('Previous match')" :disabled="busy || !hits.length || index === 0" @click="navigate(index - 1)"><IconTablerChevronDown class="thread-search-previous" /></button>
+        <button class="thread-feature-icon" type="button" :aria-label="t('Next match')" :title="t('Next match')" :disabled="busy || (!nextCursor && index + 1 >= hits.length)" @click="navigate(index + 1)"><IconTablerChevronDown /></button>
+        <button class="thread-feature-icon" type="button" :aria-label="t('Close search')" :title="t('Close search')" @click="close"><IconTablerX /></button>
       </template>
     </div>
-    <p v-if="open && busy" class="thread-feature-status" role="status">Searching...</p>
-    <p v-if="open && unsupported" class="thread-feature-status" role="status">Thread search is not supported by this runtime <button type="button" @click="unsupported = false; load(true)">Retry</button></p>
-    <p v-if="open && error" class="thread-feature-error" role="alert">{{ error }} <button type="button" @click="load(true)">Retry</button></p>
+    <p v-if="open && busy" class="thread-feature-status" role="status">{{ t('Searching...') }}</p>
+    <p v-if="open && unsupported" class="thread-feature-status" role="status">{{ t('Thread search is not supported by this runtime') }} <button type="button" @click="unsupported = false; load(true)">{{ t('Retry') }}</button></p>
+    <p v-if="open && error" class="thread-feature-error" role="alert">{{ error }} <button type="button" @click="load(true)">{{ t('Retry') }}</button></p>
     <p v-if="open && selected" class="thread-search-snippet">{{ selected.snippet.slice(0, selected.snippetMatchRange.start) }}<mark>{{ selected.snippet.slice(selected.snippetMatchRange.start, selected.snippetMatchRange.end) }}</mark>{{ selected.snippet.slice(selected.snippetMatchRange.end) }}</p>
   </div>
 </template>
@@ -22,12 +22,14 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getSearchTurnMessages, searchThreadOccurrences, type ThreadSearchOccurrence } from '../../api/codexGateway'
 import { isNativeHistoryUnsupported } from '../../api/threadSearch'
 import type { UiMessage } from '../../types/codex'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 
-const props = defineProps<{ threadId: string; messages: UiMessage[] }>()
-const emit = defineEmits<{ locate: [value: { threadId: string; itemId: string; messages: UiMessage[] }]; clear: [] }>()
+const props = withDefaults(defineProps<{ threadId: string; messages: UiMessage[]; showTrigger?: boolean }>(), { showTrigger: true })
+const emit = defineEmits<{ locate: [value: { threadId: string; itemId: string; messages: UiMessage[] }]; clear: []; openChange: [open: boolean] }>()
+const { t } = useUiLanguage()
 const open = ref(false)
 const query = ref('')
 const input = ref<HTMLInputElement | null>(null)
@@ -45,12 +47,18 @@ let cachedTurn: { id: string; messages: UiMessage[] } | null = null
 
 async function toggle(): Promise<void> {
   if (open.value) return close()
+  await openPanel()
+}
+
+async function openPanel(): Promise<void> {
+  if (!props.threadId) return
   open.value = true
   await nextTick()
   input.value?.focus()
 }
 
 function close(): void {
+  if (timer) clearTimeout(timer)
   open.value = false
   query.value = ''
   generation += 1
@@ -129,5 +137,7 @@ watch(query, () => {
   if (query.value.trim() && !unsupported.value) timer = setTimeout(() => { void load(true) }, 220)
 })
 watch(() => props.threadId, () => { close(); unsupported.value = false })
+watch(open, (value) => emit('openChange', value), { flush: 'sync' })
+defineExpose({ open: openPanel, close })
 onBeforeUnmount(() => { generation += 1; navigation += 1; if (timer) clearTimeout(timer) })
 </script>

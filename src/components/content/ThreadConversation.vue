@@ -1,8 +1,8 @@
 <template>
   <section class="conversation-root" @contextmenu.capture="onConversationContextMenu">
-    <div v-if="activeThreadId && !readonly" class="thread-conversation-tools">
-      <ThreadSearchPanel :thread-id="activeThreadId" :messages="messages" @locate="onSearchLocate" @clear="clearSearchTarget" />
-      <ThreadResourcesPanel :thread-id="activeThreadId" :cwd="cwd" :messages="messages" @reference="emit('referenceResource', $event)" @locate="onSearchLocate" />
+    <div v-if="activeThreadId && !readonly" v-show="!externalPanelControls || searchOpen || resourcesOpen" class="thread-conversation-tools">
+      <ThreadSearchPanel ref="searchPanel" :show-trigger="!externalPanelControls" :thread-id="activeThreadId" :messages="messages" @open-change="searchOpen = $event" @locate="onSearchLocate" @clear="clearSearchTarget" />
+      <ThreadResourcesPanel ref="resourcesPanel" :show-trigger="!externalPanelControls" :thread-id="activeThreadId" :cwd="cwd" :messages="messages" @open-change="resourcesOpen = $event" @reference="emit('referenceResource', $event)" @locate="onSearchLocate" />
     </div>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
@@ -1424,6 +1424,7 @@ const props = withDefaults(defineProps<{
   activeThreadId: string
   cwd: string
   readonly?: boolean
+  externalPanelControls?: boolean
   canEditMessage?: boolean
   recoverableHistory?: boolean
   historySource?: ThreadHistorySource
@@ -1446,6 +1447,20 @@ const emit = defineEmits<{
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
+const searchPanel = ref<InstanceType<typeof ThreadSearchPanel> | null>(null)
+const resourcesPanel = ref<InstanceType<typeof ThreadResourcesPanel> | null>(null)
+const searchOpen = ref(false)
+const resourcesOpen = ref(false)
+function openSearch(): void {
+  if (!props.activeThreadId || props.readonly) return
+  resourcesPanel.value?.close()
+  void searchPanel.value?.open()
+}
+function openResources(): void {
+  if (!props.activeThreadId || props.readonly) return
+  searchPanel.value?.close()
+  resourcesPanel.value?.open()
+}
 const { t } = useUiLanguage()
 const messageSourceError = ref('')
 let messageSourceGeneration = 0
@@ -4302,6 +4317,8 @@ function loadMoreBelow(): Promise<void> { return moveHistoryWindow('later') }
 defineExpose({
   jumpToLatest,
   locateMessage,
+  openSearch,
+  openResources,
 })
 
 function bindPendingImageHandlers(): void {
@@ -4465,6 +4482,7 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    searchOpen.value = resourcesOpen.value = false
     messageSourceGeneration += 1
     messageSourceError.value = ''
     navigationGeneration += 1

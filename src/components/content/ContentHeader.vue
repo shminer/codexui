@@ -3,7 +3,7 @@
     <div class="content-leading" :class="{ 'is-accent': accent }">
       <slot name="leading" />
     </div>
-    <h1 class="content-title" :class="{ 'is-accent': accent }" :title="title">{{ title }}</h1>
+    <h1 v-if="showTitle" class="content-title" :class="{ 'is-accent': accent }" :title="title">{{ title }}</h1>
     <div class="content-actions">
       <slot name="actions" />
     </div>
@@ -11,10 +11,11 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+withDefaults(defineProps<{
   title: string
   accent?: boolean
-}>()
+  showTitle?: boolean
+}>(), { showTitle: true })
 </script>
 
 <style scoped>
