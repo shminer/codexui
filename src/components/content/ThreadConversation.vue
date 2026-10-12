@@ -999,6 +999,7 @@ import {
   clampThreadRenderWindow,
   clampThreadRenderWindowStart,
   earlierThreadRenderWindow,
+  historyScrollDirection,
   filterRenderableThreadMessages,
   laterThreadRenderWindow,
   latestThreadRenderWindowStart,
@@ -4235,6 +4236,7 @@ async function onSearchLocate(value: { threadId: string; itemId: string; message
 }
 
 type ConversationAnchor = { id: string; offset: number }
+let lastConversationScrollTop = 0
 
 function captureConversationAnchor(): ConversationAnchor | null {
   const container = conversationListRef.value
@@ -4251,9 +4253,11 @@ function captureConversationAnchor(): ConversationAnchor | null {
 
 function restoreConversationAnchor(anchor: ConversationAnchor | null): void {
   const container = conversationListRef.value
-  if (!container || !anchor) return
-  const row = container.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchor.id)}"]`)
-  if (row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset
+  if (!container) return
+  const row = anchor ? container.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchor.id)}"]`) : null
+  if (row && anchor) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset
+  // Layout and anchor restoration must not trigger pagination in the opposite direction.
+  lastConversationScrollTop = container.scrollTop
 }
 
 async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> {
@@ -4488,6 +4492,7 @@ watch(
     isLoadingMore.value = false
     isLoadingLatest.value = false
     historyLoadError.value = ''
+    lastConversationScrollTop = 0
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
@@ -4504,12 +4509,15 @@ watch(
 
 function onConversationScroll(): void {
   const container = conversationListRef.value
-  if (!container || props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
+  if (!container) return
+  const direction = historyScrollDirection(lastConversationScrollTop, container.scrollTop, container.scrollHeight, container.clientHeight, LOAD_MORE_SCROLL_THRESHOLD_PX)
+  lastConversationScrollTop = container.scrollTop
+  if (props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
   if (searchTargetId.value) return
   autoFollowOutput.value = isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value
-  if (hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
+  if (direction === 'earlier' && hasMoreAbove.value) {
     void loadMoreAbove()
-  } else if (hasMoreBelow.value && container.scrollHeight - container.scrollTop - container.clientHeight < LOAD_MORE_SCROLL_THRESHOLD_PX) {
+  } else if (direction === 'later' && hasMoreBelow.value) {
     void loadMoreBelow()
   }
 }
