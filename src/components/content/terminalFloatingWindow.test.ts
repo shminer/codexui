@@ -25,4 +25,11 @@ describe('terminal floating window geometry', () => {
     expect(initialSideConversationWindowRect({ width: 1440, height: 900, offsetLeft: 0, offsetTop: 0 }))
       .toEqual({ left: 1008, top: 254, width: 416, height: 630 })
   })
+
+  it('leaves the thread header reachable on tablet and phone', () => {
+    expect(initialTerminalWindowRect({ width: 768, height: 1024, offsetLeft: 0, offsetTop: 0 }, 56))
+      .toEqual({ left: 8, top: 64, width: 752, height: 640 })
+    expect(initialTerminalWindowRect({ width: 375, height: 600, offsetLeft: 0, offsetTop: 20 }, 48))
+      .toEqual({ left: 8, top: 76, width: 359, height: 536 })
+  })
 })

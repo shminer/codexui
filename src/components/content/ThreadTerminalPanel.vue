@@ -113,6 +113,7 @@ import { terminalCtrlKeyboardInput, terminalVirtualKeyInput, type TerminalVirtua
 const props = defineProps<{
   threadId: string
   cwd: string
+  topInset?: number
 }>()
 
 type ThreadTerminalPanelExposed = {
@@ -389,7 +390,7 @@ function terminalViewportSize(): TerminalVisualViewport {
 }
 
 function resetTerminalWindow(): void {
-  terminalWindow.value = initialTerminalWindowRect(terminalViewportSize())
+  terminalWindow.value = initialTerminalWindowRect(terminalViewportSize(), props.topInset)
 }
 
 function clampTerminalWindowToViewport(): void {

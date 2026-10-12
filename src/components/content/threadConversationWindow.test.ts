@@ -5,11 +5,20 @@ import {
   earlierThreadRenderWindowStart,
   earlierThreadRenderWindow,
   filterRenderableThreadMessages,
+  historyScrollDirection,
   latestThreadRenderWindowStart,
   laterThreadRenderWindow,
 } from './threadConversationWindow'
 
 describe('thread conversation render window', () => {
+  it('paginates only toward the edge the reader is moving to', () => {
+    expect(historyScrollDirection(400, 150, 1000, 500, 200)).toBe('earlier')
+    expect(historyScrollDirection(150, 400, 1000, 500, 200)).toBe('later')
+    // A shorter history page clamps an old offset to its new bottom.
+    expect(historyScrollDirection(900, 400, 900, 500, 200)).toBeNull()
+    expect(historyScrollDirection(400, 400, 900, 500, 200)).toBeNull()
+    expect(historyScrollDirection(400, 300, 1000, 500, 200)).toBeNull()
+  })
   it('keeps both history directions bounded and moves at most thirty rows', () => {
     expect(earlierThreadRenderWindow(950, 1000, 1000)).toEqual({ start: 920, end: 1000 })
     expect(earlierThreadRenderWindow(900, 1000, 1000)).toEqual({ start: 870, end: 970 })

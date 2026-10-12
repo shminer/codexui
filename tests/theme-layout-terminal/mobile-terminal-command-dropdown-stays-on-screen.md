@@ -9,9 +9,9 @@ Composer dropdown menus are viewport-clamped so the terminal command dropdown re
 
 ## Steps
 1. In light theme, open a thread at mobile width.
-2. Tap the terminal command dropdown in the content header.
+2. In a thread, tap the three-dot header menu and choose Terminal. On Home, use the existing terminal command dropdown.
 3. Confirm the menu is fully visible within the left and right viewport edges.
-4. Confirm long command labels truncate inside the menu instead of pushing the menu off-screen.
+4. Confirm long command labels wrap or truncate inside the menu instead of pushing the menu off-screen. In a thread, use Back to return to the four actions.
 5. Scroll or rotate the viewport while the menu is open and confirm it remains clamped to the visible viewport.
 6. Repeat the dropdown check in dark theme.
 

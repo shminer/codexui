@@ -1,6 +1,19 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github-dark.css";
 
+.thread-header-actions { position: relative; }
+.thread-header-actions-trigger { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; color: #52525b; }
+.thread-header-actions-trigger svg, .thread-header-actions-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.thread-header-actions-trigger:hover, .thread-header-actions-item:hover:not(:disabled), .thread-header-actions-item:focus-visible { background: #f4f4f5; }
+.thread-header-actions-panel { position: fixed; z-index: 270; width: 240px; max-width: calc(100vw - 24px); max-height: min(60dvh, 480px); overflow: auto; padding: 4px; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; color: #27272a; box-shadow: 0 4px 16px #0002; }
+.thread-header-actions-item { display: flex; align-items: center; gap: 8px; justify-content: space-between; width: 100%; min-height: 38px; padding: 8px 10px; border-radius: 4px; text-align: left; font-size: 13px; overflow-wrap: anywhere; }
+.thread-header-actions-item:disabled { opacity: .4; cursor: default; }
+.thread-resources-toolbar.is-external { flex: 1; min-width: 0; }
+.thread-resources-toolbar.is-external .thread-resources-panel { position: relative; right: auto; top: auto; width: 100%; max-height: min(45dvh, 480px); box-shadow: none; }
+:root.dark .thread-header-actions-trigger { color: #a1a1aa; }
+:root.dark .thread-header-actions-panel { background: #18181b; color: #f4f4f5; border-color: #3f3f46; }
+:root.dark .thread-header-actions-trigger:hover, :root.dark .thread-header-actions-item:hover:not(:disabled), :root.dark .thread-header-actions-item:focus-visible { background: #27272a; }
+
 .thread-feature-modes { display: flex; gap: 4px; padding: 8px; }
 .thread-feature-modes button { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 4px; color: #666; font-size: 12px; overflow-wrap: anywhere; }
 .thread-feature-modes button[aria-pressed='true'] { background: #e4e4e7; color: #18181b; }

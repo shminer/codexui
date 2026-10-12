@@ -529,13 +529,13 @@
       >
         <div class="content-main-column">
         <span v-if="isVirtualKeyboardOpen" class="content-keyboard-spacer" aria-hidden="true" />
-        <ContentHeader :title="contentTitle" :accent="isSkillsRoute || isAutomationsRoute">
+        <ContentHeader :title="contentTitle" :show-title="route.name !== 'thread'" :accent="isSkillsRoute || isAutomationsRoute">
           <template #leading>
             <SidebarThreadControls
               v-if="isSidebarCollapsed || isMobile"
               class="sidebar-thread-controls-header-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
-              :show-new-thread-button="true"
+              :show-new-thread-button="route.name !== 'thread'"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
@@ -548,7 +548,7 @@
           </template>
           <template #actions>
             <ComposerDropdown
-              v-if="canShowTerminalToggle"
+              v-if="canShowTerminalToggle && route.name !== 'thread'"
               class="content-header-terminal-command"
               :class="{ 'is-open': isComposerTerminalOpen }"
               :model-value="terminalHeaderDropdownValue"
@@ -590,6 +590,15 @@
               @open-commit-file="onOpenContentHeaderCommitFile"
             />
             <span v-if="isMobile" id="thread-subagent-header-target" class="content-header-subagent-target" />
+            <ThreadHeaderActions v-if="route.name === 'thread'"
+              :context-key="`${routeThreadId}:${selectedThreadId}:${isReviewPaneOpen}`"
+              :terminal-available="canShowTerminalToggle"
+              :panels-available="Boolean(selectedThread) && selectedThreadId === routeThreadId && !isReviewPaneOpen"
+              :terminal-commands="terminalHeaderDropdownOptions"
+              @new-conversation="onStartNewThreadFromToolbar"
+              @terminal="onSelectHeaderTerminalCommand"
+              @search="threadConversationRef?.openSearch()"
+              @resources="threadConversationRef?.openResources()" />
           </template>
         </ContentHeader>
 
@@ -990,6 +999,7 @@
                 <div class="content-thread-layout">
                   <div class="content-thread">
                     <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
+                      external-panel-controls
                       :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                       :can-edit-message="!selectedThreadPendingRequest"
                       :live-overlay="liveOverlay"
@@ -1021,6 +1031,7 @@
                     class="content-thread-terminal-panel"
                     :thread-id="selectedThreadId"
                     :cwd="composerCwd"
+                    :top-inset="isMobile ? 48 : 56"
                     @hide="onHideSelectedThreadTerminal"
                     @terminal-focus-change="onTerminalFocusChange"
                   />
@@ -1279,6 +1290,7 @@ import ThreadLibrary from './components/sidebar/ThreadLibrary.vue'
 import { useArchivedThreadActions } from './components/sidebar/useArchivedThreadActions'
 import type { UiThreadResource } from './threadResources'
 import ContentHeader from './components/content/ContentHeader.vue'
+import ThreadHeaderActions from './components/content/ThreadHeaderActions.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
@@ -1548,7 +1560,7 @@ const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
 const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
 const editingSideConversationQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
-const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
+const threadConversationRef = ref<{ jumpToLatest: () => void; openSearch: () => void; openResources: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const homeTerminalOpen = ref(false)

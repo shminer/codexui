@@ -4,6 +4,12 @@ export const THREAD_RENDER_HISTORY_LIMIT = 100
 
 export type ThreadRenderWindow = { start: number; end: number }
 
+export function historyScrollDirection(previousTop: number, top: number, height: number, viewport: number, threshold: number): 'earlier' | 'later' | null {
+  if (top < previousTop && top < threshold) return 'earlier'
+  if (top > previousTop && height - top - viewport < threshold) return 'later'
+  return null
+}
+
 export function clampThreadRenderWindow(start: number, end: number, messageCount: number): ThreadRenderWindow {
   const count = Math.max(0, Math.floor(messageCount))
   if (count === 0) return { start: 0, end: 0 }
