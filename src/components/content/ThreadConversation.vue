@@ -387,7 +387,7 @@
                       class="plan-card-implement-button"
                       @click="implementPlan(message)"
                     >
-                      Implement plan
+                      {{ t('Implement plan') }}
                     </button>
                   </div>
                 </div>
@@ -863,7 +863,7 @@
       </button>
     </div>
 
-    <Teleport to="body">
+    <Teleport :to="ownerDocument?.body ?? 'body'">
       <div v-if="activeDiffViewerChange" class="diff-viewer-backdrop" @click="closeDiffViewer">
         <div class="diff-viewer-shell" @click.stop>
           <aside v-if="!isMobile" class="diff-viewer-sidebar">
@@ -986,7 +986,7 @@
 
 <script setup lang="ts">
 import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '../../pathUtils.js'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ThreadHistorySource, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { getThreadResourceSource, updateThreadFileChanges } from '../../api/codexGateway'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -1048,7 +1048,7 @@ const feedbackMailto = feedbackMailtoBase()
 function prepareLiveErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
-  if (target instanceof HTMLAnchorElement) {
+  if (target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLAnchorElement ?? HTMLAnchorElement)) {
     target.href = buildFeedbackMailto()
   }
 }
@@ -1056,7 +1056,7 @@ function prepareLiveErrorFeedback(event: MouseEvent, message: string): void {
 function prepareTurnErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
-  if (target instanceof HTMLAnchorElement) {
+  if (target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLAnchorElement ?? HTMLAnchorElement)) {
     target.href = buildFeedbackMailto()
   }
 }
@@ -1133,7 +1133,7 @@ function buildPlanMessageText(explanation: string, steps: UiPlanStep[]): string 
 }
 
 function showImplementPlanButton(message: UiMessage): boolean {
-  return !props.readonly
+  return (props.canImplementPlan ?? !props.readonly)
     && isPlanMessage(message)
     && message.messageType !== 'plan.live'
     && message.role === 'assistant'
@@ -1141,6 +1141,7 @@ function showImplementPlanButton(message: UiMessage): boolean {
 }
 
 function implementPlan(message: UiMessage): void {
+  if (!showImplementPlanButton(message)) return
   const turnId = message.turnId?.trim() ?? ''
   if (!turnId) return
   emit('implementPlan', { turnId })
@@ -1426,6 +1427,8 @@ const props = withDefaults(defineProps<{
   readonly?: boolean
   externalPanelControls?: boolean
   canEditMessage?: boolean
+  canImplementPlan?: boolean
+  ownerDocument?: Document
   recoverableHistory?: boolean
   historySource?: ThreadHistorySource
   hasMorePersistedAbove?: boolean
@@ -1436,7 +1439,7 @@ const props = withDefaults(defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
-}>(), { recoverableHistory: true, isHistoryWindow: false })
+}>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined })
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]
@@ -1474,6 +1477,7 @@ const messageCopy = createMessageCopyController({
   hasResponseText: (messageId) => copyableResponseAnchorIds.value.has(messageId),
   getResponseText: buildCopyableResponseContent,
   getUserText: async (message) => (await readCompleteMessage(message)).text,
+  getOwnerDocument: () => props.ownerDocument ?? document,
 })
 const { expandedUserMessageId, copiedMessageId: copiedResponseAnchorId, toggleUserMessageCopy, onUserMessageTextClick, showCopyMessageButton, copyMessage } = messageCopy
 const fileChangeActionState = ref<Record<string, 'idle' | 'undoing' | 'redoing' | 'undone' | 'redone'>>({})
@@ -2031,7 +2035,8 @@ const visibleMessages = computed(() => renderableMessages.value.slice(effectiveR
 const visibleTimeline = computed<Array<UiMessage | null>>(() => {
   const rows: Array<UiMessage | null> = [...visibleMessages.value]
   if (!props.liveOverlay) return rows
-  const steeringIndex = rows.findIndex((message) => message?.messageType === 'userMessage.optimistic.steer' || message?.messageType === 'userMessage.steer')
+  const steeringIndex = props.liveOverlay.turnId ? rows.findIndex((message) => message?.turnId === props.liveOverlay?.turnId
+    && (message?.messageType === 'userMessage.optimistic.steer' || message?.messageType === 'userMessage.steer')) : -1
   rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, null)
   return rows
 })
@@ -2843,10 +2848,10 @@ function toEditUrlFromBrowseHref(href: string): string {
 
 function onConversationContextMenu(event: MouseEvent): void {
   const target = event.target
-  if (!(target instanceof Element)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.Element ?? Element))) return
 
   const anchor = target.closest('a.message-file-link')
-  if (!(anchor instanceof HTMLAnchorElement)) return
+  if (!(anchor instanceof ((props.ownerDocument ?? document).defaultView?.HTMLAnchorElement ?? HTMLAnchorElement))) return
 
   const href = (anchor.getAttribute('href') ?? '').trim()
   if (!href || href === '#') return
@@ -2870,14 +2875,14 @@ function openFileLinkContextBrowse(): void {
   const href = fileLinkContextBrowseUrl.value
   closeFileLinkContextMenu()
   if (!href || href === '#') return
-  window.open(href, '_blank', 'noopener,noreferrer')
+  ;((props.ownerDocument ?? document).defaultView ?? window).open(href, '_blank', 'noopener,noreferrer')
 }
 
 function openFileLinkContextEdit(): void {
   const href = fileLinkContextEditUrl.value
   closeFileLinkContextMenu()
   if (!href || href === '#') return
-  window.open(href, '_blank', 'noopener,noreferrer')
+  ;((props.ownerDocument ?? document).defaultView ?? window).open(href, '_blank', 'noopener,noreferrer')
 }
 
 async function copyFileLinkContextLink(): Promise<void> {
@@ -2886,7 +2891,7 @@ async function copyFileLinkContextLink(): Promise<void> {
   if (!href || href === '#') return
 
   try {
-    await copyTextToClipboard(href)
+    await copyTextToClipboard(href, props.ownerDocument)
   } catch {
     // Clipboard writes can be blocked by browser permissions; keep the context action best-effort.
   }
@@ -2900,7 +2905,7 @@ function onWindowPointerDownForFileLinkContextMenu(event: PointerEvent): void {
     return
   }
   const target = event.target
-  if (target instanceof Node && menu.contains(target)) return
+  if (target instanceof ((props.ownerDocument ?? document).defaultView?.Node ?? Node) && menu.contains(target)) return
   closeFileLinkContextMenu()
 }
 
@@ -3939,7 +3944,7 @@ function readQuestionAnswer(requestId: number, questionId: string, fallback: str
 
 function onQuestionAnswerInput(requestId: number, questionId: string, event: Event): void {
   const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLInputElement ?? HTMLInputElement))) return
   const key = toolQuestionKey(requestId, questionId)
   toolQuestionAnswers.value = {
     ...toolQuestionAnswers.value,
@@ -3968,7 +3973,7 @@ function onQuestionAnswerChange(requestId: number, questionId: string, value: st
 
 function onQuestionOtherAnswerInput(requestId: number, questionId: string, event: Event): void {
   const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLInputElement ?? HTMLInputElement))) return
   const key = toolQuestionKey(requestId, questionId)
   toolQuestionOtherAnswers.value = {
     ...toolQuestionOtherAnswers.value,
@@ -3978,7 +3983,7 @@ function onQuestionOtherAnswerInput(requestId: number, questionId: string, event
 
 function onMcpElicitationFieldInput(requestId: number, field: McpElicitationField, event: Event): void {
   const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLInputElement ?? HTMLInputElement))) return
   mcpElicitationAnswers.value = {
     ...mcpElicitationAnswers.value,
     [mcpElicitationAnswerKey(requestId, field.key)]: target.value,
@@ -3987,7 +3992,7 @@ function onMcpElicitationFieldInput(requestId: number, field: McpElicitationFiel
 
 function onMcpElicitationBooleanToggle(requestId: number, field: McpElicitationField, event: Event): void {
   const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLInputElement ?? HTMLInputElement))) return
   mcpElicitationAnswers.value = {
     ...mcpElicitationAnswers.value,
     [mcpElicitationAnswerKey(requestId, field.key)]: target.checked,
@@ -4001,7 +4006,7 @@ function onMcpElicitationMultiToggle(
   event: Event,
 ): void {
   const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  if (!(target instanceof ((props.ownerDocument ?? document).defaultView?.HTMLInputElement ?? HTMLInputElement))) return
   const next = new Set(readMcpElicitationMultiValue(requestId, field))
   if (target.checked) next.add(optionValue)
   else next.delete(optionValue)
@@ -4565,11 +4570,19 @@ function closeImageModal(): void {
   modalImageUrl.value = ''
 }
 
-onMounted(() => {
-  window.addEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
-  window.addEventListener('blur', onWindowBlurForFileLinkContextMenu)
-  window.addEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
-})
+watch(() => props.ownerDocument ?? document, (owner, _previous, onCleanup) => {
+  const ownerWindow = owner.defaultView ?? window
+  closeFileLinkContextMenu()
+  messageCopy.reset()
+  ownerWindow.addEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
+  ownerWindow.addEventListener('blur', onWindowBlurForFileLinkContextMenu)
+  ownerWindow.addEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
+  onCleanup(() => {
+    ownerWindow.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
+    ownerWindow.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
+    ownerWindow.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
+  })
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   messageSourceGeneration += 1
@@ -4585,9 +4598,6 @@ onBeforeUnmount(() => {
     bottomLockFrame = 0
   }
   messageCopy.reset()
-  window.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
-  window.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
-  window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
 })
 </script>
 

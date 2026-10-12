@@ -47,6 +47,7 @@
           <p v-if="isOpening" class="side-conversation-status">{{ t('Opening side conversation...') }}</p>
           <ThreadConversation
             v-else-if="visible"
+            ref="conversationRef"
             class="side-conversation-thread"
             :messages="messages"
             :pending-requests="pendingRequests"
@@ -55,6 +56,8 @@
             :active-thread-id="threadId"
             :cwd="cwd"
             :readonly="true"
+            :owner-document="popupTarget?.ownerDocument"
+            :can-implement-plan="!isOpening && Boolean(threadId) && pendingRequests.length === 0 && !isUpdatingSpeedMode && !isImplementingPlan"
             :can-edit-message="!isOpening && Boolean(threadId) && pendingRequests.length === 0"
             history-source="ephemeral"
             :has-more-persisted-above="hasMoreOlder"
@@ -66,6 +69,7 @@
             :load-later-messages="loadLaterMessages"
             :load-latest-messages="loadLatestMessages"
             @edit-message="onEditMessage"
+            @implement-plan="emit('implement-plan', $event)"
           />
         </div>
 
@@ -95,6 +99,7 @@
             :supported-reasoning-efforts="supportedReasoningEfforts"
             :selected-reasoning-effort="selectedReasoningEffort"
             :selected-speed-mode="selectedSpeedMode"
+            :is-updating-speed-mode="isUpdatingSpeedMode"
             :skills="skills"
             :is-turn-in-progress="isTurnInProgress"
             :has-queue-above="queuedMessages.length > 0"
@@ -190,6 +195,9 @@ const props = defineProps<{
   error: string
   isOpening: boolean
   isTurnInProgress: boolean
+  isUpdatingSpeedMode: boolean
+  isImplementingPlan: boolean
+  followLatestRevision: number
   collaborationModes: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
@@ -209,6 +217,7 @@ const emit = defineEmits<{
   end: []
   send: [payload: SubmitPayload]
   interrupt: []
+  'implement-plan': [payload: { turnId: string }]
   'update:selected-collaboration-mode': [mode: CollaborationModeKind]
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
@@ -226,6 +235,7 @@ const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
 const SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP = 16
 const composerRef = ref<ThreadComposerExposed | null>(null)
+const conversationRef = ref<{ jumpToLatest: () => Promise<void> } | null>(null)
 const popupTarget = shallowRef<HTMLElement | null>(null)
 let popupWindow: Window | null = null
 let popupThemeObserver: MutationObserver | null = null
@@ -279,7 +289,9 @@ function popOut(): void {
     syncTheme()
     popupThemeObserver = new MutationObserver(syncTheme)
     popupThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
-    opened.addEventListener('pagehide', returnFromPopup, { once: true })
+    opened.addEventListener('pagehide', () => {
+      if (popupWindow === opened) returnFromPopup()
+    }, { once: true })
     popupTarget.value = popupDocument.body
   }, { once: true })
 }
@@ -332,6 +344,10 @@ function onEditMessage(text: string): void {
   if (props.isOpening || !props.threadId || props.pendingRequests.length) return
   composerRef.value?.appendTextToDraft(text)
 }
+
+watch(() => props.followLatestRevision, () => {
+  if (props.visible) void conversationRef.value?.jumpToLatest()
+}, { flush: 'post' })
 
 defineExpose({ hydrateDraft, hasUnsavedDraft })
 

@@ -70,10 +70,11 @@ async function loadPage(pageOffset: number): Promise<void> {
   }
 }
 
-async function copyFullOutput(): Promise<void> {
+async function copyFullOutput(event: MouseEvent): Promise<void> {
   if (!canCopyFull.value || copying.value) return
   const requestGeneration = ++copyGeneration
   const messageId = props.message.id
+  const ownerDocument = (event.currentTarget as Node | null)?.ownerDocument ?? undefined
   copying.value = true
   error.value = ''
   try {
@@ -85,7 +86,7 @@ async function copyFullOutput(): Promise<void> {
       fullText = command.aggregatedOutput
     }
     if (requestGeneration !== copyGeneration) return
-    await copyTextToClipboard(fullText)
+    await copyTextToClipboard(fullText, ownerDocument)
     if (requestGeneration !== copyGeneration) return
     copied.value = true
     if (copiedTimer) clearTimeout(copiedTimer)

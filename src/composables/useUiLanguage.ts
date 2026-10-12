@@ -192,6 +192,7 @@ const zhCN: Record<string, string> = {
   'Send message': '发送消息',
   'Send': '发送',
   'Side conversation': '侧窗聊天',
+  'Implement plan': '实施计划',
   'Earlier temporary messages have been cleared': '较早的临时消息已清理',
   'Message preview truncated': '消息预览已截断',
   'Full message source has expired or is still running': '完整消息源已过期或仍在生成',

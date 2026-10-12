@@ -5,11 +5,16 @@ export const MIN_DESKTOP_PANEL_WIDTH = 280
 export const MAX_DESKTOP_PANEL_WIDTH = 960
 export const DESKTOP_PANEL_COLLAPSED_WIDTH = 44
 
-const MIN_DESKTOP_THREAD_SPACE = 332
+export const MIN_DESKTOP_THREAD_SPACE = 332
+export const MIN_DESKTOP_SPLIT_WIDTH = MIN_DESKTOP_THREAD_SPACE + MIN_DESKTOP_PANEL_WIDTH
 const ACTIVE_SUBAGENT_STATUSES = new Set(['pendingInit', 'running'])
 
 export function canExpandDesktopPanel(layoutWidth: number): boolean {
-  return layoutWidth >= MIN_DESKTOP_THREAD_SPACE + MIN_DESKTOP_PANEL_WIDTH
+  return layoutWidth >= MIN_DESKTOP_SPLIT_WIDTH
+}
+
+export function canShowBothDesktopSidebars(layoutWidth: number): boolean {
+  return canExpandDesktopPanel(layoutWidth - 260 - 1)
 }
 
 export function isActiveSubagentStatus(status: string | undefined): boolean {

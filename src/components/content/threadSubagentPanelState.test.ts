@@ -3,6 +3,7 @@ import type { UiMessage } from '../../types/codex'
 import {
   DEFAULT_DESKTOP_PANEL_WIDTH,
   canExpandDesktopPanel,
+  canShowBothDesktopSidebars,
   DESKTOP_PANEL_COLLAPSED_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
@@ -13,6 +14,12 @@ import {
 } from './threadSubagentPanelState'
 
 describe('desktop subagent sidebar width', () => {
+  it('reserves both sidebars and the conversation, including the left separator', () => {
+    expect(canShowBothDesktopSidebars(768)).toBe(false)
+    expect(canShowBothDesktopSidebars(872)).toBe(false)
+    expect(canShowBothDesktopSidebars(873)).toBe(true)
+    expect(canShowBothDesktopSidebars(1440)).toBe(true)
+  })
   it('grows when dragged left, shrinks when dragged right, and preserves parent space', () => {
     expect(desktopPanelWidthAfterDrag(480, 500, 400, 1440)).toBe(580)
     expect(desktopPanelWidthAfterDrag(480, 500, 600, 1440)).toBe(380)

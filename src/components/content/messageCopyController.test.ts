@@ -39,11 +39,33 @@ afterEach(() => {
 })
 
 describe('message copy interaction', () => {
+  it('uses the popup selection, clipboard and fallback document', async () => {
+    class PopupElement extends TextTarget {}
+    let popupSelectionCollapsed = false
+    const owner = { defaultView: { Element: PopupElement, getSelection: () => ({ isCollapsed: popupSelectionCollapsed }) } } as unknown as Document
+    controller = createMessageCopyController({ getThreadId: () => threadId, getResponseText: () => undefined, getOwnerDocument: () => owner })
+    const target = new PopupElement()
+    controller.onUserMessageTextClick(user, { target } as unknown as MouseEvent)
+    expect(controller.expandedUserMessageId.value).toBe('')
+    popupSelectionCollapsed = true
+    target.closest.mockReturnValue({})
+    controller.onUserMessageTextClick(user, { target } as unknown as MouseEvent)
+    expect(controller.expandedUserMessageId.value).toBe('')
+    target.closest.mockReturnValue(null)
+    controller.onUserMessageTextClick(user, { target } as unknown as MouseEvent)
+    expect(controller.expandedUserMessageId.value).toBe(user.id)
+    vi.mocked(copyTextToClipboard).mockRejectedValueOnce(new Error('permission denied'))
+    vi.mocked(copyTextWithSelectionFallback).mockReturnValueOnce(true)
+    await controller.copyMessage(user)
+    expect(copyTextToClipboard).toHaveBeenCalledWith(user.text, owner)
+    expect(copyTextWithSelectionFallback).toHaveBeenCalledWith(user.text, owner)
+    expect(controller.copiedMessageId.value).toBe(user.id)
+  })
   it('resolves truncated user sources and never copies a partial preview on failure', async () => {
     const getUserText = vi.fn().mockResolvedValue('full user message')
     controller = createMessageCopyController({ getThreadId: () => threadId, getUserText, getResponseText: () => undefined })
     await controller.copyMessage({ ...user, text: 'preview', textTruncated: true })
-    expect(copyTextToClipboard).toHaveBeenCalledWith('full user message')
+    expect(copyTextToClipboard).toHaveBeenCalledWith('full user message', undefined)
     vi.mocked(copyTextToClipboard).mockClear()
     getUserText.mockRejectedValueOnce(new Error('Source expired'))
     await controller.copyMessage({ ...user, text: 'preview', textTruncated: true })
@@ -55,7 +77,7 @@ describe('message copy interaction', () => {
     expect(controller.showCopyMessageButton(assistant)).toBe(true)
     expect(getResponseText).not.toHaveBeenCalled()
     await controller.copyMessage(assistant)
-    expect(copyTextToClipboard).toHaveBeenCalledWith('Full response')
+    expect(copyTextToClipboard).toHaveBeenCalledWith('Full response', undefined)
   })
 
   it('discards an asynchronous source read after the thread is reset', async () => {
@@ -110,7 +132,7 @@ describe('message copy interaction', () => {
 
   it('copies exact user text and resets feedback after 1800ms', async () => {
     await controller.copyMessage(user)
-    expect(copyTextToClipboard).toHaveBeenCalledWith('  first\nsecond  ')
+    expect(copyTextToClipboard).toHaveBeenCalledWith('  first\nsecond  ', undefined)
     expect(copyTextWithSelectionFallback).not.toHaveBeenCalled()
     expect(controller.copiedMessageId.value).toBe(user.id)
     await vi.advanceTimersByTimeAsync(1799)
@@ -124,14 +146,14 @@ describe('message copy interaction', () => {
     vi.mocked(copyTextToClipboard).mockRejectedValue(new Error('Copy failed'))
     vi.mocked(copyTextWithSelectionFallback).mockReturnValue(fallbackSucceeds)
     await controller.copyMessage(user)
-    expect(copyTextWithSelectionFallback).toHaveBeenCalledWith(user.text)
+    expect(copyTextWithSelectionFallback).toHaveBeenCalledWith(user.text, undefined)
     expect(controller.copiedMessageId.value).toBe(fallbackSucceeds ? user.id : '')
   })
 
   it('preserves combined assistant copy independently of the user toggle', async () => {
     expect(controller.showCopyMessageButton(assistant)).toBe(true)
     await controller.copyMessage(assistant)
-    expect(copyTextToClipboard).toHaveBeenCalledWith('Combined response\nfile diff')
+    expect(copyTextToClipboard).toHaveBeenCalledWith('Combined response\nfile diff', undefined)
     expect(controller.copiedMessageId.value).toBe(assistant.id)
   })
 

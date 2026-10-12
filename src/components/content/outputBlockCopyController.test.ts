@@ -29,7 +29,7 @@ describe('output block copy controller', () => {
 
     expect(stopPropagation).toHaveBeenCalledOnce()
     expect(copyTextToClipboard).toHaveBeenCalledOnce()
-    expect(copyTextToClipboard).toHaveBeenCalledWith('exact source')
+    expect(copyTextToClipboard).toHaveBeenCalledWith('exact source', undefined)
     expect(states.at(-1)).toEqual({ copied: true, errorText: '' })
 
     await vi.advanceTimersByTimeAsync(1499)
@@ -50,5 +50,14 @@ describe('output block copy controller', () => {
 
     expect(states.at(-1)).toEqual({ copied: false, errorText: 'Copy failed' })
     expect(controller.state).toEqual({ copied: false, errorText: 'Copy failed' })
+  })
+
+  it('copies in the document of a popup button', async () => {
+    vi.mocked(copyTextToClipboard).mockResolvedValue()
+    const ownerDocument = {} as Document
+    const controller = createOutputBlockCopyController({ getCopyText: () => 'popup code', onStateChange: vi.fn() })
+    await controller.copyOutput({ stopPropagation: vi.fn(), currentTarget: { ownerDocument } as unknown as EventTarget })
+    expect(copyTextToClipboard).toHaveBeenCalledWith('popup code', ownerDocument)
+    controller.dispose()
   })
 })

@@ -2381,20 +2381,25 @@ describe('side conversation lifecycle', () => {
     }))
   })
 
-  it('keeps a steer after live output and stops moving it after completion', async () => {
+  it('keeps confirmed steering in server order before later side turns', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
     await state.openSideConversation('thread-1')
     await state.sendSideConversationMessage('first')
     await state.sendSideConversationMessage('steer')
     emit({ method: 'item/completed', params: { threadId: 'side-thread-default', turnId: 'side-turn', item: { id: 'reply', type: 'agentMessage', text: 'live output' } } })
-    gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: true })
-    await state.loadMessages('side-thread-default', { silent: true, force: true })
-    expect(state.sideConversationMessages.value.at(-1)).toMatchObject({ text: 'steer', messageType: 'userMessage.optimistic.steer' })
-    gatewayMocks.getThreadSummary.mockResolvedValue({ inProgress: false })
-    await state.loadMessages('side-thread-default', { silent: true, force: true })
-    expect(state.sideConversationMessages.value.at(-1)?.text).toBe('live output')
-    expect(state.sideConversationMessages.value.some((message) => message.messageType?.endsWith('.steer'))).toBe(false)
+    const messages: UiMessage[] = [
+      { id: 'first', role: 'user', text: 'first', turnId: 'side-turn', turnIndex: 0 },
+      { id: 'steer', role: 'user', text: 'steer', turnId: 'side-turn', turnIndex: 0, messageType: 'userMessage.steer' },
+      { id: 'reply', role: 'assistant', text: 'live output', turnId: 'side-turn', turnIndex: 0 },
+      { id: 'next', role: 'user', text: 'next question', turnId: 'next-turn', turnIndex: 1 },
+      { id: 'next-reply', role: 'assistant', text: 'next answer', turnId: 'next-turn', turnIndex: 1 },
+    ]
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue({ messages, inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: { 'side-turn': 0, 'next-turn': 1 } })
+    await state.loadLatestMessages('side-thread-default')
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(messages.map((message) => message.id))
+    await state.loadLatestMessages('side-thread-default')
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(messages.map((message) => message.id))
   })
 
   it('minimizes and restores the same child without forking again', async () => {
@@ -4243,6 +4248,207 @@ describe('history rollback capability', () => {
 })
 
 describe('side memory event races', () => {
+  const sidePage = (messages: UiMessage[], hasMoreNewer = false) => ({
+    messages, inProgress: false, activeTurnId: '', hasMoreOlder: true, hasMoreNewer,
+    turnIndexByTurnId: Object.fromEntries(messages.filter((message) => message.turnId).map((message) => [message.turnId!, message.turnIndex ?? 0])),
+  })
+  const sideRow = (id: string, index: number): UiMessage => ({ id, role: 'assistant', text: id, turnId: `turn-${index}`, turnIndex: index })
+
+  it('implements a side plan once in Default without changing the main mode', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    state.setSelectedCollaborationMode('plan')
+    state.setSideConversationCollaborationMode('plan')
+    let finish!: (turnId: string) => void
+    gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve }))
+    const first = state.implementSideConversationPlan('plan-turn')
+    const duplicate = state.implementSideConversationPlan('plan-turn')
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.startThreadTurn.mock.calls[0]?.[0]).toBe('side-thread-default')
+    expect(gatewayMocks.startThreadTurn.mock.calls[0]?.[1]).toBe('Implement')
+    expect(gatewayMocks.startThreadTurn.mock.calls[0]?.[7]).toBe('default')
+    expect(state.selectedCollaborationMode.value).toBe('plan')
+    expect(state.sideConversationCollaborationMode.value).toBe('default')
+    expect(state.isSideConversationImplementingPlan.value).toBe(true)
+    finish('implemented-turn')
+    await Promise.all([first, duplicate])
+    expect(state.isSideConversationImplementingPlan.value).toBe(false)
+  })
+
+  it('blocks side sending and plan implementation while speed settings are updating', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    state.setSideConversationCollaborationMode('plan')
+    state.isUpdatingSpeedMode.value = true
+    await state.sendSideConversationMessage('blocked')
+    await state.implementSideConversationPlan('plan-turn')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(state.sideConversationMessages.value).toEqual([])
+    expect(state.sideConversationCollaborationMode.value).toBe('plan')
+  })
+
+  it('retains a queued side message during a speed save and starts it once afterward', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('first-side-turn').mockResolvedValueOnce('next-side-turn')
+    await state.sendSideConversationMessage('first')
+    await state.sendSideConversationMessage('next', [], [], 'queue')
+    let finish!: () => void
+    gatewayMocks.setCodexSpeedMode.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    const save = state.updateSelectedSpeedMode('fast')
+    emit({ method: 'turn/completed', params: { threadId: 'side-thread-default', turn: { id: 'first-side-turn', status: 'completed' } } })
+    await flushMicrotasks()
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['next'])
+    state.steerSideConversationQueuedMessage(state.sideConversationQueuedMessages.value[0]!.id)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    finish()
+    await save
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn.mock.calls.map((call) => call[1])).toEqual(['first', 'next'])
+    expect(state.sideConversationQueuedMessages.value).toEqual([])
+  })
+
+  it.each([false, true])('removes only a failed local send while steering=%s', async (steering) => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    if (steering) {
+      gatewayMocks.startThreadTurn.mockResolvedValueOnce('active-side-turn')
+      await state.sendSideConversationMessage('first')
+    }
+    gatewayMocks.startThreadTurn.mockRejectedValueOnce(new Error('send failed'))
+    await state.sendSideConversationMessage('failed question')
+    expect(state.sideConversationMessages.value.some((message) => message.text === 'failed question')).toBe(false)
+    expect(state.isSideConversationInProgress.value).toBe(steering)
+    expect(state.sideConversationError.value).toBe('send failed')
+    expect(state.sideConversationLiveOverlay.value?.errorText).toBe('send failed')
+    if (steering) expect(state.sideConversationMessages.value.some((message) => message.text === 'first')).toBe(true)
+  })
+
+  it('restores latest before sending from history and resumes output following', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('new-turn')
+    const send = state.sendSideConversationMessage('from history')
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    finish(sidePage([sideRow('C', 2)]))
+    await send
+    expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+    expect(state.sideConversationFollowLatestRevision.value).toBe(1)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the history window and skips sending if restoring latest fails', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    const before = state.sideConversationMessages.value
+    gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new Error('read failed'))
+    await state.sendSideConversationMessage('from history')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(state.sideConversationMessages.value).toEqual(before)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+    expect(state.sideConversationFollowLatestRevision.value).toBe(0)
+  })
+
+  it('preserves a minimized history window without requesting latest on restoration', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    state.hideSideConversation()
+    const before = state.sideConversationMessages.value
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    await state.openSideConversation('thread-1')
+    expect(gatewayMocks.getLatestThreadMessages).not.toHaveBeenCalled()
+    expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+    expect(state.sideConversationMessages.value).toEqual(before)
+  })
+
+  it('absorbs a completed plan snapshot before retention can restore the stale live plan', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    emit({ method: 'turn/started', params: { threadId: 'side-thread-default', turn: { id: 'plan-turn' } } })
+    emit({ method: 'turn/plan/updated', params: { threadId: 'side-thread-default', turnId: 'plan-turn', plan: [{ step: 'Check', status: 'inProgress' }] } })
+    const live = state.sideConversationMessages.value.find((message) => message.plan)
+    expect(live).toBeDefined()
+    const final: UiMessage = { ...live!, messageType: 'plan', text: 'Completed plan', plan: { steps: [{ step: 'Check', status: 'completed' }] } }
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([final]))
+    await state.loadLatestMessages('side-thread-default')
+    expect(state.sideConversationMessages.value.filter((message) => message.id === final.id)).toEqual([expect.objectContaining({ messageType: 'plan', text: 'Completed plan', plan: final.plan })])
+    expect(state.getLiveMessagesForThread('side-thread-default').some((message) => message.id === final.id)).toBe(false)
+  })
+
+  it('continues side body, command and plan deltas from the absorbed snapshot prefix', async () => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    const snapshot: UiMessage[] = [
+      { id: 'reply', role: 'assistant', text: 'body prefix', turnId: params.turnId, turnIndex: 0, messageType: 'agentMessage.live' },
+      { id: 'command', role: 'system', text: '', turnId: params.turnId, turnIndex: 0, messageType: 'commandExecution', commandExecution: { command: 'echo', cwd: null, status: 'inProgress', aggregatedOutput: 'command prefix', exitCode: null } },
+      { id: 'side-turn:plan', role: 'assistant', text: 'plan prefix', turnId: params.turnId, turnIndex: 0, messageType: 'plan.live' },
+    ]
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage(snapshot))
+    await state.loadLatestMessages(params.threadId)
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'reply', delta: ' + delta' } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'command', delta: ' + delta' } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: ' + delta' } })
+    await vi.advanceTimersByTimeAsync(50)
+    const rows = state.sideConversationMessages.value
+    expect(rows.find((message) => message.id === 'reply')?.text).toBe('body prefix + delta')
+    expect(rows.find((message) => message.id === 'command')?.commandExecution?.aggregatedOutput).toBe('command prefix + delta')
+    expect(rows.find((message) => message.id === 'side-turn:plan')?.text).toBe('plan prefix + delta')
+    expect(new Set(rows.map((message) => message.id)).size).toBe(rows.length)
+  })
+
+  it('runs one latest read after an in-flight older read instead of treating it as latest', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let finish!: (page: unknown) => void
+    gatewayMocks.getOlderThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const older = state.loadOlderMessages('side-thread-default')
+    const latest = state.loadLatestMessages('side-thread-default')
+    const duplicate = state.loadLatestMessages('side-thread-default')
+    expect(gatewayMocks.getLatestThreadMessages).not.toHaveBeenCalled()
+    finish(sidePage([sideRow('B', 1)], true))
+    await Promise.all([older, latest, duplicate])
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(['C'])
+  })
+
+  it('places an older row changed during latest reading before a newer snapshot turn', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([sideRow('A', 0), sideRow('B', 1)]))
+    await state.loadLatestMessages('side-thread-default')
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const load = state.loadLatestMessages('side-thread-default')
+    emit({ method: 'item/completed', params: { threadId: 'side-thread-default', turnId: 'turn-0', item: { id: 'A', type: 'agentMessage', text: 'updated A' } } })
+    finish(sidePage([sideRow('C', 2)]))
+    await load
+    expect(state.sideConversationMessages.value.map((message) => [message.id, message.text])).toEqual([['A', 'updated A'], ['C', 'C']])
+  })
+
   it('keeps a newer same-ID live reply when an older temporary snapshot returns late', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')

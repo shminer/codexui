@@ -20,7 +20,11 @@ describe('desktop conversation split layout', () => {
     if (main.type !== 1) throw new Error('Main column missing')
     expect(main.props).toContainEqual(expect.objectContaining({ name: 'class', value: expect.objectContaining({ content: 'content-main-column' }) }))
     expect(main.children.some((node) => node.type === 1 && node.tag === 'ContentHeader')).toBe(true)
-    expect(source).toContain('showThreadSubagentPanel ? 376 : 0')
+    expect(source).toContain(':min-main-width="subagentLayoutMinimum"')
+    expect(source).toContain('MIN_DESKTOP_SPLIT_WIDTH : MIN_DESKTOP_THREAD_SPACE + DESKTOP_PANEL_COLLAPSED_WIDTH')
+    expect(source).toContain('@request-desktop-expand="onRequestSubagentExpand"')
+    expect(source).toContain('@desktop-expanded-change="isSubagentPanelExpanded = $event"')
+    expect(source).toContain('threadSubagentPanelRef.value?.collapseDesktopPanel()')
     expect(source).toContain('.content-main-column :deep(.thread-composer:has(.thread-composer-input-wrap--expanded))')
   })
 

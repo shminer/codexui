@@ -5,7 +5,7 @@ export type OutputBlockCopyState = {
   errorText: string
 }
 
-type CopyClick = Pick<Event, 'stopPropagation'>
+type CopyClick = Pick<Event, 'stopPropagation'> & Partial<Pick<Event, 'currentTarget'>>
 
 export function createOutputBlockCopyController(options: {
   getCopyText: () => string
@@ -27,11 +27,12 @@ export function createOutputBlockCopyController(options: {
 
   async function copyOutput(event: CopyClick): Promise<void> {
     event.stopPropagation()
+    const ownerDocument = (event.currentTarget as Node | null)?.ownerDocument ?? undefined
     clearResetTimer()
     publish({ copied: false, errorText: '' })
 
     try {
-      await copyTextToClipboard(options.getCopyText())
+      await copyTextToClipboard(options.getCopyText(), ownerDocument)
       publish({ copied: true, errorText: '' })
       resetTimer = setTimeout(() => {
         resetTimer = null

@@ -2,6 +2,11 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadConversation render-window wiring', () => {
+  it('places live status beside only the current turn steering', async () => {
+    const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
+    expect(source).toContain('const steeringIndex = props.liveOverlay.turnId ? rows.findIndex')
+    expect(source).toContain('message?.turnId === props.liveOverlay?.turnId')
+  })
   it('clamps visible messages and enters manual history mode before expansion', async () => {
     const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
     expect(source).toContain('const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(')

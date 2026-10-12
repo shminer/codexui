@@ -1,38 +1,39 @@
-export function copyTextWithSelectionFallback(text: string): boolean {
-  if (typeof document === 'undefined') return false
+export function copyTextWithSelectionFallback(text: string, ownerDocument = typeof document === 'undefined' ? undefined : document): boolean {
+  if (!ownerDocument) return false
 
-  const textarea = document.createElement('textarea')
+  const textarea = ownerDocument.createElement('textarea')
   textarea.value = text
   textarea.setAttribute('readonly', 'true')
   textarea.style.position = 'fixed'
   textarea.style.left = '-9999px'
   textarea.style.opacity = '0'
   textarea.style.pointerEvents = 'none'
-  document.body.appendChild(textarea)
+  ownerDocument.body.appendChild(textarea)
   textarea.focus()
   textarea.select()
   textarea.setSelectionRange(0, text.length)
 
   try {
-    return document.execCommand('copy')
+    return ownerDocument.execCommand('copy')
   } catch {
     return false
   } finally {
-    document.body.removeChild(textarea)
+    ownerDocument.body.removeChild(textarea)
   }
 }
 
-export async function copyTextToClipboard(text: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+export async function copyTextToClipboard(text: string, ownerDocument = typeof document === 'undefined' ? undefined : document): Promise<void> {
+  const ownerNavigator = ownerDocument?.defaultView?.navigator ?? (typeof navigator === 'undefined' ? undefined : navigator)
+  if (ownerNavigator?.clipboard?.writeText) {
     try {
-      await navigator.clipboard.writeText(text)
+      await ownerNavigator.clipboard.writeText(text)
       return
     } catch {
       // Fall back for embedded browser contexts without clipboard permission.
     }
   }
 
-  if (!copyTextWithSelectionFallback(text)) {
+  if (!copyTextWithSelectionFallback(text, ownerDocument)) {
     throw new Error('Copy failed')
   }
 }

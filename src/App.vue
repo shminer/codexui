@@ -1,5 +1,5 @@
 <template>
-  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed" :min-main-width="showThreadSubagentPanel ? 376 : 0" @close-sidebar="setSidebarCollapsed(true)">
+  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed" :min-main-width="subagentLayoutMinimum" @close-sidebar="setSidebarCollapsed(true)">
     <template #sidebar>
       <section class="sidebar-root">
         <div
@@ -1109,12 +1109,15 @@
         </div>
         <ThreadSubagentPanel
           v-if="showThreadSubagentPanel"
+          ref="threadSubagentPanelRef"
           :parent-thread-id="composerThreadContextId"
           :agents="selectedThreadSubagents"
           :cwd="composerCwd"
           :live-overlay-for-thread="getLiveOverlayForThread"
           :live-messages-for-thread="getCurrentTurnMessagesForThread"
           :prepare-snapshot-for-thread="prepareSubagentSnapshot"
+          @request-desktop-expand="onRequestSubagentExpand"
+          @desktop-expanded-change="isSubagentPanelExpanded = $event"
         />
       </section>
     </template>
@@ -1141,6 +1144,9 @@
     :error="sideConversationError || sideConversationHistoryError"
     :is-opening="isSideConversationOpening"
     :is-turn-in-progress="isSideConversationInProgress"
+    :is-updating-speed-mode="isUpdatingSpeedMode"
+    :is-implementing-plan="isSideConversationImplementingPlan"
+    :follow-latest-revision="sideConversationFollowLatestRevision"
     :collaboration-modes="availableCollaborationModes"
     :selected-collaboration-mode="sideConversationCollaborationMode"
     :models="availableModelIds"
@@ -1160,6 +1166,7 @@
     @update:selected-speed-mode="onSelectSpeedMode"
     @send="onSubmitSideConversationMessage"
     @interrupt="interruptSideConversationTurn"
+    @implement-plan="implementSideConversationPlan($event.turnId)"
     @edit-queued-message="onEditSideConversationQueuedMessage"
     @steer-queued-message="steerSideConversationQueuedMessage"
     @steer-first-queued-message="onSteerFirstSideConversationQueuedMessage"
@@ -1348,6 +1355,7 @@ import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider
 import { encodeLocalPathForUrl, getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 import { CHAT_WIDTH_MIN, CHAT_WIDTH_MAX, CHAT_WIDTH_STEP, CHAT_WIDTH_DEFAULT, loadChatWidthPref, saveChatWidthPref, normalizeChatWidth } from './chatWidth'
+import { canShowBothDesktopSidebars, DESKTOP_PANEL_COLLAPSED_WIDTH, MIN_DESKTOP_SPLIT_WIDTH, MIN_DESKTOP_THREAD_SPACE } from './components/content/threadSubagentPanelState'
 
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadSideConversation = defineAsyncComponent(() => import('./components/content/ThreadSideConversation.vue'))
@@ -1485,6 +1493,9 @@ const {
   setSideConversationReasoningEffort,
   setSideConversationCollaborationMode,
   sendSideConversationMessage,
+  implementSideConversationPlan,
+  isSideConversationImplementingPlan,
+  sideConversationFollowLatestRevision,
   removeSideConversationQueuedMessage,
   reorderSideConversationQueuedMessage,
   steerSideConversationQueuedMessage,
@@ -1557,6 +1568,8 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
 const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
+const threadSubagentPanelRef = ref<{ collapseDesktopPanel: () => void } | null>(null)
+const isSubagentPanelExpanded = ref(false)
 const editingSideConversationQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
 const threadConversationRef = ref<{ jumpToLatest: () => void; openSearch: () => void; openResources: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -1851,6 +1864,9 @@ const showThreadContextBadge = computed(() => !isHomeRoute.value && !isSkillsRou
 const showThreadSubagentPanel = computed(() => (
   route.name === 'thread' && !(isReviewPaneOpen.value && selectedThreadId.value && composerCwd.value)
 ))
+const subagentLayoutMinimum = computed(() => showThreadSubagentPanel.value
+  ? isSubagentPanelExpanded.value ? MIN_DESKTOP_SPLIT_WIDTH : MIN_DESKTOP_THREAD_SPACE + DESKTOP_PANEL_COLLAPSED_WIDTH
+  : 0)
 const isAccountSwitchBlocked = computed(() =>
   isSendingMessage.value ||
   isInterruptingTurn.value ||
@@ -2225,6 +2241,9 @@ onUnmounted(() => {
 
 function updateVisualViewportState(): void {
   if (typeof window === 'undefined') return
+  if (!isMobile.value && showThreadSubagentPanel.value && isSubagentPanelExpanded.value && !isSidebarCollapsed.value && !canShowBothSidebars()) {
+    setSidebarCollapsed(true)
+  }
   layoutViewportHeight.value = Math.max(layoutViewportHeight.value, window.innerHeight)
   visualViewportHeight.value = window.visualViewport?.height ?? window.innerHeight
   visualViewportOffsetTop.value = window.visualViewport?.offsetTop ?? 0
@@ -3185,6 +3204,9 @@ async function onForkThreadFromMessage(payload: { threadId: string; turnId: stri
 }
 
 function setSidebarCollapsed(nextValue: boolean): void {
+  if (!nextValue && !isMobile.value && isSubagentPanelExpanded.value && !canShowBothSidebars()) {
+    threadSubagentPanelRef.value?.collapseDesktopPanel()
+  }
   if (isSidebarCollapsed.value === nextValue) return
   if (nextValue) {
     const currentScrollTop = getSidebarScrollableElement()?.scrollTop
@@ -3197,6 +3219,17 @@ function setSidebarCollapsed(nextValue: boolean): void {
   if (!nextValue) {
     restoreSidebarScrollPosition()
   }
+}
+
+function canShowBothSidebars(): boolean {
+  const layout = document.querySelector<HTMLElement>('.desktop-layout')
+  return canShowBothDesktopSidebars(layout?.clientWidth ?? window.innerWidth)
+}
+
+function onRequestSubagentExpand(): void {
+  if (isMobile.value) return
+  isSubagentPanelExpanded.value = true
+  if (!canShowBothSidebars()) setSidebarCollapsed(true)
 }
 
 function onWindowKeyDown(event: KeyboardEvent): void {

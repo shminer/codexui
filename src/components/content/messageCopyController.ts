@@ -11,6 +11,7 @@ export function createMessageCopyController(options: {
   getResponseText: (messageId: string) => string | undefined | Promise<string | undefined>
   getUserText?: (message: UiMessage) => string | Promise<string>
   hasResponseText?: (messageId: string) => boolean
+  getOwnerDocument?: () => Document
 }) {
   const expandedUserMessageId = ref('')
   const copiedMessageId = ref('')
@@ -24,8 +25,9 @@ export function createMessageCopyController(options: {
 
   function onUserMessageTextClick(message: UiMessage, event: MouseEvent): void {
     if (!isCopyableUserMessage(message)) return
-    if (event.target instanceof Element && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
-    if (window.getSelection()?.isCollapsed === false) return
+    const ownerWindow = options.getOwnerDocument?.().defaultView ?? window
+    if (event.target instanceof (ownerWindow.Element ?? Element) && event.target.closest('a, button, input, textarea, select, summary, [role="button"], [contenteditable="true"]')) return
+    if (ownerWindow.getSelection()?.isCollapsed === false) return
     toggleUserMessageCopy(message)
   }
 
@@ -49,12 +51,13 @@ export function createMessageCopyController(options: {
     if (message.role === 'user') copiedMessageId.value = ''
 
     let copied = false
+    const ownerDocument = options.getOwnerDocument?.()
     try {
-      await copyTextToClipboard(content)
+      await copyTextToClipboard(content, ownerDocument)
       copied = true
     } catch {
       if (generationAtStart !== copyGeneration || options.getThreadId() !== threadIdAtStart) return
-      copied = copyTextWithSelectionFallback(content)
+      copied = copyTextWithSelectionFallback(content, ownerDocument)
     }
 
     if (!copied || generationAtStart !== copyGeneration || options.getThreadId() !== threadIdAtStart) return

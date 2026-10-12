@@ -26,8 +26,7 @@
           class="subagent-header-trigger"
           :aria-label="`Show ${allAgents.length} agents`"
           :aria-expanded="desktopPanelExpanded"
-          :title="desktopPanelCanExpand ? `Show ${allAgents.length} agents` : 'Agents sidebar needs more space'"
-          :disabled="!desktopPanelCanExpand"
+          :title="`Show ${allAgents.length} agents`"
           @click="toggleSubagentPanel"
         >
           <IconTablerLayoutSidebar v-if="desktopPanelExpanded" class="subagent-header-trigger-icon" />
@@ -152,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getThreadCollaborationPage, type UiSubagent } from '../../api/codexGateway'
 import { useThreadHistoryWindow } from '../../composables/useThreadHistoryWindow'
 import { mergeSubagents } from '../../agentCollaboration'
@@ -186,6 +185,11 @@ const props = defineProps<{
   liveOverlayForThread: (threadId: string) => UiLiveOverlay | null
   liveMessagesForThread: (threadId: string) => UiMessage[]
   prepareSnapshotForThread: (threadId: string) => (messages: UiMessage[]) => void
+}>()
+
+const emit = defineEmits<{
+  'request-desktop-expand': []
+  'desktop-expanded-change': [expanded: boolean]
 }>()
 
 const DESKTOP_PANEL_WIDTH_KEY = 'codex-web-local.subagent-panel-width.v1'
@@ -249,7 +253,8 @@ const selectedMessages = computed(() => {
 const desktopPanelMaximum = computed(() => maximumDesktopPanelWidth(desktopLayoutWidth.value))
 const desktopPanelRenderedWidth = computed(() => effectiveDesktopPanelWidth(desktopPanelWidth.value, desktopLayoutWidth.value))
 const desktopPanelCanExpand = computed(() => canExpandDesktopPanel(desktopLayoutWidth.value))
-const desktopPanelExpanded = computed(() => desktopPanelCanExpand.value && !desktopPanelCollapsed.value && (allAgents.value.length > 0 || historyOpened.value))
+const desktopPanelOpen = computed(() => !desktopPanelCollapsed.value && (allAgents.value.length > 0 || historyOpened.value))
+const desktopPanelExpanded = computed(() => desktopPanelCanExpand.value && desktopPanelOpen.value)
 const desktopHostStyle = computed<Record<string, string>>(() => ({
   '--subagent-panel-width': `${desktopPanelExpanded.value ? desktopPanelRenderedWidth.value : DESKTOP_PANEL_COLLAPSED_WIDTH}px`,
 }))
@@ -277,17 +282,32 @@ function toggleDesktopPanel(): void {
   }
 }
 
-function toggleSubagentPanel(): void {
-  if (!isMobile.value && !desktopPanelCanExpand.value) return
+async function toggleSubagentPanel(): Promise<void> {
+  const opening = !desktopPanelExpanded.value
+  if (!isMobile.value && opening) {
+    emit('request-desktop-expand')
+    await nextTick()
+    readDesktopLayoutWidth()
+  }
   const openingEmptyPanel = !allAgents.value.length && !historyOpened.value
   if (openingEmptyPanel) {
     historyOpened.value = true
-    if (!isMobile.value && desktopPanelCollapsed.value) toggleDesktopPanel()
   }
   if (isMobile.value) mobileSheetOpen.value = true
-  else if (!openingEmptyPanel) toggleDesktopPanel()
+  else if (desktopPanelCollapsed.value === opening) toggleDesktopPanel()
   if ((isMobile.value || desktopPanelExpanded.value) && !historyStarted.value) void loadHistory()
 }
+
+function collapseDesktopPanel(): void {
+  if (!desktopPanelCollapsed.value) toggleDesktopPanel()
+}
+
+defineExpose({ collapseDesktopPanel })
+
+watch(() => !isMobile.value && desktopPanelOpen.value, (expanded) => {
+  if (expanded) emit('request-desktop-expand')
+  emit('desktop-expanded-change', expanded)
+}, { immediate: true, flush: 'sync' })
 
 async function loadHistory(): Promise<void> {
   if (historyLoading.value || historyComplete.value || historyUnsupported.value || !props.parentThreadId) return

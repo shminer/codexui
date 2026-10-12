@@ -2,6 +2,33 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('ThreadSideConversation wiring', () => {
+  it('enables side plan implementation explicitly and forwards it to the side thread', async () => {
+    const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+    const conversation = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
+    expect(side).toContain(':readonly="true"')
+    expect(side).toContain(':can-implement-plan="!isOpening && Boolean(threadId) && pendingRequests.length === 0 && !isUpdatingSpeedMode && !isImplementingPlan"')
+    expect(side).toContain("@implement-plan=\"emit('implement-plan', $event)\"")
+    expect(app).toContain('@implement-plan="implementSideConversationPlan($event.turnId)"')
+    expect(conversation).toContain('(props.canImplementPlan ?? !props.readonly)')
+    expect(conversation).toContain('canImplementPlan: undefined')
+    expect(side).toContain(':is-updating-speed-mode="isUpdatingSpeedMode"')
+    expect(side).toContain('watch(() => props.followLatestRevision')
+    expect(side).toContain('if (props.visible) void conversationRef.value?.jumpToLatest()')
+  })
+
+  it('binds transcript menus and diff panels to the popup document', async () => {
+    const side = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
+    const conversation = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
+    const requests = await readFile(new URL('./ThreadPendingRequestPanel.vue', import.meta.url), 'utf8')
+    expect(side).toContain(':owner-document="popupTarget?.ownerDocument"')
+    expect(conversation).toContain('<Teleport :to="ownerDocument?.body ?? \'body\'">')
+    expect(conversation).toContain("ownerWindow.addEventListener('pointerdown'")
+    expect(conversation).toContain("ownerWindow.removeEventListener('pointerdown'")
+    expect(conversation).toContain('getOwnerDocument: () => props.ownerDocument ?? document')
+    expect(requests).not.toContain('target instanceof HTMLInputElement')
+    expect(requests).toContain("if (target?.tagName !== 'INPUT') return")
+  })
   it('unmounts only the transcript on minimize and wires temporary history navigation', async () => {
     const source = await readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8')
     expect(source).toContain('v-else-if="visible"')

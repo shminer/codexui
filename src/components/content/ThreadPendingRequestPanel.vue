@@ -533,8 +533,8 @@ function toolQuestionOptions(question: ParsedToolQuestion): Array<{ value: strin
 }
 
 function onQuestionOtherAnswerInput(requestId: number, questionId: string, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  const target = event.target as HTMLInputElement | null
+  if (target?.tagName !== 'INPUT') return
   const key = toolQuestionKey(requestId, questionId)
   toolQuestionOtherAnswers.value = {
     ...toolQuestionOtherAnswers.value,
@@ -716,8 +716,8 @@ function readMcpElicitationMultiValue(requestId: number, field: McpElicitationFi
 }
 
 function onMcpElicitationFieldInput(requestId: number, field: McpElicitationField, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  const target = event.target as HTMLInputElement | null
+  if (target?.tagName !== 'INPUT') return
 
   onMcpElicitationFieldValueChange(requestId, field, target.value)
 }
@@ -753,8 +753,8 @@ function onMcpElicitationMultiToggle(
   optionValue: string,
   event: Event,
 ): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  const target = event.target as HTMLInputElement | null
+  if (target?.tagName !== 'INPUT') return
   const current = new Set(readMcpElicitationMultiValue(requestId, field))
   if (target.checked) current.add(optionValue)
   else current.delete(optionValue)
@@ -848,8 +848,8 @@ function onFocusApprovalOther(): void {
 }
 
 function onApprovalOtherInput(event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
+  const target = event.target as HTMLInputElement | null
+  if (target?.tagName !== 'INPUT') return
   approvalFreeformText.value = target.value
   selectedApprovalDecision.value = 'decline'
 }

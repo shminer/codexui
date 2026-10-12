@@ -270,6 +270,7 @@ export type UiServerRequestReply = {
 }
 
 export type UiLiveOverlay = {
+  turnId?: string
   activityLabel: string
   activityDetails: string[]
   reasoningText: string
