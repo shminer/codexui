@@ -4254,6 +4254,88 @@ describe('side memory event races', () => {
   })
   const sideRow = (id: string, index: number): UiMessage => ({ id, role: 'assistant', text: id, turnId: `turn-${index}`, turnIndex: index })
 
+  it('restores the same queued payload after a failed latest read and retries it once', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('active-side-turn')
+    await state.sendSideConversationMessage('first')
+    const images = ['data:image/png;base64,fixture']
+    const skills = [{ name: 'review', path: '/skills/review' }]
+    const files = [{ label: 'notes.md', path: '/tmp/notes.md', fsPath: '/tmp/notes.md' }]
+    await state.sendSideConversationMessage('keep queued payload', images, skills, 'queue', files)
+    await state.sendSideConversationMessage('following payload', [], [], 'queue')
+    const originalQueue = [...state.sideConversationQueuedMessages.value]
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new Error('history offline'))
+    emit({ method: 'turn/completed', params: { threadId: 'side-thread-default', turn: { id: 'active-side-turn', status: 'completed' } } })
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(state.sideConversationError.value).toBe('history offline')
+    expect(state.sideConversationQueuedMessages.value).toEqual(originalQueue)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([sideRow('C', 2)]))
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('retry-turn')
+    state.steerSideConversationQueuedMessage(originalQueue[0]!.id)
+    state.steerSideConversationQueuedMessage(originalQueue[0]!.id)
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.startThreadTurn.mock.calls[1]?.slice(0, 3)).toEqual(['side-thread-default', 'keep queued payload', images])
+    expect(gatewayMocks.startThreadTurn.mock.calls[1]?.slice(5)).toEqual([skills, files, 'default'])
+    expect(state.sideConversationQueuedMessages.value).toEqual([originalQueue[1]])
+  })
+
+  it('restores the original queue position after a rejected manual steering send', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('active-side-turn')
+    await state.sendSideConversationMessage('first')
+    for (const text of ['before', 'retry', 'after']) await state.sendSideConversationMessage(text, [], [], 'queue')
+    const originalQueue = [...state.sideConversationQueuedMessages.value]
+    gatewayMocks.startThreadTurn.mockRejectedValueOnce(new Error('steer rejected'))
+    state.steerSideConversationQueuedMessage(originalQueue[1]!.id)
+    await flushMicrotasks()
+    expect(state.sideConversationQueuedMessages.value).toEqual(originalQueue)
+    expect(state.isSideConversationInProgress.value).toBe(true)
+  })
+
+  it('keeps a direct failed send with attachments available for editing and retry', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    state.setSideConversationCollaborationMode('plan')
+    const images = ['data:image/png;base64,fixture']
+    const skills = [{ name: 'review', path: '/skills/review' }]
+    const files = [{ label: 'notes.md', path: '/tmp/notes.md', fsPath: '/tmp/notes.md' }]
+    gatewayMocks.startThreadTurn.mockRejectedValueOnce(new Error('send rejected'))
+    await state.sendSideConversationMessage('retry this payload', images, skills, 'steer', files)
+    expect(state.sideConversationMessages.value.some((message) => message.text === 'retry this payload')).toBe(false)
+    expect(state.sideConversationQueuedMessages.value).toEqual([expect.objectContaining({
+      text: 'retry this payload', imageUrls: images, skills, fileAttachments: files, collaborationMode: 'plan',
+    })])
+    expect(state.sideConversationError.value).toBe('send rejected')
+  })
+
+  it('does not restore a failed queued send into a replacement side conversation', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('active-side-turn')
+    await state.sendSideConversationMessage('first')
+    await state.sendSideConversationMessage('old queued payload', [], [], 'queue')
+    let reject!: (error: Error) => void
+    gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise<string>((_resolve, fail) => { reject = fail }))
+    state.steerSideConversationQueuedMessage(state.sideConversationQueuedMessages.value[0]!.id)
+    await flushMicrotasks()
+    state.endSideConversation()
+    gatewayMocks.startSideConversation.mockResolvedValueOnce({ threadId: 'replacement-side-thread' })
+    await state.openSideConversation('thread-1')
+    reject(new Error('old send rejected'))
+    await flushMicrotasks()
+    expect(state.sideConversationThreadId.value).toBe('replacement-side-thread')
+    expect(state.sideConversationQueuedMessages.value).toEqual([])
+    expect(state.sideConversationError.value).toBe('')
+  })
+
   it('implements a side plan once in Default without changing the main mode', async () => {
     const { state } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')
@@ -4285,7 +4367,26 @@ describe('side memory event races', () => {
     await state.implementSideConversationPlan('plan-turn')
     expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
     expect(state.sideConversationMessages.value).toEqual([])
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['blocked'])
     expect(state.sideConversationCollaborationMode.value).toBe('plan')
+  })
+
+  it('keeps a submitted payload if a speed save starts during the latest history read', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const send = state.sendSideConversationMessage('keep during speed save')
+    await flushMicrotasks()
+    state.isUpdatingSpeedMode.value = true
+    finish(sidePage([sideRow('C', 2)]))
+    await send
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['keep during speed save'])
   })
 
   it('retains a queued side message during a speed save and starts it once afterward', async () => {
@@ -4322,6 +4423,7 @@ describe('side memory event races', () => {
     expect(state.isSideConversationInProgress.value).toBe(steering)
     expect(state.sideConversationError.value).toBe('send failed')
     expect(state.sideConversationLiveOverlay.value?.errorText).toBe('send failed')
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['failed question'])
     if (steering) expect(state.sideConversationMessages.value.some((message) => message.text === 'first')).toBe(true)
   })
 
@@ -4360,6 +4462,7 @@ describe('side memory event races', () => {
     expect(state.sideConversationMessages.value).toEqual(before)
     expect(state.sideConversationIsHistoryWindow.value).toBe(true)
     expect(state.sideConversationFollowLatestRevision.value).toBe(0)
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['from history'])
   })
 
   it('preserves a minimized history window without requesting latest on restoration', async () => {

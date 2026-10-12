@@ -7192,29 +7192,38 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     queueInsertIndex?: number,
     collaborationModeOverride?: CollaborationModeKind,
+    queuedMessageToRestore?: QueuedMessage,
   ): Promise<void> {
-    if (isUpdatingSpeedMode.value) return
     const threadId = sideConversationThreadId.value
     const sendEpoch = sideConversationEpoch
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    const collaborationMode = collaborationModeOverride ?? sideConversationCollaborationMode.value
+    const retainUnsentMessage = () => {
+      if (sendEpoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
+      const message = queuedMessageToRestore ?? {
+        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: nextText, imageUrls, skills, fileAttachments, collaborationMode,
+      }
+      const queue = [...sideConversationQueuedMessages.value]
+      if (queue.some((item) => item.id === message.id)) return
+      queue.splice(queueInsertIndex === undefined ? queue.length : Math.max(0, Math.min(queueInsertIndex, queue.length)), 0, message)
+      sideConversationQueuedMessages.value = queue
+    }
+    if (isUpdatingSpeedMode.value) {
+      retainUnsentMessage()
+      return
+    }
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) return
     if (sendEpoch !== sideConversationEpoch || sideConversationThreadId.value !== threadId) return
-    const collaborationMode = collaborationModeOverride ?? sideConversationCollaborationMode.value
+    if (isUpdatingSpeedMode.value) {
+      retainUnsentMessage()
+      return
+    }
     const isInProgress = inProgressById.value[threadId] === true
     if (isInProgress && mode === 'queue') {
-      const queue = sideConversationQueuedMessages.value
-      const nextQueue = [...queue]
-      nextQueue.splice(queueInsertIndex === undefined ? queue.length : Math.max(0, Math.min(queueInsertIndex, queue.length)), 0, {
-        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: nextText,
-        imageUrls,
-        skills,
-        fileAttachments,
-        collaborationMode,
-      })
-      sideConversationQueuedMessages.value = nextQueue
+      retainUnsentMessage()
       return
     }
 
@@ -7225,11 +7234,17 @@ export function useDesktopState() {
         if (sendEpoch === sideConversationEpoch && threadId === sideConversationThreadId.value) {
           sideConversationError.value = cause instanceof Error ? cause.message : 'Failed to load temporary conversation history'
         }
+        retainUnsentMessage()
         return
       }
-      if (sendEpoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value || isUpdatingSpeedMode.value) return
+      if (sendEpoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
+      if (isUpdatingSpeedMode.value) {
+        retainUnsentMessage()
+        return
+      }
       if (historyWindowThreadIds.has(threadId) || hasMoreNewerMessagesByThreadId.value[threadId]) {
         sideConversationError.value = 'Latest message window is not available.'
+        retainUnsentMessage()
         return
       }
     }
@@ -7276,6 +7291,7 @@ export function useDesktopState() {
     } catch (unknownError) {
       if (sendEpoch === sideConversationEpoch && sideConversationThreadId.value === threadId) {
         setPersistedMessagesForThread(threadId, (persistedMessagesByThreadId.value[threadId] ?? []).filter((message) => message.id !== optimisticId))
+        retainUnsentMessage()
         if (sideConversationTurnStartPromise !== turnStartPromise) return
         if (!steering && !activeTurnIdByThreadId.value[threadId]) {
           setThreadInProgress(threadId, false)
@@ -7322,11 +7338,12 @@ export function useDesktopState() {
 
   function steerSideConversationQueuedMessage(messageId: string): void {
     if (isUpdatingSpeedMode.value) return
-    const message = sideConversationQueuedMessages.value.find((item) => item.id === messageId)
+    const index = sideConversationQueuedMessages.value.findIndex((item) => item.id === messageId)
+    const message = sideConversationQueuedMessages.value[index]
     if (!message) return
     removeSideConversationQueuedMessage(messageId)
     sideConversationCollaborationMode.value = message.collaborationMode
-    void sendSideConversationMessage(message.text, message.imageUrls, message.skills, 'steer', message.fileAttachments)
+    void sendSideConversationMessage(message.text, message.imageUrls, message.skills, 'steer', message.fileAttachments, index, message.collaborationMode, message)
   }
 
   function startNextSideConversationQueuedMessage(): void {
@@ -7336,7 +7353,7 @@ export function useDesktopState() {
     if (!next) return
     sideConversationQueuedMessages.value = remaining
     sideConversationCollaborationMode.value = next.collaborationMode
-    void sendSideConversationMessage(next.text, next.imageUrls, next.skills, 'steer', next.fileAttachments)
+    void sendSideConversationMessage(next.text, next.imageUrls, next.skills, 'steer', next.fileAttachments, 0, next.collaborationMode, next)
   }
 
   async function interruptSideConversationTurn(): Promise<void> {

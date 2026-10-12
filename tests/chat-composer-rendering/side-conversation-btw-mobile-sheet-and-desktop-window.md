@@ -146,12 +146,36 @@ Prerequisites: use a parent thread with an available Plan model and temporary si
 | Load older history, then send or implement a plan. Repeat while an older read is still pending and with a failing latest read. | Sending waits for one latest read, releases history mode, and resumes following only after success. A failed latest read retains history and starts no turn. |
 | Read older history, minimize and restore. | The retained history stays visible; restoration alone performs no latest read. Explicit Jump to latest resumes current content. |
 | Delay a speed setting save, attempt to send, and complete a side turn with another message queued. | Direct sending and implementation are blocked during the save. The queued message stays available and starts once after the save settles. |
-| Reject a normal send, then reject a steering send during an existing turn. | Only the failed optimistic row is removed. The error is visible; an existing active turn and its content remain. |
+| Reject a normal send, then reject a steering send during an existing turn. | Only the failed optimistic row is removed. Its complete payload is retained in the side queue for editing or retry; the error is visible, and an existing active turn and its content remain. |
 | Pop out the side conversation. Enter free-text user-input and approval answers, use a file-link context menu, open a Diff, copy a response/code block/full command output, and return to the main page. | Inputs are submitted accurately; menu events, Diff and copy fallback belong to the popup document. Returning cleans the old window listeners and preserves the same draft and queue. |
 | End the side conversation while a read or implementation request is pending, then release the old result. | Closed state is not recreated; a newly opened side conversation is not modified by the old result. |
 
 Cleanup: end the side conversation, close remaining popups and restore theme/language/speed/viewport settings. Revert the repair commit to roll back these changes; no data migration is involved.
 
-Verification boundary: new mock and wiring regressions are prepared but have not run in this repair session. Earlier evidence above predates this repair. Static performance review confirms bounded snapshot merging with Map/Set, unchanged retention budgets, one coalesced latest read after an in-flight older read, and cleanup of document-owned listeners. Browser timing, heap growth and screenshots remain pending.
+Verification at commit `ccda6cc`, before the follow-up below: new mock and wiring regressions were prepared but had not run. Earlier evidence above predates that commit. Static performance review confirmed bounded snapshot merging with Map/Set, unchanged retention budgets, one coalesced latest read after an in-flight older read, and cleanup of document-owned listeners. Browser verification for the follow-up is recorded below; long-duration heap growth remains unmeasured.
 
-Static checks for this repair: `pnpm exec vue-tsc --noEmit`, `pnpm exec tsc --noEmit -p tsconfig.server.json` and `git diff --check` passed. No build, runtime tests or publication was executed under the session restriction.
+Static checks at `ccda6cc`: `pnpm exec vue-tsc --noEmit`, `pnpm exec tsc --noEmit -p tsconfig.server.json` and `git diff --check` passed. No build, runtime tests or publication was executed at that stage. The follow-up explicitly authorizes Mock and browser testing.
+
+## Feature: Failed Side Sends And Queue Recovery
+
+Prerequisites: open a parent thread and side conversation with mocked RPC/HTTP/WebSocket traffic. Prepare rejected `turn/start` responses and failed latest-window reads. Use 1440x1000, 768x1024 and 375x812 viewports in light/dark themes. Mock traffic must not start real model tasks.
+
+| Exact action | Expected result |
+| --- | --- |
+| Select a skill and attach an image/file; submit a side message while `turn/start` is delayed, type a new draft, then reject the request. | The failed optimistic row disappears. The complete original text, images, files, skills and collaboration mode remain in one side queue row. The newer draft and main-chat draft stay unchanged. |
+| Click Steer on that queue row, reject the retry, then allow another retry to succeed. | Failure restores the same queue ID and position. Success sends the original payload once and removes that row. Other queued messages retain their order. |
+| Queue a message during an active side turn, load earlier history, fail latest-window reads, then deliver successful completion of the active turn. | One latest read fails; no new turn starts. The queued message returns at its original position, and the history window remains visible. |
+| Restore latest-window reads and click Steer on the retained row. | One latest read completes before one turn starts. History mode releases, the latest content becomes visible, and the existing draft stays unchanged. |
+| Start a speed-setting save while sending is waiting for latest history, then release the read. | The payload remains in the side queue; no turn starts during the save. |
+| End the side conversation while a queued send is pending, open a replacement, then reject the old send. | No old payload, error or queue row is restored into the replacement. |
+| Pop out a completed side Plan with changed-file metadata, open its Diff, close the Diff, then close the popup. | Implement plan remains visible. The Diff mounts only in the popup document, its close button works, and the side draft returns to the original page. Dark theme has no white Diff surface. |
+
+Browser commands: `node output/playwright/side-send-recovery.cjs`, `node output/playwright/side-agent-acceptance.cjs`, and `node output/playwright/side-popup-diff-recovery.cjs`. These use `http://127.0.0.1:4173/#/thread/review-testchat` and the current worktree's existing verification server.
+
+Browser results: all 14 groups passed with zero page errors. Six recovery groups produced 18 screenshots; six existing side/agent groups produced 12 screenshots; two popup Diff groups produced two screenshots. Each recovery group used one fork, two rejected turn-start attempts and two successful starts; history failure and explicit retry each made one latest read. Reports are under `output/playwright/side-send-recovery.json`, `side-agent-acceptance.json` and `side-popup-diff-recovery.json`.
+
+Mock/static results: `pnpm exec vitest run --reporter=json --outputFile=/tmp/codexui-side-retry-all.json` ran 823 cases: 821 passed and two pre-existing failures remained (feedback subject brand and session file-change fallback timestamp). All 246 desktop-state cases and the popup-aware Diff wiring case passed. `pnpm exec vue-tsc --noEmit` and `git diff --check` passed. No build or publication was performed.
+
+Performance review: queue restoration scans only the existing side queue and runs on enqueue/error paths, outside streaming delta rendering. Retry preserves original IDs and payload references without transcript duplication. No new history request path, global refresh, timer or background retry loop is added. Browser checks confirm bounded request counts; long-duration heap growth was not measured in this repair.
+
+Cleanup: close side windows and mock browser contexts, restore theme/viewport selections, and leave the current 4173 verification server running. Revert the repair commit to roll back; no storage migration is required. Browser artifacts remain local under `output/playwright/`.

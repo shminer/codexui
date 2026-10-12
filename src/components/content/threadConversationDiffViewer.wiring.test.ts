@@ -6,7 +6,7 @@ describe('ThreadConversation mobile diff viewer wiring', () => {
     const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
 
     expect(source).toMatch(
-      /<Teleport to="body">\s*<div v-if="activeDiffViewerChange" class="diff-viewer-backdrop"/u,
+      /<Teleport :to="ownerDocument\?\.body \?\? 'body'">\s*<div v-if="activeDiffViewerChange" class="diff-viewer-backdrop"/u,
     )
     expect(source).toContain('<button class="image-modal-close diff-viewer-close"')
     expect(source).not.toContain('diff-viewer-mobile-close')
