@@ -50,7 +50,7 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).not.toContain('min-width: 17.5rem')
     expect(source).not.toContain('subagent-panel-footer')
     expect(source).toContain('@click="toggleSubagentPanel"')
-    expect(source).toContain('else if (desktopPanelCollapsed.value === opening) toggleDesktopPanel()')
+    expect(source).toContain('if (desktopPanelCollapsed.value === opening) toggleDesktopPanel()')
     const toggleBody = source.match(/function toggleDesktopPanel\(\): void \{([\s\S]*?)\n\}/u)?.[1] ?? ''
     expect(toggleBody).not.toContain('getThreadDetail')
     expect(source).not.toMatch(/<aside\s+v-if=/u)
@@ -71,7 +71,7 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     expect(source).toContain('!loadingOlder.value && !loadingNewer.value && !agentWindowLoading.value')
     expect(source).toContain('useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)')
     expect(source).not.toContain('void selectAgent(threadId)')
-    expect(source).toContain('<Teleport v-if="isMobile" to="#thread-subagent-header-target">')
+    expect(source).toContain('<Teleport v-if="isMobile || !desktopPanelExpanded" to="#thread-subagent-header-target">')
     expect(source).toContain('class="subagent-header-trigger"')
     expect(appSource).toContain('id="thread-subagent-header-target"')
     expect(source).toContain('<Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">')
@@ -84,5 +84,18 @@ describe('ThreadSubagentPanel desktop sidebar wiring', () => {
     const styles = await readFile(new URL('../../style.css', import.meta.url), 'utf8')
     expect(styles).toContain(':root.dark .subagent-panel,')
     expect(styles).toContain(':root.dark .subagent-panel.is-mobile-open .subagent-panel-surface')
+  })
+
+  it('releases the collapsed desktop column while preserving the selected conversation and header control', async () => {
+    const source = await readFile(new URL('./ThreadSubagentPanel.vue', import.meta.url), 'utf8')
+    const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+    expect(source).toMatch(/<div\s+v-if="parentThreadId[^"\n]*"\s+v-show="isMobile \|\| desktopPanelExpanded"/u)
+    expect(app).toContain('<span id="thread-subagent-header-target" class="content-header-subagent-target" />')
+    expect(source).toContain('ref="headerTriggerRef"')
+    expect(source).toContain('ref="desktopTriggerRef"')
+    expect(source).toContain('trigger?.focus({ preventScroll: true })')
+    const toggle = source.match(/async function toggleSubagentPanel\(\): Promise<void> \{([\s\S]*?)\n\}/u)?.[1] ?? ''
+    expect(toggle).not.toContain('closeDetail()')
+    expect(toggle).not.toContain('loadAgentLatestMessages()')
   })
 })

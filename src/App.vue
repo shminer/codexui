@@ -596,7 +596,7 @@
               @load-commit-files="loadThreadCommitFiles"
               @open-commit-file="onOpenContentHeaderCommitFile"
             />
-            <span v-if="isMobile" id="thread-subagent-header-target" class="content-header-subagent-target" />
+            <span id="thread-subagent-header-target" class="content-header-subagent-target" />
           </template>
         </ContentHeader>
 
@@ -1355,7 +1355,7 @@ import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider
 import { encodeLocalPathForUrl, getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 import { CHAT_WIDTH_MIN, CHAT_WIDTH_MAX, CHAT_WIDTH_STEP, CHAT_WIDTH_DEFAULT, loadChatWidthPref, saveChatWidthPref, normalizeChatWidth } from './chatWidth'
-import { canShowBothDesktopSidebars, DESKTOP_PANEL_COLLAPSED_WIDTH, MIN_DESKTOP_SPLIT_WIDTH, MIN_DESKTOP_THREAD_SPACE } from './components/content/threadSubagentPanelState'
+import { canShowBothDesktopSidebars, MIN_DESKTOP_SPLIT_WIDTH, MIN_DESKTOP_THREAD_SPACE } from './components/content/threadSubagentPanelState'
 
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadSideConversation = defineAsyncComponent(() => import('./components/content/ThreadSideConversation.vue'))
@@ -1865,7 +1865,7 @@ const showThreadSubagentPanel = computed(() => (
   route.name === 'thread' && !(isReviewPaneOpen.value && selectedThreadId.value && composerCwd.value)
 ))
 const subagentLayoutMinimum = computed(() => showThreadSubagentPanel.value
-  ? isSubagentPanelExpanded.value ? MIN_DESKTOP_SPLIT_WIDTH : MIN_DESKTOP_THREAD_SPACE + DESKTOP_PANEL_COLLAPSED_WIDTH
+  ? isSubagentPanelExpanded.value ? MIN_DESKTOP_SPLIT_WIDTH : MIN_DESKTOP_THREAD_SPACE
   : 0)
 const isAccountSwitchBlocked = computed(() =>
   isSendingMessage.value ||

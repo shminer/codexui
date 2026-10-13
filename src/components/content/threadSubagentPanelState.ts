@@ -3,7 +3,7 @@ import type { UiMessage } from '../../types/codex'
 export const DEFAULT_DESKTOP_PANEL_WIDTH = 480
 export const MIN_DESKTOP_PANEL_WIDTH = 280
 export const MAX_DESKTOP_PANEL_WIDTH = 960
-export const DESKTOP_PANEL_COLLAPSED_WIDTH = 44
+export const DESKTOP_PANEL_COLLAPSED_WIDTH = 0
 
 export const MIN_DESKTOP_THREAD_SPACE = 332
 export const MIN_DESKTOP_SPLIT_WIDTH = MIN_DESKTOP_THREAD_SPACE + MIN_DESKTOP_PANEL_WIDTH

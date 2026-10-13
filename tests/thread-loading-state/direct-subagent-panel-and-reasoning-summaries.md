@@ -13,7 +13,7 @@
 6. Select an agent and verify its task/status preview and read-only recent thread content load; load earlier messages on demand.
 7. Confirm the agent detail wraps inside the sidebar without being clipped, including command output, code, changed-file diff, and collapsed Thinking summaries.
 8. Drag the sidebar's left separator left and right, then focus it and repeat with Left/Right and Home/End; confirm the sidebar grows and shrinks while the parent conversation uses the remaining width.
-9. Use the right column's top-right Agents control to collapse the sidebar to a 44px icon rail, confirm the parent header, messages, terminal, queue and composer reclaim the same width, then reopen it and confirm the selected agent detail is unchanged.
+9. Use the right column's top-right Agents control to close the entire sidebar. Confirm no rail or separator remains, the parent header, messages, terminal, queue and composer reclaim its full width, and the focused reopen button appears at the main header's top-right. Reopen it and confirm the selected agent detail is unchanged without another detail read.
 10. Refresh the page and switch between parent threads, confirming the last sidebar width and collapsed state persist.
 11. Confirm Fork, edit/rollback, implement-plan, and file undo/redo controls remain absent from the selected agent detail.
 12. While the selected subagent is thinking, confirm only the streamed reasoning summary is shown; raw reasoning text is not rendered.
@@ -32,7 +32,7 @@
 25. Browse older agent pages while it continues running. Confirm latest live rows are not inserted into the older window; return to latest to see the current response. Finish the agent and confirm one terminal refresh connects to the final history without duplicate response rows.
 26. Select a running agent whose latest raw turn has no displayable historical messages. Load earlier history, then load later history or jump to latest. Confirm both realtime body and the Thinking/activity overlay are absent from the older window and return only at the latest boundary.
 27. While either sidebar is expanded/collapsed, expand the main composer. Confirm it fills only the main column on desktop and leaves both sidebar controls usable; repeat in light/dark themes and verify the mobile composer still uses the viewport.
-28. Open an empty parent and use the desktop icon rail to load collaboration history. Confirm the control remains enabled without current agents, narrow desktop space collapses the left sidebar before expansion, and closing the right sidebar does not automatically reopen the left. Resize a desktop with both sidebars open below their combined minimum width and confirm the left sidebar collapses. The top-right toggle stays in the agent column at the same position during expansion/collapse.
+28. Open an empty parent and use the main header's top-right Agents button to load collaboration history. Confirm the control remains enabled without current agents, narrow desktop space collapses the left sidebar before expansion, and closing the right sidebar does not automatically reopen the left. Resize a desktop with both sidebars open below their combined minimum width and confirm the left sidebar collapses. The toggle appears in the Agent toolbar when expanded and the main header when closed, with the same right inset.
 29. Deliver an activity path, then a newer nonempty result summary with no communications, then an unknown activity or empty state message. Confirm the summary remains the row preview, terminal status is not cleared by unknown activity, and communications remain deduplicated. Load an older page and confirm it does not overwrite the newer summary.
 30. Open a running child thread in the main conversation, return to its parent, and open the same child in the Agent sidebar. Stream same-ID reply, command and plan updates. Confirm the sidebar updates without duplicate rows even when restored rows exist in the main state cache. Delay the independent detail snapshot so it contains a longer reply or a newer command output cursor than the cache; confirm it is not shortened, and later current-turn deltas continue updating it. Browse an older Agent page and confirm these current-turn rows remain absent until returning to latest. Repeat on desktop and mobile.
 31. Cache child reply `a`, switch to its parent and let the independent Agent snapshot contain `abc` after notifications were missed during navigation. Release that snapshot, then send delta `d`; confirm the reply becomes `abcd`, not `ad`. Repeat with an uncached child, with a child retaining a main-conversation history window, and with a 300,000-character reply that exceeds the inactive body budget. The main history reading window must remain unchanged, and later deltas must still use the snapshot prefix.
@@ -43,7 +43,7 @@
 - Running lists `running` and `pendingInit`; History retains terminal and unknown statuses. Completed tasks and selected details remain accessible.
 - Persisted and realtime `subAgentActivity` items populate the panel without extra thread-list requests.
 - Subagent details are fetched only after their row is selected, with one refresh on transition to a terminal status. Older messages and collaboration pages load on demand.
-- Desktop uses a full-height resizable right column with a default width of 480px and a 44px collapsed icon rail; its toggle and the mobile sheet entry stay at the top-right, opposite the left sidebar control. The main header, message area, terminal, queue and composer share the same remaining width.
+- Desktop uses a full-height resizable right column with a default width of 480px. Closing releases the whole column with zero reserved width and shows its reopen button in the main header's top-right, opposite the left sidebar control. The main header, message area, terminal, queue and composer share the same remaining width.
 - The preferred desktop width and collapsed state persist without adding requests or reloads.
 - Agent detail content shrinks or scrolls within the sidebar instead of extending beyond its clipped boundary.
 - Thread content is read-only and historic reasoning is collapsed by default.
@@ -61,7 +61,7 @@
 
 #### Verification Boundary
 - Steps 31-32 have new mock and wiring coverage, including cached/uncached/history/oversized bases, in-flight deltas, completed replacement text and stale lifecycle/thread callbacks. These new cases have not been executed in this repair session; the older runtime results below are not evidence for this repair.
-- The new summary-source, full-height column, 44px rail, narrow-workspace and history-reading regressions are covered by additional unit/wiring cases. Browser acceptance of these changes is pending; the following browser evidence describes the earlier side-conversation changes, not the new layout.
+- Summary-source, full-height column, narrow-workspace and history-reading regressions have unit/wiring coverage. The continuous-sidebar and header-toggle sections below describe their separate layout acceptance checks; the following evidence describes the earlier side-conversation checks.
 - Static performance review: one ResizeObserver watches the common workspace, disconnects on mobile/unmount and rebinds after Teleport mode changes. Collapsing retains the selected detail without another request. Sidebar coordination reuses the existing viewport listener and minimum-width calculations; it adds no polling or history scan. Width preferences stay intact, while explicitly opening the opposite sidebar can save a new collapsed preference.
 - `pnpm exec vitest run src/composables/useThreadHistoryWindow.test.ts src/components/content/threadSubagentPanel.wiring.test.ts` passes the focused history/wiring cases, including navigation away from an empty latest turn.
 - `node output/playwright/side-agent-acceptance.cjs` passes six combinations at `http://127.0.0.1:4173/#/thread/review-testchat`: 1440x1000, 768x1024 and 375x812 in light/dark themes. Mock HTTP/RPC/WebSocket events drive the real selected-Agent UI; no component props are changed to simulate the result.
@@ -80,7 +80,7 @@
 
 #### Steps and Expected Results
 1. On desktop, inspect the expanded Agent list and selected conversation. The toolbar and body share one background from top to bottom; one left divider separates the main conversation. There is no inner card outline, corner rounding, right gutter or bottom gutter.
-2. Collapse and reopen the Agent sidebar. The top-right toggle retains its coordinates, the collapsed rail is 44px, and the main column reclaims the released width.
+2. Close and reopen the Agent sidebar. Its reopen button appears in the main header with the same right inset, no collapsed rail remains, and the main column reclaims the entire released width.
 3. Drag the separator, then use Home/End and Left/Right. Confirm the existing width bounds still apply and these layout operations add zero thread-history requests.
 4. Refresh after changing the width. Confirm the stored width remains and the rendered width matches it when there is sufficient space. At 768px, open the left sidebar, then the Agent sidebar; confirm their existing coordination keeps the main column at least 332px wide.
 5. At 375x812, open and close Agents. Confirm the bottom sheet retains its rounded top corners and backdrop, with no desktop separator or collapse toolbar. Select an Agent and check its conversation is visible.
@@ -90,7 +90,7 @@
 #### Verification Results
 - Focused Mock: 35/35 passed across Agent state/wiring, desktop layout, side-conversation wiring and history-window tests. Frontend `vue-tsc --noEmit` and `git diff --check` passed.
 - Full Mock: 821/823 passed; the two existing failures remain the old feedback-brand subject assertion and recovered file-change timestamp assertion. This CSS repair does not touch those modules.
-- `pc-agent-continuity.cjs`: all six viewport/theme combinations passed at `http://127.0.0.1:4173/#/thread/review-testchat`, including live Agent content, continuous desktop geometry, stable toggle position, 44px rail, width persistence, narrow-sidebar coordination and floating draft restoration. Report: `output/playwright/pc-agent-continuity.json`; 18 screenshots.
+- The earlier continuous-surface acceptance passed all six viewport/theme combinations at `http://127.0.0.1:4173/#/thread/review-testchat`, including live Agent content, continuous desktop geometry, the previous 44px rail, width persistence, narrow-sidebar coordination and floating draft restoration. Its retained report is `output/playwright/pc-agent-continuity.json` with 18 screenshots. The current header-toggle repair supersedes that rail behavior; use the updated cases below.
 - At 1440x1000 with the default 480px sidebar, the panel begins at y=56 immediately below the toolbar and reaches x=1440/y=1000. Its former 4px top, 12px right and 16px bottom gutters are removed. Its border/radius are zero; the host supplies the single 1px left divider.
 - `pc-agent-floating-geometry.cjs`: floating-window pointer drag and resize passed in both themes; report: `output/playwright/pc-agent-floating-geometry.json`; two screenshots.
 - `side-popup-diff-recovery.cjs`: popup Plan/Diff, correct document ownership and returning the draft passed in both themes; report: `output/playwright/side-popup-diff-recovery.json`; two screenshots. All three browser reports contain zero page errors.
@@ -100,3 +100,32 @@
 - Close the Agent mobile sheet and any floating or popup conversation; browser contexts are closed after verification. Leave the current-checkout 4173 server running.
 - Remove `codex-web-local.subagent-panel-width.v1` and `codex-web-local.subagent-panel-collapsed.v1` to reset sidebar preferences if desired.
 - Revert this UI repair commit to restore the previous desktop card appearance. No conversation data or storage schema changes are involved.
+
+### Feature: Desktop Agent sidebar closes like the left sidebar
+
+#### Prerequisites
+- Serve the current checkout on `127.0.0.1:4173` and open a parent thread with a direct Agent.
+- Repeat at 1440x1000 and 768x1024 in light/dark themes; check the existing mobile flow at 375x812.
+- Mock script: `node output/playwright/pc-agent-continuity.cjs`; report: `output/playwright/pc-agent-header-toggle.json`.
+
+#### Steps and Expected Results
+1. Select an Agent, then close the right sidebar. Its host has zero displayed width; its background and divider disappear. The main header, conversation, terminal and composer gain the entire previously displayed Agent width.
+2. Inspect the main header's rightmost button. It uses the same size, filled/outline icons, hover and focus treatment as the left-sidebar button, with mirrored icon direction. Only one Agent toggle is visible. After closing, keyboard focus is on that button and `aria-expanded` is false.
+3. Press Enter to reopen. The button returns to the Agent toolbar with `aria-expanded` true and retains focus; the selected Agent and reply remain, with zero extra detail/history reads. The expanded sidebar retains the continuous light/dark surface.
+4. Change the Agent width, close it, and refresh. The closed state remains with no reserved rail. Reopen and confirm the saved width is used, limited only by available space. Opening the opposite sidebar at 768px still coordinates the two columns and preserves at least 332px for the main conversation.
+5. Open a parent with no current Agents. The main header's button remains enabled and can open collaboration history. Close again without automatically reopening the left sidebar.
+6. Open the mobile Agent sheet, inspect a reply, and close it. Its backdrop, rounded top corners and header entry are unchanged. On desktop, verify floating-chat drag/resize, minimize/restore and popup Plan/Diff/draft return.
+
+#### Verification Results
+- Focused Mock: 36/36 passed across Agent state/wiring, desktop layout, side-conversation wiring and history-window tests. Frontend `vue-tsc --noEmit` and `git diff --check` passed.
+- Full Mock: 822/824 passed. The same existing feedback-brand subject and recovered file-change timestamp assertions remain failing; report: `output/playwright/pc-agent-header-toggle-unit.json`.
+- `pc-agent-continuity.cjs`: all six viewport/theme combinations passed at `http://127.0.0.1:4173/#/thread/review-testchat`. Report: `output/playwright/pc-agent-header-toggle.json`; 30 screenshots include expanded, closed, closed-after-refresh, detail, reopened and floating states.
+- The main column gains the complete displayed Agent width: 480px at 1440x1000 and 436px at 768x1024. Closed hosts measure zero width, the header toggle retains the same right inset, keyboard focus transfers, and reopening preserves the selected conversation with zero additional history reads. Resize operations also add zero history reads; width and closed-state refresh checks pass.
+- `pc-agent-empty-header.cjs`: the empty-parent entry remains enabled, empty history opens, and desktop/mobile transitions work in both themes; report: `output/playwright/pc-agent-empty-header.json`; two screenshots.
+- Floating pointer drag/resize and popup Plan/Diff/draft return reruns passed both themes; reports: `output/playwright/pc-agent-floating-geometry.json` and `output/playwright/side-popup-diff-recovery.json`; four screenshots. All four final browser reports contain zero page errors, and all 36 screenshot files exist.
+- Initial navigation timeouts and a Vite document-save reload interrupted earlier browser attempts. Final acceptance was rerun after restoring the current-checkout server and pausing file edits; interrupted runs are not used as evidence.
+
+#### Performance and Cleanup
+- Closing hides the existing host instead of clearing or remounting the selected conversation. No new history polling, cache, event subscription or observer is introduced; user toggles add a single Vue `nextTick` for focus handoff.
+- Check intercepted thread-history request counts around closing/reopening and resizing; expect zero added reads. Page refresh performs the existing initialization reads.
+- Close any mobile sheet, floating chat or popup after testing. Reset the existing width/collapsed localStorage keys to restore defaults if desired. Revert this repair commit to restore the preceding 44px rail behavior; no storage migration or conversation-data changes are involved.

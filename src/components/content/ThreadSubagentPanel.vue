@@ -1,10 +1,12 @@
 <template>
-  <Teleport v-if="isMobile" to="#thread-subagent-header-target">
+  <Teleport v-if="isMobile || !desktopPanelExpanded" to="#thread-subagent-header-target">
     <button
       v-if="parentThreadId && !mobileSheetOpen"
+      ref="headerTriggerRef"
       type="button"
       class="subagent-header-trigger"
       :aria-label="`Show ${allAgents.length} agents`"
+      :aria-expanded="isMobile ? undefined : false"
       :title="`Show ${allAgents.length} agents`"
       @click="toggleSubagentPanel"
     >
@@ -15,13 +17,15 @@
   <Teleport to="body" :disabled="!isMobile || !mobileSheetOpen">
     <div
       v-if="parentThreadId && (!isMobile || allAgents.length > 0 || historyOpened)"
+      v-show="isMobile || desktopPanelExpanded"
       ref="desktopHostRef"
       class="subagent-panel-host"
       :class="{ 'is-desktop-collapsed': !isMobile && !desktopPanelExpanded }"
       :style="desktopHostStyle"
     >
-      <div v-if="!isMobile" class="subagent-desktop-toolbar">
+      <div v-if="!isMobile && desktopPanelExpanded" class="subagent-desktop-toolbar">
         <button
+          ref="desktopTriggerRef"
           type="button"
           class="subagent-header-trigger"
           :aria-label="`Show ${allAgents.length} agents`"
@@ -29,8 +33,7 @@
           :title="`Show ${allAgents.length} agents`"
           @click="toggleSubagentPanel"
         >
-          <IconTablerLayoutSidebar v-if="desktopPanelExpanded" class="subagent-header-trigger-icon" />
-          <IconTablerLayoutSidebarFilled v-else class="subagent-header-trigger-icon" />
+          <IconTablerLayoutSidebar class="subagent-header-trigger-icon" />
         </button>
       </div>
       <div v-show="isMobile || desktopPanelExpanded" class="subagent-panel-body">
@@ -206,6 +209,8 @@ type DesktopPanelResizeGesture = {
 
 const { isMobile } = useMobile()
 const mobileSheetOpen = ref(false)
+const headerTriggerRef = ref<HTMLButtonElement | null>(null)
+const desktopTriggerRef = ref<HTMLButtonElement | null>(null)
 const desktopHostRef = ref<HTMLElement | null>(null)
 const desktopPanelWidth = ref(loadDesktopPanelWidth())
 const desktopLayoutWidth = ref(typeof window === 'undefined' ? Number.POSITIVE_INFINITY : window.innerWidth)
@@ -294,7 +299,12 @@ async function toggleSubagentPanel(): Promise<void> {
     historyOpened.value = true
   }
   if (isMobile.value) mobileSheetOpen.value = true
-  else if (desktopPanelCollapsed.value === opening) toggleDesktopPanel()
+  else {
+    if (desktopPanelCollapsed.value === opening) toggleDesktopPanel()
+    await nextTick()
+    const trigger = desktopPanelExpanded.value ? desktopTriggerRef.value : headerTriggerRef.value
+    trigger?.focus({ preventScroll: true })
+  }
   if ((isMobile.value || desktopPanelExpanded.value) && !historyStarted.value) void loadHistory()
 }
 
@@ -671,7 +681,7 @@ onBeforeUnmount(() => {
 @media (min-width: 768px) {
   .subagent-panel-host {
     @apply relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-slate-200 bg-white;
-    width: var(--subagent-panel-width, 44px);
+    width: var(--subagent-panel-width, 0px);
   }
 
   .subagent-panel-body {
