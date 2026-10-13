@@ -83,13 +83,17 @@
 :root.dark .subagent-header-trigger {
   @apply text-zinc-400 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-100;
 }
-:root.dark .subagent-sheet-handle,
-:root.dark .subagent-panel-resizer::before {
+:root.dark .subagent-sheet-handle {
   @apply bg-slate-600;
 }
 :root.dark .subagent-panel-resizer:hover::before,
 :root.dark .subagent-panel-resizer:focus-visible::before {
   @apply bg-sky-400;
+}
+@media (min-width: 768px) {
+  :root.dark .subagent-panel-host {
+    @apply border-slate-700 bg-slate-900;
+  }
 }
 .thread-history-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 12px; background: #0008; }
 .thread-history-dialog { display: flex; flex-direction: column; min-width: 0; width: min(900px, 100%); height: min(85dvh, 900px); background: #fff; color: #18181b; border: 1px solid #d4d4d8; border-radius: 6px; overflow: hidden; }

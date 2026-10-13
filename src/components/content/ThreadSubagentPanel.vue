@@ -670,16 +670,16 @@ onBeforeUnmount(() => {
 
 @media (min-width: 768px) {
   .subagent-panel-host {
-    @apply relative flex min-h-0 min-w-0 shrink-0 flex-col;
+    @apply relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-slate-200 bg-white;
     width: var(--subagent-panel-width, 44px);
   }
 
   .subagent-panel-body {
-    padding: 4px 12px 16px 0;
+    padding: 0;
   }
 
   .subagent-panel {
-    @apply flex;
+    @apply flex rounded-none border-0;
   }
 
   .subagent-panel-resizer {
@@ -689,7 +689,8 @@ onBeforeUnmount(() => {
 
   .subagent-panel-resizer::before {
     content: '';
-    @apply absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-slate-300 transition-colors;
+    @apply absolute inset-y-0 w-px bg-transparent transition-colors;
+    left: -1px;
   }
 
   .subagent-panel-resizer:hover::before {

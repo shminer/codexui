@@ -70,3 +70,33 @@
 - The combined 238-case related mock run has 230 passes and 8 pre-existing failures reproduced on `cee6441`: two Agent-list cases and six provider-model cases. These are not classified as new regressions; report: `output/playwright/side-mock-regression.json`, baseline: `output/playwright/desktop-mock-baseline.json`.
 - Performance: runtime content reuses the existing WebSocket stream; older/latest navigation is on demand, with no additional polling or subscription. Boundary detection adds one set lookup to the existing bounded-window pass. Global theme overrides add no runtime request or JavaScript work.
 - Frontend/server no-emit type checks and `git diff --check` pass. No build or publication was performed. Real-model integration and long-duration browser measurements remain untested; browser contexts close after verification, and 4173 remains running.
+
+### Feature: Continuous desktop Agent sidebar
+
+#### Prerequisites
+- Serve the current checkout on `127.0.0.1:4173`; use a parent thread with a running direct Agent.
+- For Mock verification, reuse `output/playwright/side-agent-acceptance.cjs` with intercepted HTTP/RPC/WebSocket events, then run `node output/playwright/pc-agent-continuity.cjs`.
+- Use 1440x1000, 768x1024 and 375x812 viewports in both light and dark themes.
+
+#### Steps and Expected Results
+1. On desktop, inspect the expanded Agent list and selected conversation. The toolbar and body share one background from top to bottom; one left divider separates the main conversation. There is no inner card outline, corner rounding, right gutter or bottom gutter.
+2. Collapse and reopen the Agent sidebar. The top-right toggle retains its coordinates, the collapsed rail is 44px, and the main column reclaims the released width.
+3. Drag the separator, then use Home/End and Left/Right. Confirm the existing width bounds still apply and these layout operations add zero thread-history requests.
+4. Refresh after changing the width. Confirm the stored width remains and the rendered width matches it when there is sufficient space. At 768px, open the left sidebar, then the Agent sidebar; confirm their existing coordination keeps the main column at least 332px wide.
+5. At 375x812, open and close Agents. Confirm the bottom sheet retains its rounded top corners and backdrop, with no desktop separator or collapse toolbar. Select an Agent and check its conversation is visible.
+6. Open a side conversation, enter a draft, minimize and restore it. Confirm the draft remains. On desktop, drag its header and resize its corner handle; confirm both window position and size change independently of the Agent sidebar.
+7. Pop the side conversation into a new window. Confirm Plan actions and the file Diff viewer work in that document, then close the popup and confirm the draft returns to the floating window.
+
+#### Verification Results
+- Focused Mock: 35/35 passed across Agent state/wiring, desktop layout, side-conversation wiring and history-window tests. Frontend `vue-tsc --noEmit` and `git diff --check` passed.
+- Full Mock: 821/823 passed; the two existing failures remain the old feedback-brand subject assertion and recovered file-change timestamp assertion. This CSS repair does not touch those modules.
+- `pc-agent-continuity.cjs`: all six viewport/theme combinations passed at `http://127.0.0.1:4173/#/thread/review-testchat`, including live Agent content, continuous desktop geometry, stable toggle position, 44px rail, width persistence, narrow-sidebar coordination and floating draft restoration. Report: `output/playwright/pc-agent-continuity.json`; 18 screenshots.
+- At 1440x1000 with the default 480px sidebar, the panel begins at y=56 immediately below the toolbar and reaches x=1440/y=1000. Its former 4px top, 12px right and 16px bottom gutters are removed. Its border/radius are zero; the host supplies the single 1px left divider.
+- `pc-agent-floating-geometry.cjs`: floating-window pointer drag and resize passed in both themes; report: `output/playwright/pc-agent-floating-geometry.json`; two screenshots.
+- `side-popup-diff-recovery.cjs`: popup Plan/Diff, correct document ownership and returning the draft passed in both themes; report: `output/playwright/side-popup-diff-recovery.json`; two screenshots. All three browser reports contain zero page errors.
+- Performance: the repair changes desktop CSS only. It adds no JavaScript, observer, timer, cache or network path. Intercepted request counts confirm zero extra history reads during sidebar collapse/reopen, keyboard resize and pointer resize. Long-duration heap growth and real-model execution were not measured.
+
+#### Rollback/Cleanup
+- Close the Agent mobile sheet and any floating or popup conversation; browser contexts are closed after verification. Leave the current-checkout 4173 server running.
+- Remove `codex-web-local.subagent-panel-width.v1` and `codex-web-local.subagent-panel-collapsed.v1` to reset sidebar preferences if desired.
+- Revert this UI repair commit to restore the previous desktop card appearance. No conversation data or storage schema changes are involved.
