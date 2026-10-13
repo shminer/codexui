@@ -4410,6 +4410,59 @@ describe('side memory event races', () => {
     expect(state.sideConversationQueuedMessages.value).toEqual([])
   })
 
+  it.each([false, true])('resumes an auto-dequeued side message after a speed save during latest reading, rejected=%s', async (rejected) => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('first-side-turn').mockResolvedValueOnce('next-side-turn')
+    await state.sendSideConversationMessage('first')
+    await state.sendSideConversationMessage('next', [], [], 'queue')
+    const queuedId = state.sideConversationQueuedMessages.value[0]!.id
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages('side-thread-default')
+    let finishHistory!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finishHistory = resolve }))
+    emit({ method: 'turn/completed', params: { threadId: 'side-thread-default', turn: { id: 'first-side-turn', status: 'completed' } } })
+    await flushMicrotasks()
+    expect(finishHistory).toBeTypeOf('function')
+    expect(state.sideConversationQueuedMessages.value).toEqual([])
+    let finishSpeed!: () => void
+    gatewayMocks.setCodexSpeedMode.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finishSpeed = () => rejected ? reject(new Error('speed save failed')) : resolve()
+    }))
+    const save = state.updateSelectedSpeedMode('fast')
+    finishHistory(sidePage([sideRow('C', 2)]))
+    await flushMicrotasks()
+    expect(state.sideConversationQueuedMessages.value[0]?.id).toBe(queuedId)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    finishSpeed()
+    await save
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn.mock.calls.map((call) => call[1])).toEqual(['first', 'next'])
+    expect(state.sideConversationQueuedMessages.value).toEqual([])
+  })
+
+  it('keeps a failed side send for explicit retry when it fails during a speed save', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    let rejectSend!: (cause: Error) => void
+    gatewayMocks.startThreadTurn.mockImplementationOnce(() => new Promise<string>((resolve, reject) => { rejectSend = reject }))
+    const send = state.sendSideConversationMessage('retry explicitly')
+    await flushMicrotasks()
+    let finishSpeed!: () => void
+    gatewayMocks.setCodexSpeedMode.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSpeed = resolve }))
+    const save = state.updateSelectedSpeedMode('fast')
+    rejectSend(new Error('send failed'))
+    await send
+    finishSpeed()
+    await save
+    await flushMicrotasks()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['retry explicitly'])
+    expect(state.sideConversationError.value).toBe('send failed')
+  })
+
   it.each([false, true])('removes only a failed local send while steering=%s', async (steering) => {
     const { state } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')
@@ -4635,6 +4688,54 @@ describe('side memory event races', () => {
     await expect(state.loadLatestMessages('side-thread-default')).rejects.toMatchObject({ status: 410 })
     expect(state.sideConversationHasMoreOlder.value).toBe(false)
     expect(state.sideConversationMessages.value.some((row) => row.text === 'cached')).toBe(true)
+  })
+
+  it.each([
+    ['older', 'before-fallback'], ['older', 'during-fallback'],
+    ['newer', 'before-fallback'], ['newer', 'during-fallback'],
+  ] as const)('reuses a successful 409 latest fallback for %s when latest is requested %s', async (direction, timing) => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)], direction === 'newer'))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let rejectPage!: (cause: unknown) => void
+    let finishLatest!: (page: unknown) => void
+    const pageMock = direction === 'older' ? gatewayMocks.getOlderThreadMessages : gatewayMocks.getNewerThreadMessages
+    pageMock.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectPage = reject }))
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finishLatest = resolve }))
+    const page = direction === 'older' ? state.loadOlderMessages('side-thread-default') : state.loadNewerMessages('side-thread-default')
+    let latest: Promise<void> | undefined
+    if (timing === 'before-fallback') latest = state.loadLatestMessages('side-thread-default')
+    rejectPage(new CodexApiError('stale_window', { code: 'http_error', status: 409 }))
+    await flushMicrotasks()
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    if (timing === 'during-fallback') latest = state.loadLatestMessages('side-thread-default')
+    finishLatest(sidePage([sideRow('C', 2)]))
+    await Promise.all([page, latest])
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(['C'])
+  })
+
+  it('retries latest for a waiting caller when the 409 fallback fails', async () => {
+    const { state } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue(sidePage([sideRow('C', 2)]))
+    await state.loadLatestMessages('side-thread-default')
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    gatewayMocks.getOlderThreadMessages.mockRejectedValueOnce(new CodexApiError('stale_window', { code: 'http_error', status: 409 }))
+    let rejectLatest!: (cause: Error) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectLatest = reject }))
+    const older = state.loadOlderMessages('side-thread-default')
+    const failedRead = expect(older).rejects.toThrow('fallback failed')
+    const latest = state.loadLatestMessages('side-thread-default')
+    await flushMicrotasks()
+    rejectLatest(new Error('fallback failed'))
+    await Promise.all([failedRead, latest])
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
+    expect(state.sideConversationHistoryError.value).toBe('')
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(['C'])
   })
 
   it('clears pending side deltas without recreating closed state', async () => {

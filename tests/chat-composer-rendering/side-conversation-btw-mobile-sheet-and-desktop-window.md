@@ -166,7 +166,7 @@ Prerequisites: open a parent thread and side conversation with mocked RPC/HTTP/W
 | Click Steer on that queue row, reject the retry, then allow another retry to succeed. | Failure restores the same queue ID and position. Success sends the original payload once and removes that row. Other queued messages retain their order. |
 | Queue a message during an active side turn, load earlier history, fail latest-window reads, then deliver successful completion of the active turn. | One latest read fails; no new turn starts. The queued message returns at its original position, and the history window remains visible. |
 | Restore latest-window reads and click Steer on the retained row. | One latest read completes before one turn starts. History mode releases, the latest content becomes visible, and the existing draft stays unchanged. |
-| Start a speed-setting save while sending is waiting for latest history, then release the read. | The payload remains in the side queue; no turn starts during the save. |
+| Start a speed-setting save while sending is waiting for latest history, then release the read and finish the speed save. Repeat with a failed speed save. | No turn starts during the save. The payload retains its original queue ID and starts once after either save result. |
 | End the side conversation while a queued send is pending, open a replacement, then reject the old send. | No old payload, error or queue row is restored into the replacement. |
 | Pop out a completed side Plan with changed-file metadata, open its Diff, close the Diff, then close the popup. | Implement plan remains visible. The Diff mounts only in the popup document, its close button works, and the side draft returns to the original page. Dark theme has no white Diff surface. |
 
@@ -179,3 +179,25 @@ Mock/static results: `pnpm exec vitest run --reporter=json --outputFile=/tmp/cod
 Performance review: queue restoration scans only the existing side queue and runs on enqueue/error paths, outside streaming delta rendering. Retry preserves original IDs and payload references without transcript duplication. No new history request path, global refresh, timer or background retry loop is added. Browser checks confirm bounded request counts; long-duration heap growth was not measured in this repair.
 
 Cleanup: close side windows and mock browser contexts, restore theme/viewport selections, and leave the current 4173 verification server running. Revert the repair commit to roll back; no storage migration is required. Browser artifacts remain local under `output/playwright/`.
+
+## 功能：侧窗速度保存竞态与 409 回退请求复用
+
+前提：使用当前工作目录的 4173 服务和 Mock HTTP/RPC/WebSocket。打开父会话及侧窗，准备可以延迟或拒绝的速度保存、分页及最新历史读取请求。PC、平板、手机分别使用 1440x1000、768x1024、375x812，检查明暗主题。
+
+| 精确操作 | 预期结果 |
+| --- | --- |
+| 侧窗发送第一条消息并排队下一条；加载较早历史；通知第一轮完成，暂停自动发送触发的 latest 读取；开始保存速度配置，再释放 latest，最后结束速度保存。分别让速度保存成功和失败。 | 保存期间不发送；重新入队保留原 ID 和位置；保存结束后下一条恰好发送一次，队列清空。 |
+| 延迟普通侧窗发送；开始保存速度配置；拒绝发送，再结束速度保存。 | 失败消息及错误保留，等待用户显式重试；速度保存结束不自动重试失败请求。 |
+| 延迟 older 或 newer 读取；在 409 返回前请求 latest，再令分页返回 409，最后释放回退 latest。另一组先令分页返回 409，在回退 latest 等待期间请求 latest。 | 四种组合均只读取一次 latest；等待者共享成功回退结果，窗口恢复到最新，消息无重复。 |
+| 分页返回 409，回退 latest 延迟且最终失败；同时请求 latest，允许重试成功。 | 原分页调用收到失败；等待者补读一次最新窗口并恢复，错误清除。失败结果不当作已恢复最新。 |
+| 正常 older 读取等待期间请求 latest；分别释放两次读取。 | 原有较早分页仍保留方向；随后读取一次 latest，不把普通历史窗口当成最新窗口。 |
+
+Mock 回归位于 `src/composables/useDesktopState.test.ts`；请求数量使用调用次数断言。侧栏关闭、刷新恢复、悬浮窗口使用既有 `output/playwright/pc-agent-continuity.cjs`，侧窗发送恢复使用 `output/playwright/side-send-recovery.cjs`。
+
+清理：结束侧窗和弹出窗口，恢复速度、主题、视口设置；验收服务 4173 保留运行。回滚对应修复提交即可恢复代码，无存储迁移。
+
+验证结果：新增 8 条回归；修复前 6 条失败、2 条通过，修复后相关 6 个测试文件共 290/290 通过。全量 Mock 为 830/832 通过，剩余两项与修复前基线一致：反馈邮件品牌断言、恢复文件变更时间戳。报告：`output/playwright/fix-side-races-unit.json`。`vue-tsc --noEmit` 和 `git diff --check` 通过，未执行构建或发布。
+
+界面回归：侧栏 6 组、侧窗发送恢复 6 组、独立窗口 2 组、悬浮窗拖动缩放 2 组、空 Agent 入口 2 组，共 18 组通过、54 张截图，五份报告均为零页面脚本异常。对应报告：`pc-agent-header-toggle.json`、`side-send-recovery.json`、`side-popup-diff-recovery.json`、`pc-agent-floating-geometry.json`、`pc-agent-empty-header.json`，均位于 `output/playwright/`。
+
+性能复查：成功的 409 回退在四种竞态组合中均只请求一次 latest；失败回退才触发等待者补读。协调状态仅保留当前侧窗读取的一个标记对象，随原读取锁清理，不增加轮询、订阅、全量历史或全会话刷新。速度续发复用原队列，没有后台无限重试。长期真实会话的堆内存和帧率未测量。

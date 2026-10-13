@@ -1869,7 +1869,7 @@ export function useDesktopState() {
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   const isSideConversationImplementingPlan = ref(false)
   const sideConversationFollowLatestRevision = ref(0)
-  let sideConversationWindowDirection: 'older' | 'newer' | 'latest' | undefined
+  let sideConversationWindowRequest: { latest: boolean } | undefined
   let sideConversationTurnStartPromise: Promise<string> | null = null
   const sideConversationPendingTurnStarts = new Set<Promise<string>>()
   let sideConversationEpoch = 0
@@ -6388,10 +6388,12 @@ export function useDesktopState() {
     if (!threadId) return Promise.resolve()
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) {
-      if (direction !== 'latest' || sideConversationWindowDirection === 'latest') return existing
+      const request = sideConversationWindowRequest
+      if (direction !== 'latest' || request?.latest) return existing
       const epoch = sideConversationEpoch
       return existing.catch(() => undefined).then(() => {
         if (epoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
+        if (request?.latest) return
         return loadSideConversationWindow('latest')
       })
     }
@@ -6408,9 +6410,11 @@ export function useDesktopState() {
     const loading = direction === 'older' ? loadingOlderMessagesByThreadId : loadingNewerMessagesByThreadId
     loading.value = { ...loading.value, [threadId]: true }
     const current = () => epoch === sideConversationEpoch && threadId === sideConversationThreadId.value && generation === (threadBodyGeneration.get(threadId) ?? 0)
+    const request = { latest: direction === 'latest' || (direction === 'older' ? !before : !after) }
+    sideConversationWindowRequest = request
     const promise = (async () => {
       try {
-        let latest = direction === 'latest' || (direction === 'older' ? !before : !after)
+        let latest = request.latest
         let page
         try {
           page = latest ? await getLatestThreadMessages(threadId, 20, 'ephemeral')
@@ -6450,6 +6454,7 @@ export function useDesktopState() {
         extendThreadWindowBounds(threadId, page.turnIndexByTurnId, latest, direction === 'latest' ? undefined : direction)
         if (!latest || page.messages.length) removeSnapshotLiveMessages(threadId, next)
         setPersistedMessagesForThread(threadId, next, direction === 'older' && !latest ? 'earliest' : 'latest')
+        request.latest = latest
       } catch (cause) {
         if (!current()) return
         if (cause instanceof CodexApiError && (cause.status === 404 || cause.status === 410)) {
@@ -6463,12 +6468,11 @@ export function useDesktopState() {
         if (current()) loading.value = omitKey(loading.value, threadId)
       }
     })()
-    sideConversationWindowDirection = direction === 'latest' || (direction === 'older' ? !before : !after) ? 'latest' : direction
     latestWindowPromiseByThreadId.set(threadId, promise)
     void promise.finally(() => {
       if (latestWindowPromiseByThreadId.get(threadId) === promise) {
         latestWindowPromiseByThreadId.delete(threadId)
-        sideConversationWindowDirection = undefined
+        sideConversationWindowRequest = undefined
       }
     }).catch(() => undefined)
     return promise
@@ -7084,7 +7088,7 @@ export function useDesktopState() {
     sideConversationCollaborationMode.value = 'default'
     isSideConversationImplementingPlan.value = false
     sideConversationFollowLatestRevision.value = 0
-    sideConversationWindowDirection = undefined
+    sideConversationWindowRequest = undefined
     sideConversationTurnStartPromise = null
     sideConversationPendingTurnStarts.clear()
     sideConversationFirstTurnIndex = 0
@@ -7199,8 +7203,9 @@ export function useDesktopState() {
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
     const collaborationMode = collaborationModeOverride ?? sideConversationCollaborationMode.value
-    const retainUnsentMessage = () => {
+    const retainUnsentMessage = (waitingForSpeed = false) => {
       if (sendEpoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
+      if (waitingForSpeed) sideConversationQueueWaitingForSpeed = true
       const message = queuedMessageToRestore ?? {
         id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         text: nextText, imageUrls, skills, fileAttachments, collaborationMode,
@@ -7211,14 +7216,14 @@ export function useDesktopState() {
       sideConversationQueuedMessages.value = queue
     }
     if (isUpdatingSpeedMode.value) {
-      retainUnsentMessage()
+      retainUnsentMessage(true)
       return
     }
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) return
     if (sendEpoch !== sideConversationEpoch || sideConversationThreadId.value !== threadId) return
     if (isUpdatingSpeedMode.value) {
-      retainUnsentMessage()
+      retainUnsentMessage(true)
       return
     }
     const isInProgress = inProgressById.value[threadId] === true
@@ -7239,7 +7244,7 @@ export function useDesktopState() {
       }
       if (sendEpoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
       if (isUpdatingSpeedMode.value) {
-        retainUnsentMessage()
+        retainUnsentMessage(true)
         return
       }
       if (historyWindowThreadIds.has(threadId) || hasMoreNewerMessagesByThreadId.value[threadId]) {
