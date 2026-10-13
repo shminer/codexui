@@ -4,7 +4,6 @@ import {
   DEFAULT_DESKTOP_PANEL_WIDTH,
   canExpandDesktopPanel,
   canShowBothDesktopSidebars,
-  DESKTOP_PANEL_COLLAPSED_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
   isActiveSubagentStatus,
@@ -45,8 +44,6 @@ describe('desktop subagent sidebar width', () => {
     expect(canExpandDesktopPanel(611)).toBe(false)
     expect(canExpandDesktopPanel(612)).toBe(true)
     expect(effectiveDesktopPanelWidth(960, 612)).toBe(280)
-    expect(DESKTOP_PANEL_COLLAPSED_WIDTH).toBe(0)
-    expect(332 - DESKTOP_PANEL_COLLAPSED_WIDTH).toBe(332)
     expect(canExpandDesktopPanel(376)).toBe(false)
     expect(effectiveDesktopPanelWidth(960, 1440)).toBe(960)
   })

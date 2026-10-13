@@ -129,3 +129,9 @@
 - Closing hides the existing host instead of clearing or remounting the selected conversation. No new history polling, cache, event subscription or observer is introduced; user toggles add a single Vue `nextTick` for focus handoff.
 - Check intercepted thread-history request counts around closing/reopening and resizing; expect zero added reads. Page refresh performs the existing initialization reads.
 - Close any mobile sheet, floating chat or popup after testing. Reset the existing width/collapsed localStorage keys to restore defaults if desired. Revert this repair commit to restore the preceding 44px rail behavior; no storage migration or conversation-data changes are involved.
+
+#### 零宽关闭的冗余清理回归
+
+- 保留父容器的显示隐藏及已选对话，删除子容器重复的显示控制、无样式消费者的折叠类和零宽常量。原有关闭、展开、焦点转移、宽度保存及手机弹层用例继续适用。
+- 重新执行 `pc-agent-continuity.cjs`：6 个视口/主题组合全部通过，30 张截图、零页面脚本异常。关闭及刷新后占位为零，展开保留已选对话；PC 开合和调整宽度新增历史请求为零。
+- 空 Agent 入口、悬浮窗拖动缩放、独立窗口 Plan/Diff 各 2 组通过。截图位于 `output/playwright/`。清理代码只减少重复表达，未增加缓存、监听器或网络路径。

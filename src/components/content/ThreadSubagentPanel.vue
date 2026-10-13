@@ -20,7 +20,6 @@
       v-show="isMobile || desktopPanelExpanded"
       ref="desktopHostRef"
       class="subagent-panel-host"
-      :class="{ 'is-desktop-collapsed': !isMobile && !desktopPanelExpanded }"
       :style="desktopHostStyle"
     >
       <div v-if="!isMobile && desktopPanelExpanded" class="subagent-desktop-toolbar">
@@ -36,7 +35,7 @@
           <IconTablerLayoutSidebar class="subagent-header-trigger-icon" />
         </button>
       </div>
-      <div v-show="isMobile || desktopPanelExpanded" class="subagent-panel-body">
+      <div class="subagent-panel-body">
         <div
           v-if="!isMobile && desktopPanelExpanded"
           class="subagent-panel-resizer"
@@ -169,7 +168,6 @@ import ThreadConversation from './ThreadConversation.vue'
 import {
   clampDesktopPanelWidth,
   canExpandDesktopPanel,
-  DESKTOP_PANEL_COLLAPSED_WIDTH,
   DEFAULT_DESKTOP_PANEL_WIDTH,
   desktopPanelWidthAfterDrag,
   effectiveDesktopPanelWidth,
@@ -261,7 +259,7 @@ const desktopPanelCanExpand = computed(() => canExpandDesktopPanel(desktopLayout
 const desktopPanelOpen = computed(() => !desktopPanelCollapsed.value && (allAgents.value.length > 0 || historyOpened.value))
 const desktopPanelExpanded = computed(() => desktopPanelCanExpand.value && desktopPanelOpen.value)
 const desktopHostStyle = computed<Record<string, string>>(() => ({
-  '--subagent-panel-width': `${desktopPanelExpanded.value ? desktopPanelRenderedWidth.value : DESKTOP_PANEL_COLLAPSED_WIDTH}px`,
+  '--subagent-panel-width': `${desktopPanelRenderedWidth.value}px`,
 }))
 
 function loadDesktopPanelWidth(): number {
