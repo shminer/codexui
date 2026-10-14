@@ -47,7 +47,7 @@ describe('ThreadConversation render-window wiring', () => {
     const threadWatcher = source.match(/watch\(\s*\(\) => props.activeThreadId,([\s\S]*?)\n\)/u)?.[1] ?? ''
     expect(threadWatcher).toContain('await jumpToLatest()')
     expect(threadWatcher).toContain('autoFollowOutput.value = !props.isHistoryWindow && !props.hasMorePersistedBelow')
-    expect(source).toContain('isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value')
+    expect(source).toContain('container.scrollTop > previousTop && isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value')
   })
 
   it('unmounts collapsed command details and skips streaming snapshots in long-lived caches', async () => {

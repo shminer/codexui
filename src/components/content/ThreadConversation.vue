@@ -13,7 +13,18 @@
       No messages in this thread yet.
     </p>
 
-    <ul v-else ref="conversationListRef" class="conversation-list" @scroll="onConversationScroll">
+    <ul
+      v-else
+      ref="conversationListRef"
+      class="conversation-list"
+      tabindex="0"
+      @scroll="onConversationScroll"
+      @wheel.passive="onConversationWheel"
+      @touchstart.passive="onConversationTouchStart"
+      @touchmove.passive="onConversationTouchMove"
+      @pointerdown="onConversationPointerDown"
+      @keydown="onConversationKeyDown"
+    >
       <li v-if="hasMoreAbove && !searchTargetId" class="conversation-load-more">
         <button
           type="button"
@@ -4257,6 +4268,7 @@ async function onSearchLocate(value: { threadId: string; itemId: string; message
 
 type ConversationAnchor = { id: string; offset: number }
 let lastConversationScrollTop = 0
+let conversationTouchY = 0
 
 function captureConversationAnchor(): ConversationAnchor | null {
   const container = conversationListRef.value
@@ -4516,6 +4528,7 @@ watch(
     isLoadingLatest.value = false
     historyLoadError.value = ''
     lastConversationScrollTop = 0
+    conversationTouchY = 0
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
@@ -4530,14 +4543,59 @@ watch(
   { flush: 'post' },
 )
 
+function stopFollowingForEarlierScroll(target: EventTarget | null): void {
+  for (let node = target as HTMLElement | null; node && node !== conversationListRef.value; node = node.parentElement) {
+    if (node.scrollTop > 0 && /^(auto|scroll)$/.test(node.ownerDocument.defaultView?.getComputedStyle(node).overflowY ?? '')) return
+  }
+  autoFollowOutput.value = false
+}
+
+function onConversationWheel(event: WheelEvent): void {
+  if (!event.ctrlKey && event.deltaY < 0) stopFollowingForEarlierScroll(event.target)
+}
+
+function onConversationTouchStart(event: TouchEvent): void {
+  conversationTouchY = event.touches[0]?.clientY ?? 0
+}
+
+function onConversationTouchMove(event: TouchEvent): void {
+  const y = event.touches[0]?.clientY
+  if (y === undefined) return
+  if (event.touches.length === 1 && y > conversationTouchY) stopFollowingForEarlierScroll(event.target)
+  conversationTouchY = y
+}
+
+function onConversationPointerDown(event: PointerEvent): void {
+  const container = conversationListRef.value
+  if (!container) return
+  const right = container.getBoundingClientRect().right
+  const scrollbarWidth = Math.max(12, container.offsetWidth - container.clientWidth)
+  if (event.button === 1 || (event.target === container && event.clientX >= right - scrollbarWidth)) {
+    autoFollowOutput.value = false
+  }
+}
+
+function onConversationKeyDown(event: KeyboardEvent): void {
+  if (event.defaultPrevented || (event.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]')) return
+  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) {
+    stopFollowingForEarlierScroll(event.target)
+  }
+}
+
 function onConversationScroll(): void {
   const container = conversationListRef.value
   if (!container) return
+  const previousTop = lastConversationScrollTop
   const direction = historyScrollDirection(lastConversationScrollTop, container.scrollTop, container.scrollHeight, container.clientHeight, LOAD_MORE_SCROLL_THRESHOLD_PX)
   lastConversationScrollTop = container.scrollTop
   if (props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
   if (searchTargetId.value) return
-  autoFollowOutput.value = isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value
+  // Content growth and scroll anchoring also emit scroll; only user intent stops following.
+  if (shouldLockToBottom()) {
+    if (!isAtBottom(container)) scheduleBottomLock(3)
+    return
+  }
+  autoFollowOutput.value = container.scrollTop > previousTop && isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value
   if (direction === 'earlier' && hasMoreAbove.value) {
     void loadMoreAbove()
   } else if (direction === 'later' && hasMoreBelow.value) {
