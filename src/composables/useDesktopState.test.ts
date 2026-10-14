@@ -4605,6 +4605,120 @@ describe('side memory event races', () => {
     expect(state.sideConversationMessages.value.map((message) => [message.id, message.text])).toEqual([['A', 'updated A'], ['C', 'C']])
   })
 
+  it.each(['snapshot', 'expired'] as const)('retains a transferred side reply and coalesces the post-completion read after a stale %s', async (result) => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const previous = sideRow('A', 0)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([previous]))
+    await state.loadLatestMessages('side-thread-default')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'final answer' } } })
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let finishOld!: (page: unknown) => void
+    let rejectOld!: (cause: Error) => void
+    let finishFresh!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { finishOld = resolve; rejectOld = reject }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve }))
+    const oldRead = state.loadLatestMessages(params.threadId)
+    const completed = { method: 'turn/completed', params: { ...params, turn: { id: params.turnId, status: 'completed' } } }
+    emit(completed)
+    const latest = state.loadLatestMessages(params.threadId)
+    const duplicate = state.loadLatestMessages(params.threadId)
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    if (result === 'snapshot') finishOld({ ...sidePage([previous], true), historyTruncated: true })
+    else rejectOld(new CodexApiError('expired', { code: 'http_error', status: 410 }))
+    await oldRead
+    await flushMicrotasks()
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
+    expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toEqual([expect.objectContaining({ text: 'final answer' })])
+    expect(state.getLiveMessagesForThread(params.threadId)).toEqual([])
+    expect(state.sideConversationHistoryError.value).toBe('')
+    expect(state.sideConversationHistoryTruncated.value).toBe(false)
+    expect(state.sideConversationHasMoreOlder.value).toBe(true)
+    expect(state.sideConversationHasMoreNewer.value).toBe(false)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+    // A replay must not invalidate the fresh read or schedule another request.
+    emit(completed)
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'final answer confirmed', turnId: params.turnId, turnIndex: 1, messageType: 'agentMessage' }
+    finishFresh(sidePage([previous, reply]))
+    await Promise.all([latest, duplicate])
+    expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toEqual([expect.objectContaining(reply)])
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
+    expect(state.sideConversationLoadingNewer.value).toBe(false)
+  })
+
+  it('keeps a valid side snapshot across a duplicate turn-start notification', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const started = { method: 'turn/started', params: { threadId: 'side-thread-default', turn: { id: 'side-turn' } } }
+    emit(started)
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const load = state.loadLatestMessages('side-thread-default')
+    emit(started)
+    const duplicate = state.loadLatestMessages('side-thread-default')
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'server reply', turnId: 'side-turn', turnIndex: 0 }
+    finish(sidePage([reply]))
+    await Promise.all([load, duplicate])
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')).toMatchObject(reply)
+    expect(state.isSideConversationInProgress.value).toBe(true)
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores an old side latest snapshot after a new turn starts without changing its body or paging flags', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const previous = sideRow('A', 0)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([previous]))
+    await state.loadLatestMessages('side-thread-default')
+    let finish!: (page: unknown) => void
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const load = state.loadLatestMessages('side-thread-default')
+    const params = { threadId: 'side-thread-default', turnId: 'new-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    emit({ method: 'item/started', params: { ...params, item: { id: 'command', type: 'commandExecution', command: 'echo new', status: 'inProgress', aggregatedOutput: '' } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'new body' } } })
+    finish({ ...sidePage([{ ...previous, text: 'stale body' }], true), historyTruncated: true })
+    await load
+    expect(state.sideConversationMessages.value.find((row) => row.id === previous.id)?.text).toBe(previous.text)
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'reply')?.text).toBe('new body')
+    expect(state.sideConversationMessages.value.find((row) => row.id === 'command')?.commandExecution?.status).toBe('inProgress')
+    expect(state.isSideConversationInProgress.value).toBe(true)
+    expect(state.sideConversationHasMoreNewer.value).toBe(false)
+    expect(state.sideConversationHistoryTruncated.value).toBe(false)
+    expect(state.sideConversationLoadingNewer.value).toBe(false)
+  })
+
+  it('reuses a 409 latest fallback issued after side completion even when paging started before it', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const previous = sideRow('A', 0)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([previous]))
+    await state.loadLatestMessages('side-thread-default')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'final answer' } } })
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let rejectPage!: (cause: Error) => void
+    let finishFallback!: (page: unknown) => void
+    gatewayMocks.getOlderThreadMessages.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectPage = reject }))
+    gatewayMocks.getLatestThreadMessages.mockImplementationOnce(() => new Promise((resolve) => { finishFallback = resolve }))
+    const older = state.loadOlderMessages(params.threadId)
+    emit({ method: 'turn/completed', params: { ...params, turn: { id: params.turnId, status: 'completed' } } })
+    const latest = state.loadLatestMessages(params.threadId)
+    rejectPage(new CodexApiError('stale_window', { code: 'http_error', status: 409 }))
+    await flushMicrotasks()
+    const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'final answer', turnId: params.turnId, turnIndex: 1 }
+    finishFallback(sidePage([previous, reply]))
+    await Promise.all([older, latest])
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toHaveLength(1)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+  })
+
   it('keeps a newer same-ID live reply when an older temporary snapshot returns late', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')

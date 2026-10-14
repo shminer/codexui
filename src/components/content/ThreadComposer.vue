@@ -2021,12 +2021,12 @@ onBeforeUnmount(() => {
 
 watch(() => props.ownerDocument ?? document, (owner, _previous, onCleanup) => {
   const ownerWindow = owner.defaultView
-  owner.addEventListener('click', onDocumentClick)
+  owner.addEventListener('click', onDocumentClick, true)
   ownerWindow?.addEventListener('drop', onWindowDragCleanup)
   ownerWindow?.addEventListener('dragend', onWindowDragCleanup)
   ownerWindow?.addEventListener('blur', onWindowDragCleanup)
   onCleanup(() => {
-    owner.removeEventListener('click', onDocumentClick)
+    owner.removeEventListener('click', onDocumentClick, true)
     ownerWindow?.removeEventListener('drop', onWindowDragCleanup)
     ownerWindow?.removeEventListener('dragend', onWindowDragCleanup)
     ownerWindow?.removeEventListener('blur', onWindowDragCleanup)

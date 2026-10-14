@@ -78,6 +78,37 @@ The composer voice-input control is replaced by a temporary side-conversation bu
 - During opening or a pending approval/input request, the edit action is absent. Agent and archived read-only previews still have no edit action, and side Fork/file undo controls remain absent.
 - Cleanup: close the side conversation and restore the width preference. Mock browser checks cover shared width, post-refresh persistence and independent side-message editing; popup-specific checks remain manual.
 
+## 侧窗外部点击关闭附件菜单
+
+前提：打开主聊天及侧窗，在明暗主题下分别检查 1440x1000、768x1024、375x812；桌面另检查独立弹出窗口。
+
+| 操作 | 预期结果 |
+| --- | --- |
+| 点击输入框“＋”，再点击同一侧窗的正文、标题或输入框旁边。主聊天和独立窗口各重复一次。 | 附件菜单关闭；点击正文或输入框旁边不关闭侧窗，也不触发发送。 |
+| 打开“＋”菜单，点击菜单内部及附件选项；再次点击“＋”。 | 菜单内部点击保持原有行为，附件操作正常；“＋”可以再次关闭菜单。 |
+| 菜单打开时将侧窗移入独立窗口，在新窗口点击菜单外部；关闭独立窗口后再次检查。 | 点击监听随当前文档迁移，原页面及返回后的侧窗均正常，无重复监听。 |
+
+清理：关闭附件菜单、侧窗及独立窗口，恢复主题和视口。回滚该修复提交恢复原点击监听；无存储变更。
+
+## 回答完成期间的侧窗历史读取
+
+前提：使用可延迟 HTTP/RPC/WebSocket 的 Mock 环境，打开侧窗并保留一轮已有正文。以下场景在页面内侧窗、手机侧窗及独立窗口复查，使用明暗主题。
+
+| 操作 | 预期结果 |
+| --- | --- |
+| 新轮正文已流式显示时，恢复最小化侧窗并延迟 latest 请求；先发送回答完成通知，再返回非空但缺少该回答的旧快照。 | 旧快照不替换正文或分页状态；已完成回答保持可见，不需要点击加载较早消息恢复；随后补读一次完成后的最新窗口。 |
+| 重复上一场景，但旧请求返回 410；同时请求最新窗口多次。 | 过时错误不清空分页标记、不显示历史过期错误；等待者共享一次新的 latest 读取，正文不重复。 |
+| 完成后的新读取等待期间重放相同完成通知；另一组在正常读取期间重放相同开始通知。 | 重复通知不递增有效生命周期版本、不使有效快照失效，也不增加读取次数。 |
+| 延迟 latest，再启动新轮并接收正文及命令；返回旧轮快照。 | 新轮运行状态、正文、命令及已有正文保留；旧快照不改写历史窗口及较新消息标记；原读取加载状态结束。 |
+| 较早分页等待期间结束回答，令分页返回 409，再释放完成后发出的 latest 回退。 | 成功的完成后回退可供等待者复用，只读取一次 latest；较早、较新及返回最新的原有方向和游标继续有效。 |
+| 回答结束前正在阅读历史，随后完成回答并向后分页或明确返回最新。 | 历史阅读位置保留；新消息通过原有较新分页提示补读，不因本次修复强制跳到最新。 |
+
+Mock 回归位于 `src/composables/useDesktopState.test.ts`，新增 5 条用例覆盖上述快照竞态、过时错误、重复通知、新轮保护及 409 回退共享。当前执行范围仅静态/类型检查，Mock 与界面用例尚未运行，真实现场“点击加载较早消息后恢复”的触发组合仍需确认。
+
+性能静态复查：每个当前侧窗读取只增加一个版本号；复用原请求锁，重复 latest 调用共享补读。跨生命周期时最多保留当前读取及等待它的补读，同一侧窗读取并发上限仍为 1；不新增轮询、全量历史读取、全会话刷新或长期缓存。分页大小、正文与命令输出预算保持原值。外部点击复用现有监听，捕获阶段注册与清理一致。实际帧率、堆内存和网络时序未测量。
+
+清理：结束临时侧窗及独立窗口，恢复主题和视口；回滚该修复提交恢复原读取策略，无存储迁移。
+
 ### Ephemeral synchronization regression
 
 - Setup: current CLI with ephemeral forks; open a parent conversation and the browser network inspector.

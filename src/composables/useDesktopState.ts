@@ -1869,7 +1869,7 @@ export function useDesktopState() {
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   const isSideConversationImplementingPlan = ref(false)
   const sideConversationFollowLatestRevision = ref(0)
-  let sideConversationWindowRequest: { latest: boolean } | undefined
+  let sideConversationWindowRequest: { latest: boolean; lifecycleRevision: number } | undefined
   let sideConversationTurnStartPromise: Promise<string> | null = null
   const sideConversationPendingTurnStarts = new Set<Promise<string>>()
   let sideConversationEpoch = 0
@@ -5300,11 +5300,11 @@ export function useDesktopState() {
 
     const startedTurn = readTurnStartedInfo(notification)
     if (startedTurn) {
-      threadLifecycleRevisionByThreadId.set(startedTurn.threadId, (threadLifecycleRevisionByThreadId.get(startedTurn.threadId) ?? 0) + 1)
       if (isKnownSideConversationThread(startedTurn.threadId)) {
         if (typeof turnIndexByTurnIdByThreadId.value[startedTurn.threadId]?.[startedTurn.turnId] === 'number' && activeTurnIdByThreadId.value[startedTurn.threadId] === startedTurn.turnId) return
         rememberSideConversationTurn(sideConversationTurnIds, startedTurn.turnId)
       }
+      threadLifecycleRevisionByThreadId.set(startedTurn.threadId, (threadLifecycleRevisionByThreadId.get(startedTurn.threadId) ?? 0) + 1)
       nonSuccessCompletionReadBaselineByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
       startTurnTokenThroughput(startedTurn.threadId, startedTurn.turnId)
@@ -5340,12 +5340,12 @@ export function useDesktopState() {
     if (completedTurn) {
       const activeTurnId = activeTurnIdByThreadId.value[completedTurn.threadId]
       if (activeTurnId && activeTurnId !== completedTurn.turnId) return
-      threadLifecycleRevisionByThreadId.set(completedTurn.threadId, (threadLifecycleRevisionByThreadId.get(completedTurn.threadId) ?? 0) + 1)
       if (isKnownSideConversationThread(completedTurn.threadId)) {
         if (sideConversationCompletedTurnIds.has(completedTurn.turnId)) return
         rememberSideConversationTurn(sideConversationCompletedTurnIds, completedTurn.turnId)
         rememberSideConversationTurn(sideConversationTurnIds, completedTurn.turnId)
       }
+      threadLifecycleRevisionByThreadId.set(completedTurn.threadId, (threadLifecycleRevisionByThreadId.get(completedTurn.threadId) ?? 0) + 1)
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
       const startedTurnState = pendingTurnStartsById.get(completedTurn.turnId)
       if (startedTurnState) {
@@ -6389,11 +6389,11 @@ export function useDesktopState() {
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) {
       const request = sideConversationWindowRequest
-      if (direction !== 'latest' || request?.latest) return existing
+      if (direction !== 'latest' || (request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0))) return existing
       const epoch = sideConversationEpoch
       return existing.catch(() => undefined).then(() => {
         if (epoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
-        if (request?.latest) return
+        if (request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)) return
         return loadSideConversationWindow('latest')
       })
     }
@@ -6410,11 +6410,15 @@ export function useDesktopState() {
     const loading = direction === 'older' ? loadingOlderMessagesByThreadId : loadingNewerMessagesByThreadId
     loading.value = { ...loading.value, [threadId]: true }
     const current = () => epoch === sideConversationEpoch && threadId === sideConversationThreadId.value && generation === (threadBodyGeneration.get(threadId) ?? 0)
-    const request = { latest: direction === 'latest' || (direction === 'older' ? !before : !after) }
+    const request = {
+      latest: direction === 'latest' || (direction === 'older' ? !before : !after),
+      lifecycleRevision: threadLifecycleRevisionByThreadId.get(threadId) ?? 0,
+    }
     sideConversationWindowRequest = request
+    const lifecycleCurrent = () => request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)
     const promise = (async () => {
+      let latest = request.latest
       try {
-        let latest = request.latest
         let page
         try {
           page = latest ? await getLatestThreadMessages(threadId, 20, 'ephemeral')
@@ -6424,9 +6428,11 @@ export function useDesktopState() {
           if (!current()) return
           if (!(cause instanceof CodexApiError) || cause.status !== 409 || latest) throw cause
           latest = true
+          request.lifecycleRevision = threadLifecycleRevisionByThreadId.get(threadId) ?? 0
           page = await getLatestThreadMessages(threadId, 20, 'ephemeral')
         }
-        if (!current()) return
+        // A pre-completion snapshot can omit live rows already moved into the body.
+        if (!current() || (latest && !lifecycleCurrent())) return
         flushPendingContentDeltas(threadId)
         sideConversationHistoryTruncated.value = page.historyTruncated === true
         sideConversationHistoryError.value = ''
@@ -6456,7 +6462,7 @@ export function useDesktopState() {
         setPersistedMessagesForThread(threadId, next, direction === 'older' && !latest ? 'earliest' : 'latest')
         request.latest = latest
       } catch (cause) {
-        if (!current()) return
+        if (!current() || (latest && !lifecycleCurrent())) return
         if (cause instanceof CodexApiError && (cause.status === 404 || cause.status === 410)) {
           sideConversationHistoryTruncated.value = true
           hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: false }
