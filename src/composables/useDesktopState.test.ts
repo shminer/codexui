@@ -4501,6 +4501,68 @@ describe('side memory event races', () => {
     expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['latest', 'success'], ['latest', 'failure'],
+    ['send', 'success'], ['send', 'failure'],
+  ] as const)('waits for a valid latest window from side history via %s when the post-completion read ends in %s', async (action, result) => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    await state.openSideConversation('thread-1')
+    const current = sideRow('C', 2)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(sidePage([current]))
+    await state.loadLatestMessages('side-thread-default')
+    const params = { threadId: 'side-thread-default', turnId: 'turn-3' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(sidePage([sideRow('B', 1)], true))
+    await state.loadOlderMessages(params.threadId)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+    gatewayMocks.getLatestThreadMessages.mockClear()
+    let finishOld!: (page: unknown) => void
+    let finishFresh!: (page: unknown) => void
+    let rejectFresh!: (cause: Error) => void
+    gatewayMocks.getLatestThreadMessages
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { finishFresh = resolve; rejectFresh = reject }))
+    gatewayMocks.startThreadTurn.mockResolvedValueOnce('follow-up-turn')
+    let settled = false
+    const operation = action === 'latest' ? state.loadLatestMessages(params.threadId) : state.sendSideConversationMessage('from history')
+    const done = operation.then(() => { settled = true; return '' }, (cause: Error) => { settled = true; return cause.message })
+    await flushMicrotasks()
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'reply', type: 'agentMessage', text: 'final answer' } } })
+    emit({ method: 'turn/completed', params: { ...params, turn: { id: params.turnId, status: 'completed' } } })
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
+    finishOld(sidePage([current]))
+    await flushMicrotasks()
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
+    expect(settled).toBe(false)
+    expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+    expect(state.sideConversationHasMoreNewer.value).toBe(true)
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    if (result === 'failure') {
+      rejectFresh(new Error('fresh read failed'))
+      expect(await done).toBe(action === 'latest' ? 'fresh read failed' : '')
+      expect(state.sideConversationIsHistoryWindow.value).toBe(true)
+      expect(state.sideConversationHistoryError.value).toBe('fresh read failed')
+      expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+      if (action === 'send') {
+        expect(state.sideConversationQueuedMessages.value.map((message) => message.text)).toEqual(['from history'])
+        expect(state.sideConversationError.value).toBe('fresh read failed')
+      }
+    } else {
+      const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'final answer', turnId: params.turnId, turnIndex: 3 }
+      finishFresh(sidePage([current, reply]))
+      expect(await done).toBe('')
+      expect(state.sideConversationIsHistoryWindow.value).toBe(false)
+      expect(state.sideConversationHasMoreNewer.value).toBe(false)
+      expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toHaveLength(1)
+      expect(state.sideConversationError.value).toBe('')
+      expect(state.sideConversationHistoryError.value).toBe('')
+      expect(state.sideConversationQueuedMessages.value).toEqual([])
+      expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(action === 'send' ? 1 : 0)
+    }
+    expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
+    expect(state.sideConversationLoadingNewer.value).toBe(false)
+  })
+
   it('keeps the history window and skips sending if restoring latest fails', async () => {
     const { state } = await setupTurnLifecycleNotificationState('thread-1')
     await state.openSideConversation('thread-1')
@@ -4629,7 +4691,6 @@ describe('side memory event races', () => {
     expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(1)
     if (result === 'snapshot') finishOld({ ...sidePage([previous], true), historyTruncated: true })
     else rejectOld(new CodexApiError('expired', { code: 'http_error', status: 410 }))
-    await oldRead
     await flushMicrotasks()
     expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
     expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toEqual([expect.objectContaining({ text: 'final answer' })])
@@ -4643,7 +4704,7 @@ describe('side memory event races', () => {
     emit(completed)
     const reply: UiMessage = { id: 'reply', role: 'assistant', text: 'final answer confirmed', turnId: params.turnId, turnIndex: 1, messageType: 'agentMessage' }
     finishFresh(sidePage([previous, reply]))
-    await Promise.all([latest, duplicate])
+    await Promise.all([oldRead, latest, duplicate])
     expect(state.sideConversationMessages.value.filter((row) => row.id === 'reply')).toEqual([expect.objectContaining(reply)])
     expect(gatewayMocks.getLatestThreadMessages).toHaveBeenCalledTimes(2)
     expect(state.sideConversationLoadingNewer.value).toBe(false)

@@ -6389,7 +6389,7 @@ export function useDesktopState() {
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) {
       const request = sideConversationWindowRequest
-      if (direction !== 'latest' || (request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0))) return existing
+      if (direction !== 'latest' || request?.latest) return existing
       const epoch = sideConversationEpoch
       return existing.catch(() => undefined).then(() => {
         if (epoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
@@ -6474,14 +6474,17 @@ export function useDesktopState() {
         if (current()) loading.value = omitKey(loading.value, threadId)
       }
     })()
-    latestWindowPromiseByThreadId.set(threadId, promise)
-    void promise.finally(() => {
-      if (latestWindowPromiseByThreadId.get(threadId) === promise) {
+    const windowPromise = promise.finally(() => {
+      if (latestWindowPromiseByThreadId.get(threadId) === windowPromise) {
         latestWindowPromiseByThreadId.delete(threadId)
         sideConversationWindowRequest = undefined
       }
-    }).catch(() => undefined)
-    return promise
+    }).then(() => {
+      // Explicit latest callers must await a valid window, including from history.
+      if (direction === 'latest' && current() && !lifecycleCurrent()) return loadSideConversationWindow('latest')
+    })
+    latestWindowPromiseByThreadId.set(threadId, windowPromise)
+    return windowPromise
   }
 
   async function loadNewerMessages(threadId: string = selectedThreadId.value): Promise<void> {
