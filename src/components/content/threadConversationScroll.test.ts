@@ -27,7 +27,7 @@ function setup() {
     scrollTop: 300, scrollHeight: 1000, clientHeight: 300, clientWidth: 400, offsetWidth: 416,
     getBoundingClientRect: () => ({ right: 500 }),
   }
-  const calls = { latestScroll: 0, older: 0, newer: 0 }
+  const calls = { latestScroll: 0, bottomLock: 0, older: 0, newer: 0 }
   const state = {
     props: {
       isLoading: false, isLoadingPersistedAbove: false, isLoadingPersistedBelow: false,
@@ -46,7 +46,8 @@ function setup() {
     BOTTOM_THRESHOLD_PX: 16, LOAD_MORE_SCROLL_THRESHOLD_PX: 200,
     historyScrollDirection,
     innerScrollConsumes: () => false,
-    scheduleBottomLock: () => {},
+    scheduleBottomLock: () => { calls.bottomLock += 1 },
+    scrollToBottom: () => { container.scrollTop = container.scrollHeight - container.clientHeight },
     scheduleConversationScroll: () => { calls.latestScroll += 1 },
     loadMoreAbove: () => { calls.older += 1 },
     loadMoreBelow: () => { calls.newer += 1 },
@@ -61,7 +62,7 @@ function setup() {
     onConversationTouchStart: (event: { touches: { clientY: number }[] }) => void
     onConversationTouchMove: (event: { touches: { clientY: number }[] }) => void
     onConversationPointerDown: (event: Partial<PointerEvent>) => void
-    onConversationKeyDown: (event: { key: string; target: { closest: () => null } }) => void
+    onConversationKeyDown: (event: { key: string; target: { closest: () => null }; preventDefault: () => void }) => void
     showJumpToLatestButton: { value: boolean }
   }
   return { container, state, calls, handlers }
@@ -88,7 +89,7 @@ describe('conversation bottom following', () => {
     else if (input === 'touch') {
       handlers.onConversationTouchStart({ touches: [{ clientY: 300 }] })
       handlers.onConversationTouchMove({ touches: [{ clientY: 100 }] })
-    } else handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null } })
+    } else handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null }, preventDefault: () => {} })
     container.scrollTop = 700
     handlers.onConversationScroll()
     expect(state.autoFollowOutput.value).toBe(true)
@@ -111,6 +112,29 @@ describe('conversation bottom following', () => {
     handlers.onConversationScroll()
     expect(state.autoFollowOutput.value).toBe(false)
     expect(handlers.showJumpToLatestButton.value).toBe(true)
+  })
+
+  it('follows the virtual end while zoomed rows continue to change height', () => {
+    const { container, state, calls, handlers } = setup()
+    let prevented = false
+    handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null }, preventDefault: () => { prevented = true } })
+    expect(prevented).toBe(true)
+    expect(state.autoFollowOutput.value).toBe(true)
+    // The parent clears the history marker after readingHistoryChange(false).
+    state.props.isHistoryWindow = false
+    container.scrollHeight = 1300
+    handlers.onConversationScroll()
+    expect(calls.bottomLock).toBe(1)
+    expect(handlers.showJumpToLatestButton.value).toBe(false)
+  })
+
+  it('keeps End at an unread history boundary from enabling latest following', () => {
+    const { state, handlers } = setup()
+    state.hasMoreBelow.value = state.props.hasMorePersistedBelow = true
+    let prevented = false
+    handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null }, preventDefault: () => { prevented = true } })
+    expect(prevented).toBe(false)
+    expect(state.autoFollowOutput.value).toBe(false)
   })
 
   it('lets a user leave search navigation by scrolling back to the latest bottom', () => {

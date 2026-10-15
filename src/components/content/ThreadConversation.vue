@@ -4652,6 +4652,11 @@ function onConversationKeyDown(event: KeyboardEvent): void {
     if (innerScrollConsumes(event.target, 'later')) return
     paginationIntent = 'later'
     resumeFollowOnBottom = true
+    // Native End uses the old scroll height while virtual rows are still being measured.
+    if (event.key === 'End' && !hasMoreBelow.value) {
+      event.preventDefault()
+      scrollToBottom()
+    }
     resumeFollowingAtBottom()
   }
 }
