@@ -848,13 +848,6 @@
       <div class="conversation-bottom-anchor" />
       </template>
     </DynamicScroller>
-    <Teleport :to="historyStatusTarget ?? 'body'" :disabled="!historyStatusTarget">
-      <div v-if="historyCapacityReached || (releaseHistory && (showJumpToLatestButton || hasMoreAbove))" class="conversation-history-status" :class="{ 'conversation-history-status--inline': historyStatusTarget }">
-        <span v-if="historyCapacityReached" class="conversation-capacity" :title="t('History cache is full. Loaded messages are kept.')" role="status">{{ t('History cache full') }}</span>
-        <button v-if="releaseHistory && (showJumpToLatestButton || historyCapacityReached || hasMoreAbove)" type="button" class="conversation-release-history" :title="t('Only the page cache is cleared. Saved messages can be loaded again.')" :disabled="isLoadingLatest || isLoadingMore" @click="jumpToLatest(true)">{{ t('Clear history cache & go to latest') }}</button>
-      </div>
-    </Teleport>
-
     <button
       v-if="showJumpToLatestButton"
       type="button"
@@ -1471,9 +1464,7 @@ const props = withDefaults(defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
-  releaseHistory?: (threadId: string) => Promise<void>
   historyCapacityReached?: boolean
-  historyStatusTarget?: HTMLElement | null
 }>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined })
 
 const emit = defineEmits<{
@@ -4232,17 +4223,14 @@ function onPendingImageSettled(): void {
   scheduleBottomLock(3)
 }
 
-async function jumpToLatest(release = false): Promise<void> {
+async function jumpToLatest(): Promise<void> {
   if (isLoadingLatest.value || isLoadingMore.value) return
   const threadId = props.activeThreadId
   const generation = ++navigationGeneration
   isLoadingLatest.value = true
   historyLoadError.value = ''
   try {
-    if (release) {
-      if (!props.releaseHistory) return
-      await props.releaseHistory(threadId)
-    } else if (props.isHistoryWindow || props.hasMorePersistedBelow) {
+    if (props.isHistoryWindow || props.hasMorePersistedBelow) {
       if (!props.loadLatestMessages) throw new Error('Latest message loading is not available.')
       await props.loadLatestMessages(threadId)
     }
@@ -4777,22 +4765,6 @@ onBeforeUnmount(() => {
 
 .conversation-virtual-row {
   @apply pb-2 sm:pb-3;
-}
-
-.conversation-history-status {
-  @apply flex min-w-0 shrink-0 items-center justify-center gap-2 px-2 py-1 text-[11px] leading-4 text-zinc-500;
-}
-
-.conversation-history-status--inline {
-  @apply shrink p-0;
-}
-
-.conversation-capacity {
-  @apply min-w-0 truncate;
-}
-
-.conversation-release-history {
-  @apply shrink-0 whitespace-nowrap hover:text-zinc-900 disabled:opacity-50;
 }
 
 .conversation-load-more {

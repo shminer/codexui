@@ -1010,9 +1010,7 @@
                       :is-loading-persisted-below="isLoadingNewerMessages"
                       :load-later-messages="loadNewerMessages"
                       :load-latest-messages="loadLatestMessages"
-                      :release-history="releaseThreadHistory"
                       :history-capacity-reached="selectedThreadHistoryCapacityReached"
-                      :history-status-target="threadHistoryStatusTarget"
                       @reading-history-change="setThreadReadingHistory(composerThreadContextId, $event)"
                       @fork-thread="onForkThreadFromMessage"
                       @edit-message="onEditMessage"
@@ -1095,9 +1093,6 @@
                     @open-side-conversation="onOpenSideConversation"
                     @interrupt="onInterruptTurn"
                   >
-                    <template #history-status>
-                      <div ref="threadHistoryStatusTarget" class="thread-history-status-target" />
-                    </template>
                     <template #queue>
                       <QueuedMessages
                         :messages="selectedThreadQueuedMessages"
@@ -1142,7 +1137,6 @@
     :has-more-newer="sideConversationHasMoreNewer"
     :is-history-window="sideConversationIsHistoryWindow"
     :history-capacity-reached="sideConversationHistoryCapacityReached"
-    :release-history="releaseThreadHistory"
     @reading-history-change="setThreadReadingHistory(sideConversationThreadId, $event)"
     :loading-older="sideConversationLoadingOlder"
     :loading-newer="sideConversationLoadingNewer"
@@ -1430,7 +1424,6 @@ const {
   selectedThreadIsHistoryWindow,
   selectedThreadHistoryCapacityReached,
   sideConversationHistoryCapacityReached,
-  releaseThreadHistory,
   setThreadReadingHistory,
   selectedLiveOverlay,
   sideConversationThreadId,
@@ -1581,7 +1574,6 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
-const threadHistoryStatusTarget = ref<HTMLElement | null>(null)
 const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
 const threadSubagentPanelRef = ref<{ collapseDesktopPanel: () => void } | null>(null)
 const isSubagentPanelExpanded = ref(false)

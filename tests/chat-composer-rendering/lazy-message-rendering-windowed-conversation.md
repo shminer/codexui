@@ -30,28 +30,41 @@
 
 清理／回滚：恢复浏览器 100% 缩放、原主题和窗口位置，关闭专用测试窗口；移除 disable-transform 选项及其回归断言即可回滚，无存储变更。
 
-### 变更：历史提示与性能指标共享单行状态栏
+### 变更：历史容量静默限制与自动释放
 
-本节为本次变更的待执行验收说明；下方既有截图和通过数属于先前实现。
-
-前提：准备能加载更早消息、触发历史容量限制并产生吞吐指标的测试会话。分别检查中文、英文及明暗主题；视口为 1440x1000、768x1024、375x812，另打开窄侧窗和独立侧窗。
+前提：准备超过 150 轮、每轮包含多条消息的可控会话，以及可控制通知、重复快照和最新读取失败的网络 Mock。覆盖主对话、侧窗、独立侧窗、子 Agent 与归档；明暗主题，1440x1000、768x1024、375x812，独立窗口 760x900。
 
 | 操作 | 预期 |
 | --- | --- |
-| 主对话显示性能指标，加载更早内容。 | “清理历史并回到最新”与 otks／PF tps／dec tps／avg TPS 位于输入框上方同一行，不再各占一行。 |
-| 加载至历史容量限制。 | 同行出现简短“历史缓存已满”，详细保留说明位于 title 中；已加载正文继续保留。 |
-| 缩小聊天宽度或视口，切换到英文。 | 状态栏保持单行，操作完整可用，容量提示和性能指标可收缩省略，不撑宽页面。 |
-| 悬停、键盘聚焦或点击性能指标。 | 显示完整指标及解释；说明框在状态栏宽度内，暗色下无浅色底。 |
-| 没有历史提示且没有指标，再仅显示其中一种。 | 都没有时不留空行；有一种时正常显示，指标保持右对齐。 |
-| 打开侧窗、弹出为独立窗口，再移回原窗口。 | 已有历史提示使用相同紧凑状态栏，无重复或残留；没有侧窗指标数据时不凭空显示指标。 |
-| 审批出现隐藏输入框，随后处理审批。 | 历史操作转入消息区域的紧凑底栏，输入框恢复后回到共享状态栏。 |
-| 在只读子 Agent、归档中加载历史。 | 无输入框时提示与操作共用一条紧凑底栏，分页与只读行为保持。 |
-| 点击清理操作，分别模拟失败和成功。 | 失败保留历史；成功后才清理页面额外缓存、回到最新，已保存会话内容仍可再次加载。 |
-| 切换会话、关闭侧窗并重新打开。 | 状态栏仅显示当前会话内容，无失效目标、重复按钮或旧提示。 |
+| 持续加载更早内容直到相邻完整轮次超出 16 MiB／1000 条预算。 | 保留已加载内容；禁用继续加载，没有容量提示或清理按钮，返回最新箭头仍可用。 |
+| 容量满后滚动触顶、点击禁用按钮，重复同步相同快照。 | 不再请求分页；相同快照不会重新启用加载按钮。 |
+| 无新内容时回到底部、点击返回最新，重复读取相同快照。 | 已加载消息集合及顺序保持，不触发回收。 |
+| 阅读历史时产生新正文、命令输出并完成轮次。 | 保留阅读内容和锚点；不因新内容立即删除正在阅读的正文。 |
+| 有新内容后返回最新，先模拟读取失败再重试成功。 | 失败保留原窗口与容量状态；成功后按原有正常预算自动释放旧缓存，恢复分页。 |
+| 回到最新，加载历史再返回，立即完成一轮快速回复。 | 沿用通知批处理完成一次正文同步，近期缓存复用不再阻止自动回收；完整最新回复可见。 |
+| 无吞吐指标，再产生带 token usage 的回复。 | 无指标时不渲染状态行；有指标时仅显示原有性能指标，详细说明仍可展开，明暗主题无残留历史控件或空白行。 |
+| 子 Agent／归档加载历史，然后成功读取带新内容的最新快照。 | 自动释放旧缓存；无新增编辑或发送能力，游标、完整轮次和虚拟化仍有效。 |
 
-实现及性能静态审查：现有历史操作通过可选 DOM 目标移动到输入框插槽，显示、禁用与读取函数仍由消息组件管理。无输入框时在原位置显示。布局、文本省略和完整指标说明使用 CSS，无新增依赖、请求、计时器、消息扫描或指标缓存。本轮仅执行静态检查；上述界面检查和截图尚未运行，实际布局和渲染耗时待验收。
+实现及性能审查：删除历史提示的 Teleport、输入框插槽、回调及强制清理参数；内部容量状态继续拦截分页。容量标记保持到实际回收或窗口重置，避免重复快照使其失效。主对话仅在通知标记为脏、轮次已结束、历史确有变化且不在历史窗口时绕过最近读取缓存，复用既有批处理；不增加轮询或全历史读取。
 
-清理／回滚：恢复主题、语言及宽度，关闭专用测试窗口；回滚本次提交恢复原布局，无 localStorage 或服务端数据迁移。
+截图验收（2026-10-16）：使用当前仓库的 `http://127.0.0.1:4173/#/thread/review-testchat`，执行 Playwright HTTP/RPC/WebSocket Mock。主对话和侧窗覆盖 1440x1000、768x1024、375x812 明暗主题；独立窗口为 760x900 明暗主题；子 Agent、归档为 PC 明暗主题。每张截图等待 2.3 秒后采集。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 完整矩阵 `output/playwright/history-auto-release.cjs` | 18 个场景通过，0 失败、0 页面／非预期控制台异常，50 张截图。 |
+| 消息容量与重复快照 | 150 轮、每轮 7 条；连续加载后保留 994 条／142 个完整轮次。满时滚动触顶及点击禁用按钮，新增分页请求均为 0；两次相同快照后消息 ID、顺序和禁用状态保持。 |
+| 阅读保护与自动释放 | 阅读时收到新内容及完成通知仍保留窗口与锚点；最新读取失败保留原内容，重试成功后收敛到 20 轮并恢复分页。最新位置快速完成新轮后也自动收敛，最终回复可见，返回最新箭头消失。 |
+| 失败重试 | 可写页面共模拟 14 次预期 HTTP 503；单独记录，全部完成后续重试检查。 |
+| 字节容量 `output/playwright/history-auto-release-bytes.cjs` | 1 个场景通过，0 失败、0 异常，1 张截图。每轮正文 920,023 字符，10 轮页仅接纳相邻完整 9 轮，最新端保留；相同快照仍禁分页，新内容快照后恢复正常预算。 |
+| 画面与性能 | 51 张原图经 6 张联系表全部查看，另放大 PC 深色、手机侧窗及独立窗口。容量场景最多挂载 42 个消息节点，普通矩阵记录中未出现长任务；大正文压力最大长任务 802 ms。 |
+
+报告为 `output/playwright/history-auto-release.json`、`history-auto-release-bytes.json`，汇总为 `history-auto-release-summary.json`；截图为 `history-auto-release-*.png`。复现命令为 `rtk proxy node output/playwright/history-auto-release.cjs` 和 `rtk proxy node output/playwright/history-auto-release-bytes.cjs`，汇总及联系表由同目录 `history-auto-release-gallery.cjs` 生成。
+
+取证说明：中间两次独立窗口检查被保存测试文档引发的 Vite 整页刷新打断，服务日志时间与窗口关闭对应；暂停文件修改后重新执行完整矩阵，得到上述最终结果。中间报告不计入通过数。普通矩阵未记录长任务只代表此次采样；压力场景存在 802 ms 长任务，本轮没有修复前后性能对照或长期堆内存测量。
+
+静态检查：`vue-tsc --noEmit`、6 个 Vue SFC 语法编译、7 个改动 TypeScript 文件的语法检查及 `git diff --check` 通过。已更新单元回归用例但未运行 Vitest；未执行构建、发布，未验收真实 CLI 长时间休眠恢复及 Windows 环境。
+
+清理／回滚：关闭隔离 Mock 窗口，恢复主题、语言和视口；无需清理真实会话或迁移 localStorage。回滚本次提交恢复旧提示及手动清理入口。
 
 ### 功能：稳定历史缓存与动态高度虚拟列表
 
@@ -69,8 +82,8 @@
 | 阅读历史时流式产生新正文，再完成该轮。 | 保持阅读位置，显示新内容／返回最新入口；重复完成通知不裁历史。 |
 | 无新内容时重复静默同步、普通返回最新。 | 已加载历史保留；不因滚动到下方、重复快照而移除较早端。 |
 | 有实际新内容后返回最新，再继续完成新轮。 | 显示最新内容；在快照／完成边界收敛到正常 20 轮、2 MiB 预算，保留活跃轮及待处理内容。 |
-| 加载历史至估算 16 MiB 或 1000 条。 | 保留已加载集合，暂停继续接纳，显示容量提示；相邻一轮放不下时停在它之前，不跳过，不把另一端挤掉。 |
-| 点击“释放历史并返回最新”，先失败再重试成功。 | 失败不变更窗口；成功后才释放历史并恢复最新预算和跟随。 |
+| 加载历史至估算 16 MiB 或 1000 条。 | 保留已加载集合，静默暂停继续接纳；相邻一轮放不下时停在它之前，不跳过，不把另一端挤掉。 |
+| 有新内容后返回最新，先失败再重试成功。 | 失败不变更窗口；成功后自动释放历史并恢复最新预算和跟随。 |
 | 搜索旧消息；切到独立侧窗再移回。 | 按稳定消息 ID 转换为虚拟索引定位；文档切换重建测量环境，以消息 ID 和偏移恢复阅读位置。 |
 | 连续流式输出 12 段正文，立即完成并附加独有末尾标记；在主对话、侧窗及独立侧窗中重复。 | 末尾段落及标记进入可视区域；数据已完成后，页面不保留较短的旧正文，不依赖点击历史加载按钮。 |
 | 搜索未加载的旧轮次，再关闭搜索，重复定位另一条命中。 | 命中消息实际滚入视口；主动定位重建测量锚点，不被旧阅读锚点拉回。关闭搜索后最新正文正常显示。 |
@@ -144,7 +157,7 @@
 - Collapsed command contents have no output DOM. An expanded group renders at most 30 commands per page.
 - Ordinary command state retains a tail preview of at most 65,536 UTF-16 code units, with explicit truncated metadata. Completed history can be read page by page; copying uses the complete source rather than the preview.
 - Tail previews are materialized separately from the original output buffer. Ordinary live output is copied/truncated per 50 ms batch, with an immediate flush when the temporary combined preview reaches 131,072 code units.
-- Loaded older history is kept until new content is followed, explicit release succeeds, or the thread becomes inactive. Historical admission pauses at 16 MiB estimated text or 1000 messages without evicting the opposite end.
+- Loaded older history is kept until new content is followed or the thread becomes inactive. Historical admission silently pauses at 16 MiB estimated text or 1000 messages without evicting the opposite end; duplicate snapshots keep the pause until actual release or a window reset.
 - Streaming code is shown without repeated syntax highlighting; completed large code blocks avoid synchronous highlighting and oversized cache entries.
 - Protected temporary/unpersisted content, a single oversized turn, explicit full-copy allocations, and upstream full-item reads are documented exceptions to strict memory bounds.
 

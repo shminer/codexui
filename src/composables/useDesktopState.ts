@@ -1852,7 +1852,7 @@ export function useDesktopState() {
       ? previewEphemeralMessage(message, true)
       : message.commandExecution ? { ...message, commandExecution: limitCommandExecutionOutput(message.commandExecution) } : message)
     const page = admitThreadHistoryPage(persistedMessagesByThreadId.value[threadId] ?? [], prepared, direction, turns)
-    historyCapacityByThreadId.value = { ...historyCapacityByThreadId.value, [threadId]: page.capacityReached }
+    historyCapacityByThreadId.value = { ...historyCapacityByThreadId.value, [threadId]: historyCapacityByThreadId.value[threadId] === true || page.capacityReached }
     expandedHistoryThreadIds.add(threadId)
     return { ...page, indices: Object.fromEntries(Object.entries(indices).filter(([id]) => page.turnIds.has(id))) }
   }
@@ -1912,7 +1912,7 @@ export function useDesktopState() {
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   const isSideConversationImplementingPlan = ref(false)
   const sideConversationFollowLatestRevision = ref(0)
-  let sideConversationWindowRequest: { latest: boolean; releaseHistory: boolean; lifecycleRevision: number } | undefined
+  let sideConversationWindowRequest: { latest: boolean; lifecycleRevision: number } | undefined
   let sideConversationTurnStartPromise: Promise<string> | null = null
   const sideConversationPendingTurnStarts = new Set<Promise<string>>()
   let sideConversationEpoch = 0
@@ -6473,19 +6473,18 @@ export function useDesktopState() {
     }
   }
 
-  function loadSideConversationWindow(direction: 'older' | 'newer' | 'latest', releaseHistory = false): Promise<void> {
+  function loadSideConversationWindow(direction: 'older' | 'newer' | 'latest'): Promise<void> {
     const threadId = sideConversationThreadId.value
     if (!threadId) return Promise.resolve()
     if (direction !== 'latest' && historyCapacityByThreadId.value[threadId]) return Promise.resolve()
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) {
       const request = sideConversationWindowRequest
-      if (direction !== 'latest' || (request?.latest && (!releaseHistory || request.releaseHistory))) return existing
+      if (direction !== 'latest' || request?.latest) return existing
       const epoch = sideConversationEpoch
       return existing.catch(() => undefined).then(() => {
         if (epoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
-        if (!releaseHistory && request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)) return
-        return loadSideConversationWindow('latest', releaseHistory)
+        return loadSideConversationWindow('latest')
       })
     }
     flushPendingContentDeltas(threadId)
@@ -6503,7 +6502,6 @@ export function useDesktopState() {
     const current = () => epoch === sideConversationEpoch && threadId === sideConversationThreadId.value && generation === (threadBodyGeneration.get(threadId) ?? 0)
     const request = {
       latest: direction === 'latest' || (direction === 'older' ? !before : !after),
-      releaseHistory,
       lifecycleRevision: threadLifecycleRevisionByThreadId.get(threadId) ?? 0,
     }
     sideConversationWindowRequest = request
@@ -6530,7 +6528,7 @@ export function useDesktopState() {
         sideConversationHistoryError.value = ''
         const previous = persistedMessagesByThreadId.value[threadId] ?? []
         if (latest || direction === 'newer') observeHistorySnapshotChanges(threadId, page.messages)
-        const resetHistory = releaseHistory || (latest && changedHistoryThreadIds.has(threadId))
+        const resetHistory = latest && changedHistoryThreadIds.has(threadId)
         if (!latest || (!resetHistory && expandedHistoryThreadIds.has(threadId))) {
           const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, latest || direction === 'older' ? 'older' : 'newer')
           page = { ...page, messages: admitted.messages, turnIndexByTurnId: admitted.indices,
@@ -6589,7 +6587,7 @@ export function useDesktopState() {
       }
     }).then(() => {
       // Explicit latest callers must await a valid window, including from history.
-      if (direction === 'latest' && current() && !lifecycleCurrent()) return loadSideConversationWindow('latest', releaseHistory)
+      if (direction === 'latest' && current() && !lifecycleCurrent()) return loadSideConversationWindow('latest')
     })
     latestWindowPromiseByThreadId.set(threadId, windowPromise)
     return windowPromise
@@ -6668,11 +6666,11 @@ export function useDesktopState() {
     }
   }
 
-  function loadLatestMessages(threadId: string = selectedThreadId.value, releaseHistory = false): Promise<void> {
+  function loadLatestMessages(threadId: string = selectedThreadId.value): Promise<void> {
     if (!threadId) return Promise.resolve()
-    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('latest', releaseHistory)
+    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('latest')
     const existing = latestWindowPromiseByThreadId.get(threadId)
-    if (existing) return releaseHistory ? existing.then(() => expandedHistoryThreadIds.has(threadId) ? loadLatestMessages(threadId, true) : undefined) : existing
+    if (existing) return existing
     flushPendingContentDeltas(threadId)
     const generation = (threadBodyGeneration.get(threadId) ?? 0) + 1
     const lifecycleRevision = threadLifecycleRevisionByThreadId.get(threadId) ?? 0
@@ -6690,7 +6688,7 @@ export function useDesktopState() {
         if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
         flushPendingContentDeltas(threadId)
         observeHistorySnapshotChanges(threadId, page.messages)
-        const resetHistory = releaseHistory || changedHistoryThreadIds.has(threadId)
+        const resetHistory = changedHistoryThreadIds.has(threadId)
         if (!resetHistory && expandedHistoryThreadIds.has(threadId)) {
           const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, 'older')
           page = { ...page, messages: admitted.messages, turnIndexByTurnId: admitted.indices }
@@ -6735,10 +6733,6 @@ export function useDesktopState() {
       if (latestWindowPromiseByThreadId.get(threadId) === promise) latestWindowPromiseByThreadId.delete(threadId)
     }).catch(() => undefined)
     return promise
-  }
-
-  function releaseThreadHistory(threadId: string): Promise<void> {
-    return loadLatestMessages(threadId, true)
   }
 
   async function ensureThreadMessagesLoaded(threadId: string, options: { silent?: boolean } = {}): Promise<void> {
@@ -8208,9 +8202,11 @@ export function useDesktopState() {
           (shouldRefreshThreads && loadedMessagesByThreadId.value[activeThreadId] !== true)
 
         if (shouldRefreshActiveThread) {
+          const shouldCompactHistory = isActiveDirty && !isInProgress
+            && changedHistoryThreadIds.has(activeThreadId) && !historyWindowThreadIds.has(activeThreadId)
           await loadMessages(activeThreadId, {
             silent: true,
-            force: hasPendingSubagentRefresh,
+            force: hasPendingSubagentRefresh || shouldCompactHistory,
           })
         }
       }
@@ -8523,7 +8519,6 @@ export function useDesktopState() {
     selectedThreadHistoryCapacityReached,
     sideConversationHistoryCapacityReached,
     setThreadReadingHistory,
-    releaseThreadHistory,
     getLiveOverlayForThread,
     getLiveMessagesForThread,
     getCurrentTurnMessagesForThread,

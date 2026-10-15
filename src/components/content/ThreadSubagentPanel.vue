@@ -143,7 +143,6 @@
                 :is-loading-persisted-below="loadingNewer"
                 :load-later-messages="loadAgentNewerMessages"
                 :load-latest-messages="loadAgentLatestMessages"
-                :release-history="releaseAgentHistory"
                 :history-capacity-reached="agentHistoryCapacityReached"
                 @reading-history-change="onAgentReadingHistoryChange"
               />
@@ -224,7 +223,7 @@ const {
   loading: agentWindowLoading,
   loadLatest: loadAgentLatestMessages, loadOlder: loadAgentOlderMessages,
   loadNewer: loadAgentNewerMessages, reset: resetAgentWindow, retry: retryAgentHistory,
-  releaseHistory: releaseAgentHistory, capacityReached: agentHistoryCapacityReached,
+  capacityReached: agentHistoryCapacityReached,
   setReadingHistory: setAgentReadingHistory,
 } = useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)
 

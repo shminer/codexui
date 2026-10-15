@@ -1,6 +1,6 @@
 ### Thread conversation loads earlier turns on demand
 
-当前实现采用稳定已加载集合与动态高度虚拟列表。本轮仅做静态／类型检查；既有运行证据属于此前提交，下列新增行为尚待 Mock 和浏览器验收。
+当前实现采用稳定已加载集合与动态高度虚拟列表。容量达到上限后静默停止分页；有实际新内容且用户回到最新后自动回收，没有手动清理入口。当前验收记录见 `tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md` 的“历史容量静默限制与自动释放”章节；下方旧报告属于此前实现。
 
 #### Feature/Change Name
 Thread conversation incremental older-turn loading.
@@ -16,16 +16,16 @@ Thread conversation incremental older-turn loading.
 2. Confirm the newest messages render first and the conversation shows the Load earlier messages control at the top.
 3. Click Load earlier messages once.
 4. Confirm an older batch is prepended above the previously first visible turn and the scroll position stays near the same content.
-5. Continue clicking Load earlier messages until the control disappears.
-6. Confirm the oldest messages in the thread are visible and no duplicate message rows are introduced.
+5. Continue clicking Load earlier messages until the first saved turn is loaded or the capacity limit disables the control.
+6. If the first saved turn was reached, confirm the oldest messages are visible; at capacity, confirm the loaded window stays intact. Neither case introduces duplicate message rows.
 7. Switch to dark theme and repeat steps 1-6 on the same thread or another long thread.
 8. Continue through enough pages to exceed 20 turns. Confirm both loaded ends remain cached. Scroll within the loaded range without new content: no body eviction or history request occurs.
 9. Load newer history repeatedly. Confirm no gaps or duplicate messages, and verify turn actions still refer to the original turn IDs.
 10. Read older history while the thread receives new output. Confirm silent refreshes do not replace the reading window with the newest messages.
-11. With no new content, use ordinary Jump to latest and confirm expanded history remains. Then use Release history and return to latest: only a successful request releases history; a failure leaves the reading window intact.
+11. With no new content, use Jump to latest and confirm expanded history remains. Receive new content while reading history, fail the latest read once, then retry: failure preserves the window; success automatically releases older cached turns.
 12. Repeat historical navigation in an archived-thread preview and an agent-detail panel. Confirm they use the same bounded behavior.
-13. Load a middle turn larger than the normal 2 MiB budget but smaller than the 16 MiB history cap. Confirm it is admitted as a complete turn without deleting the loaded latest end. If the adjacent turn cannot fit the hard cap, stop before it, preserve both ends and offer explicit release rather than skipping it.
-14. Fill the cache to 16 MiB estimated body or 1000 messages. Confirm capacity status and disabled paging. If only part of a page fits, accept the contiguous complete portion nearest the cursor; a failed release preserves its exact IDs and a successful release restores latest paging.
+13. Load a middle turn larger than the normal 2 MiB budget but smaller than the 16 MiB history cap. Confirm it is admitted as a complete turn without deleting the loaded latest end. If the adjacent turn cannot fit the hard cap, stop before it and preserve both ends without skipping the turn or showing a capacity/clear-history notice.
+14. Fill the cache to 16 MiB estimated body or 1000 messages. Confirm paging is disabled with no capacity notice or clear-history action. If only part of a page fits, accept the contiguous complete portion nearest the cursor. Repeated identical snapshots must keep paging disabled; scrolling and clicking the disabled control add no requests. New content followed by a successful return to latest automatically releases history and restores paging; a failed latest read preserves the exact IDs and disabled state.
 15. Repeat steps 13-14 in the archived-thread preview and agent-detail panel, including a page containing raw turns with no displayable messages. Confirm each click advances the raw cursor rather than repeatedly requesting the same empty page.
 16. With only turn C retained, delay a refresh that returns turns A, B and C. Release the response and confirm the restored order is A, B, C, with one row per message ID and the server item order within each turn.
 17. During delayed detail and latest-page requests, stream more text for an existing reply and command output for an existing command. Release a shorter snapshot, then send another delta and completion. Confirm text/output does not regress, later deltas use the restored prefix, and each ID stays in its original position.
@@ -45,7 +45,7 @@ Thread conversation incremental older-turn loading.
 #### Expected Results
 - Initial thread open remains bounded to the latest turn page.
 - Load earlier messages fetches older persisted turns from the local bridge instead of only revealing already-loaded messages.
-- The control remains available while older persisted turns exist and disappears after the first turn is loaded.
+- The control remains available while older persisted turns exist, becomes disabled at cache capacity, and disappears after the first turn is loaded.
 - Message ordering, turn actions, and scroll restoration remain stable in light and dark themes.
 - Initial/latest retention targets 20 complete turns and 2 MiB estimated text. Expanded history stays cached up to 16 MiB or 1000 messages; reaching capacity pauses admission without evicting the opposite end. One oversized ordinary active turn and protected unpersisted/approval content remain exceptions to normal retention.
 - Non-active ordinary body caches are limited to the three most recently used threads, each up to 10 turns and 512 KiB. Metadata, unread state and pending work are independent of body eviction.
@@ -55,7 +55,7 @@ Thread conversation incremental older-turn loading.
 - Snapshot restoration follows authoritative server turn indices and item order. Locally newer same-ID content survives delayed responses without duplicate rows or text-based sorting; older/newer paging continues to use its original direction.
 - Restored command output remains limited to the 64 Ki character tail with total length/offset metadata. Reply and command deltas retain the existing 50 ms batch interval after restoration.
 - Delayed idle snapshots do not clear a newer lifecycle or pending send. Explicit thread reopening restores latest, while background refresh and same-thread wakes preserve an active history window.
-- At the final newer boundary, hidden updates are merged into the retained body before history mode ends. Partial admission that leaves newer turns undisplayed keeps history mode active and pauses further paging until explicit release. Completed anchor-command updates survive idle sync until this merge.
+- At the final newer boundary, hidden updates are merged into the retained body before history mode ends. Partial admission that leaves newer turns undisplayed keeps history mode active and pauses further paging; Jump to latest remains available and new content triggers automatic release after a successful read. Completed anchor-command updates survive idle sync until this merge.
 - Every newer page rebases only its covered live IDs, protecting updates received during that read. Later deltas use the reconciled prefix even before the final page; unrelated hidden rows, complete-turn retention and command output limits remain unchanged.
 - A stale newer page also preserves compatible fuller prefixes and command progress already present before the request. Equal-cursor command output keeps the fuller bounded tail; legitimate shorter non-prefix reply replacements remain accepted.
 - The newer-history footer reserves 80px below its button for the floating Jump to latest control; the controls do not overlap on desktop, tablet or mobile.

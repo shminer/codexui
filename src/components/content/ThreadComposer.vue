@@ -1,8 +1,7 @@
 <template>
   <form class="thread-composer" @submit.prevent="onSubmit(isTurnInProgress ? activeInProgressMode : 'steer')">
-    <div class="thread-composer-status-row">
-      <slot name="history-status" />
-      <div v-if="turnThroughputText" class="thread-composer-metrics" role="status">
+    <div v-if="turnThroughputText" class="thread-composer-status-row">
+      <div class="thread-composer-metrics" role="status">
         <button type="button" class="thread-composer-throughput" :aria-label="`${turnThroughputText}. ${t('Prefill is client-observed time to first text; decode measures text streaming; average covers the full turn.')}`">
           {{ turnThroughputText }}
         </button>
@@ -2130,18 +2129,6 @@ watch(
 
 .thread-composer-status-row {
   @apply relative flex min-w-0 items-center gap-2 px-2 pb-1 text-[11px] leading-4 text-zinc-500;
-}
-
-.thread-composer-status-row:not(:has(.conversation-history-status, .thread-composer-metrics)) {
-  display: none;
-}
-
-.thread-composer-status-row :deep(.thread-history-status-target) {
-  display: contents;
-}
-
-.thread-composer-status-row:has(.thread-composer-metrics) :deep(.conversation-history-status) {
-  max-width: calc(100% - 2rem);
 }
 
 .thread-composer-metrics {

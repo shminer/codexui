@@ -23,10 +23,11 @@ describe('ThreadConversation render-window wiring', () => {
     expect(source).toContain("scrollToItem(index, { align: 'center' })")
   })
 
-  it('keeps release separate from ordinary latest navigation and waits for the snapshot', async () => {
+  it('waits for successful latest navigation and stops paging at capacity without a clear action', async () => {
     const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
-    const jump = source.match(/async function jumpToLatest\(release = false\): Promise<void> \{([\s\S]*?)\n\}/u)?.[1] ?? ''
-    expect(jump).toContain('await props.releaseHistory(threadId)')
+    const jump = source.match(/async function jumpToLatest\(\): Promise<void> \{([\s\S]*?)\n\}/u)?.[1] ?? ''
+    expect(source).not.toContain('releaseHistory')
+    expect(source).not.toContain('conversation-capacity')
     expect(jump).toContain('await props.loadLatestMessages(threadId)')
     expect(jump.indexOf('await props.loadLatestMessages(threadId)')).toBeLessThan(jump.indexOf('autoFollowOutput.value = true'))
     expect(jump.indexOf("throw new Error('Latest message window is not available.')")).toBeLessThan(jump.indexOf('autoFollowOutput.value = true'))
@@ -52,17 +53,21 @@ describe('ThreadConversation render-window wiring', () => {
     expect(source).not.toContain('@scroll-end=')
   })
 
-  it('moves history status to the composer with an inline fallback for missing or hidden composers', async () => {
-    const [conversation, app, side] = await Promise.all([
+  it('removes history status wiring from the conversation, composer and side window', async () => {
+    const [conversation, app, side, composer] = await Promise.all([
       readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8'),
       readFile(new URL('../../App.vue', import.meta.url), 'utf8'),
       readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8'),
+      readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8'),
     ])
-    expect(conversation).toContain(':to="historyStatusTarget ?? \'body\'" :disabled="!historyStatusTarget"')
-    expect(app).toContain(':history-status-target="threadHistoryStatusTarget"')
-    expect(app).toContain('ref="threadHistoryStatusTarget" class="thread-history-status-target"')
-    expect(side).toContain(':history-status-target="pendingRequests[0] ? null : historyStatusTarget"')
-    expect(side).toContain('ref="historyStatusTarget" class="thread-history-status-target"')
+    for (const source of [conversation, app, side, composer]) {
+      expect(source).not.toContain('historyStatusTarget')
+      expect(source).not.toContain('threadHistoryStatusTarget')
+      expect(source).not.toContain('history-status-target')
+      expect(source).not.toContain('name="history-status"')
+      expect(source).not.toContain('#history-status')
+    }
+    expect(composer).toContain('v-if="turnThroughputText" class="thread-composer-status-row"')
   })
 
   it('unmounts collapsed command details and skips streaming snapshots in long-lived caches', async () => {

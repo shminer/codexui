@@ -19,10 +19,10 @@
 - User can continue reading older history while the response streams.
 - If the thread is already at the bottom when streaming starts, the latest streaming overlay remains visible.
 - History/newer flags stop bottom locking immediately. Clearing those flags in a same-thread background update does not independently turn following back on.
-- Scrolling inside the loaded virtual list does not request history or evict body content. Ordinary return to latest preserves expanded history when no new content exists; an unread server boundary requests latest, and explicit Release history performs a successful read before eviction.
+- Scrolling inside the loaded virtual list does not request history or evict body content. Ordinary return to latest preserves expanded history when no new content exists; new content automatically releases older history after the reader follows latest. A failed latest read preserves the window. Capacity only disables paging; no capacity notice or manual clear-history action is shown.
 
 #### Verification Boundary
-- New history-window and latest-failure checks have unit/wiring coverage; live browser anchor verification remains pending.
+- History-window and latest-failure unit/wiring cases are updated but were not executed in this change. Playwright network-mock anchor checks passed on desktop, tablet, mobile and independent side windows in both themes on 2026-10-16; see the history-capacity section in `tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md`. Real CLI long-sleep recovery remains unverified.
 - Static performance review: the history marker is a read-only prop derived from existing state. The component adds no persisted state, polling or subscription and calls the shared latest loader only on explicit thread opening or Jump to latest.
 
 #### Rollback/Cleanup

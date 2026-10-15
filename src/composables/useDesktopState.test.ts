@@ -5295,7 +5295,7 @@ describe('bounded thread working sets', () => {
     expect(state.messages.value.map(message => message.id)).toEqual(['A', 'C'])
     expect(state.getCurrentTurnMessagesForThread('thread-1')[0]?.text).toHaveLength(800_000)
     gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce({ messages: [{ ...current, text: `${current.text}${'d'.repeat(200_000)}` }], inProgress: true, activeTurnId: 'turn-C', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-C': 1 } })
-    await state.releaseThreadHistory('thread-1')
+    await state.loadLatestMessages('thread-1')
     expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
     expect(state.messages.value.map(message => message.id)).toEqual(['C'])
     expect(state.messages.value[0]?.text).toHaveLength(800_000)
@@ -5694,8 +5694,31 @@ describe('bounded thread working sets', () => {
     await state.loadLatestMessages()
     expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
     expect(state.selectedThreadHistoryCapacityReached.value).toBe(false)
-    await state.releaseThreadHistory('bounded')
-    expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index + 20))
+    state.stopPolling()
+  })
+
+  it.each([false, true])('handles recent expanded history after completion with reading=%s', async (reading) => {
+    vi.useFakeTimers()
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const initial = { ...page(20, 20), model: '', modelProvider: '', subagents: [] }
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce(initial)
+    await state.loadMessages('thread-1')
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(page(20, 20))
+    await state.loadLatestMessages('thread-1')
+    state.setThreadReadingHistory('thread-1', reading)
+    const reads = gatewayMocks.getThreadDetail.mock.calls.length
+    const snapshot = { ...page(21, 20), model: '', modelProvider: '', subagents: [] }
+    gatewayMocks.getThreadDetail.mockResolvedValue(snapshot)
+    const params = { threadId: 'thread-1', turnId: 'turn-40' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: 'turn-40' } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'message-40', type: 'agentMessage', text: snapshot.messages.at(-1)!.text } } })
+    emit({ method: 'turn/completed', params: { ...params, turn: { id: 'turn-40', status: 'completed' } } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(reads + (reading ? 0 : 1))
+    expect(new Set(state.messages.value.map(message => message.turnId)).size).toBe(reading ? 30 : 20)
+    expect(state.selectedThreadIsHistoryWindow.value).toBe(reading)
     state.stopPolling()
   })
 
@@ -5732,7 +5755,7 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
-  it('admits only the adjacent complete portion at the hard limit and preserves it if release fails', async () => {
+  it('pauses at capacity, preserves failed latest reads and releases automatically with new content', async () => {
     const older = page(10, 10)
     older.messages[5].text = 'x'.repeat(8 * 1024 * 1024)
     gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(older)
@@ -5744,13 +5767,18 @@ describe('bounded thread working sets', () => {
     expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
     expect(state.selectedThreadHistoryCapacityReached.value).toBe(true)
     expect(state.hasMoreOlderMessages.value).toBe(true)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(page(20, 10))
+    await state.loadLatestMessages('bounded')
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
+    expect(state.selectedThreadHistoryCapacityReached.value).toBe(true)
     await state.loadOlderMessages()
     expect(gatewayMocks.getOlderThreadMessages).toHaveBeenCalledTimes(1)
     gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new Error('offline'))
-    await expect(state.releaseThreadHistory('bounded')).rejects.toThrow('offline')
+    await expect(state.loadLatestMessages('bounded')).rejects.toThrow('offline')
     expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
     expect(state.selectedThreadHistoryCapacityReached.value).toBe(true)
-    await state.releaseThreadHistory('bounded')
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(page(20, 20))
+    await state.loadLatestMessages('bounded')
     expect(state.selectedThreadHistoryCapacityReached.value).toBe(false)
     expect(state.messages.value[0]?.turnIndex).toBe(20)
     state.stopPolling()

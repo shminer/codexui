@@ -19,7 +19,6 @@ export function useThreadHistoryWindow(
   const capacityReached = ref(false)
   let generation = 0
   let lastDirection: 'latest' | 'older' | 'newer' = 'latest'
-  let lastReleaseHistory = false
   let historyChanged = false
   let olderAnchor = ''
   let newerAnchor = ''
@@ -30,7 +29,6 @@ export function useThreadHistoryWindow(
     loading.value = loadingOlder.value = loadingNewer.value = false
     error.value = ''
     capacityReached.value = false
-    lastReleaseHistory = false
     historyChanged = false
     olderAnchor = newerAnchor = ''
   }
@@ -51,7 +49,7 @@ export function useThreadHistoryWindow(
     historyChanged = false
   }
 
-  async function load(direction: 'latest' | 'older' | 'newer', releaseHistory = false): Promise<void> {
+  async function load(direction: 'latest' | 'older' | 'newer'): Promise<void> {
     const id = threadId.value
     const previous = detail.value
     if (!id || (direction !== 'latest' && (!previous || loading.value || loadingOlder.value || loadingNewer.value))) return
@@ -61,7 +59,6 @@ export function useThreadHistoryWindow(
     const request = ++generation
     const acceptSnapshot = prepareLatestSnapshot?.(id)
     lastDirection = direction
-    lastReleaseHistory = releaseHistory
     loading.value = direction === 'latest'
     loadingOlder.value = direction === 'older'
     loadingNewer.value = direction === 'newer'
@@ -81,7 +78,7 @@ export function useThreadHistoryWindow(
           || (message.commandExecution?.outputTotalLength ?? message.commandExecution?.aggregatedOutput.length ?? 0) > (old.commandExecution?.outputTotalLength ?? old.commandExecution?.aggregatedOutput.length ?? 0)
           : (message.turnIndex ?? page.turnIndexByTurnId[message.turnId ?? ''] ?? -1) >= lastIndex
       })
-      const replace = !previous || releaseHistory || hasNewContent
+      const replace = !previous || hasNewContent
       const pageTurns = Object.entries(page.turnIndexByTurnId).sort((first, second) => first[1] - second[1])
       const admitted = replace ? null : admitThreadHistoryPage(previous.messages, page.messages,
         direction === 'latest' ? 'older' : direction, pageTurns.map(([turnId]) => turnId))
@@ -114,7 +111,7 @@ export function useThreadHistoryWindow(
       const indices = { ...(replace ? {} : previous?.turnIndexByTurnId),
         ...Object.fromEntries(acceptedTurns) }
       const retainedIds = new Set(window.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
-      capacityReached.value = admitted?.capacityReached ?? (replace ? false : capacityReached.value)
+      capacityReached.value = !replace && (capacityReached.value || admitted?.capacityReached === true)
       if ((replace || direction === 'older') && acceptedTurns.length) olderAnchor = acceptedTurns[0][0]
       if (direction !== 'older' && acceptedTurns.length) newerAnchor = acceptedTurns[acceptedTurns.length - 1][0]
       if (replace && !acceptedTurns.length) olderAnchor = newerAnchor = ''
@@ -145,10 +142,9 @@ export function useThreadHistoryWindow(
   onScopeDispose(reset)
   return {
     detail, loading, loadingOlder, loadingNewer, error, reset, capacityReached, setReadingHistory,
-    releaseHistory: () => load('latest', true),
     loadLatest: () => load('latest'),
     loadOlder: () => load('older'),
     loadNewer: () => load('newer'),
-    retry: () => load(lastDirection, lastReleaseHistory),
+    retry: () => load(lastDirection),
   }
 }

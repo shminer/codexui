@@ -68,9 +68,7 @@
             :load-earlier-messages="loadEarlierMessages"
             :load-later-messages="loadLaterMessages"
             :load-latest-messages="loadLatestMessages"
-            :release-history="releaseHistory"
             :history-capacity-reached="historyCapacityReached"
-            :history-status-target="pendingRequests[0] ? null : historyStatusTarget"
             @reading-history-change="emit('reading-history-change', $event)"
             @edit-message="onEditMessage"
             @implement-plan="emit('implement-plan', $event)"
@@ -118,9 +116,6 @@
             @update:selected-reasoning-effort="emit('update:selected-reasoning-effort', $event)"
             @update:selected-speed-mode="emit('update:selected-speed-mode', $event)"
           >
-            <template #history-status>
-              <div ref="historyStatusTarget" class="thread-history-status-target" />
-            </template>
             <template #queue>
               <QueuedMessages
                 :messages="queuedMessages"
@@ -195,7 +190,6 @@ const props = defineProps<{
   loadEarlierMessages: (threadId: string) => Promise<void>
   loadLaterMessages: (threadId: string) => Promise<void>
   loadLatestMessages: (threadId: string) => Promise<void>
-  releaseHistory?: (threadId: string) => Promise<void>
   historyCapacityReached?: boolean
   cwd: string
   messages: UiMessage[]
@@ -245,7 +239,6 @@ const { t } = useUiLanguage()
 const titleId = 'side-conversation-title'
 const SIDE_CONVERSATION_KEYBOARD_RESIZE_STEP = 16
 const composerRef = ref<ThreadComposerExposed | null>(null)
-const historyStatusTarget = ref<HTMLElement | null>(null)
 const conversationRef = ref<{ jumpToLatest: () => Promise<void> } | null>(null)
 const popupTarget = shallowRef<HTMLElement | null>(null)
 let popupWindow: Window | null = null

@@ -90,8 +90,8 @@ describe('ThreadComposer cumulative token usage wiring', () => {
     const source = await readFile(new URL('./ThreadComposer.vue', import.meta.url), 'utf8')
 
     expect(source.match(/class="thread-composer-throughput"/gu)).toHaveLength(1)
-    expect(source).toContain('class="thread-composer-status-row"')
-    expect(source).toContain('<slot name="history-status" />')
+    expect(source).toContain('v-if="turnThroughputText" class="thread-composer-status-row"')
+    expect(source).not.toContain('<slot name="history-status" />')
     expect(source).toContain('PF tps`')
     expect(source).toContain('dec tps`')
     expect(source).toContain('avg TPS`')
