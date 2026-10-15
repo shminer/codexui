@@ -8,7 +8,8 @@
           :active-thread-id="thread.id" :cwd="thread.cwd" :readonly="true" :has-more-persisted-above="detail.hasMoreOlder"
           :is-loading-persisted-above="loadingOlder" :load-earlier-messages="loadOlder"
           :has-more-persisted-below="detail.hasMoreNewer" :is-loading-persisted-below="loadingNewer"
-          :load-later-messages="loadNewer" :load-latest-messages="loadLatest" />
+          :load-later-messages="loadNewer" :load-latest-messages="loadLatest"
+          :release-history="releaseHistory" :history-capacity-reached="capacityReached" @reading-history-change="setReadingHistory" />
         <p v-else-if="loading" class="thread-feature-status">{{ t('Loading...') }}</p>
       </section>
     </div>
@@ -27,7 +28,7 @@ const props = defineProps<{ thread: UiThread }>()
 const { t } = useUiLanguage()
 defineEmits<{ close: [] }>()
 const dialog = ref<HTMLElement | null>(null)
-const { detail, loading, loadingOlder, loadingNewer, error, loadLatest, loadOlder, loadNewer, retry } = useThreadHistoryWindow(computed(() => props.thread.id))
+const { detail, loading, loadingOlder, loadingNewer, error, loadLatest, loadOlder, loadNewer, retry, releaseHistory, capacityReached, setReadingHistory } = useThreadHistoryWindow(computed(() => props.thread.id))
 const previousFocus = typeof document === 'undefined' ? null : document.activeElement
 let disposed = false
 

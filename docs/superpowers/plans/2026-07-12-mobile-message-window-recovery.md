@@ -1,311 +1,50 @@
-# Mobile Message Window Recovery Implementation Plan
+# 会话历史缓存与虚拟列表约定
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+当前方案替代原来手写的 50／30／100 条渲染窗口及翻页后裁剪另一端的规则。主对话、侧窗（含独立窗口）、子 Agent、归档使用同一个聊天渲染组件。
 
-**Goal:** Prevent long mobile conversations from showing only `Load earlier messages`, and preserve manual history reading until the user explicitly jumps to latest.
+## 所有权与边界
 
-**Architecture:** Put all render-window index arithmetic in a small pure helper beside `ThreadConversation.vue`. The component uses a clamped effective start for rendering and loading, disables auto-follow before expanding history, and only restores the latest bounded window through `jumpToLatest` or a thread switch.
+| 所有者 | 负责 | 保留的保护 |
+| --- | --- | --- |
+| `ThreadConversation.vue` + `vue-virtual-scroller@3.0.5` | 动态行高、稳定消息 ID、视口虚拟化、prepend 锚点、搜索定位、阅读状态通知 | 用户手动滚动、有限 RAF 跟随、跨文档重建测量 |
+| `threadMessageRetention.ts` | 历史页容量接纳；最新／非活跃正文整轮回收 | 相邻完整轮次、唯一 ID、活跃／乐观消息、单个超大普通轮次 |
+| `useDesktopState.ts` | 主／侧正文集合、历史游标、读取竞态、正常及非活跃缓存预算 | 代次／生命周期、读取中较新内容、请求锁、命令输出限制、临时源过期 |
+| `useThreadHistoryWindow.ts` | 子 Agent／归档的稳定分页集合和显式释放 | 原始空轮次游标、请求代次、快照接纳回调 |
 
-**Tech Stack:** Vue 3 Composition API, TypeScript, Vitest, Vite, pnpm
+HTTP、源会话、持久化和 localStorage 格式保持原样。只读源会话不因浏览历史发生写入。
 
-## Global Constraints
+## 当前规则
 
-- Keep the existing latest-message render window at exactly 50 messages.
-- Keep each earlier-message expansion at exactly 30 messages.
-- A non-empty message array must always render at least one message.
-- Clicking `Load earlier messages` must disable auto-follow before local or persisted expansion.
-- New messages must not reset a manually expanded history window.
-- `Jump to latest` must restore automatic following and the latest bounded window.
-- Do not add requests, watchers with unbounded work, dependencies, or browser automation.
+1. 初次读取最近 20 轮，较早／较新分页各读取相邻 10 轮。
+2. 已加载内容在页面内稳定保留。滚动仅改变挂载行；虚拟列表初始估高 56px，上下 buffer 各 400px。
+3. 分页按连续完整轮次接纳；向前 prepend，向后 append，按 ID 去重。不得挤掉另一端，不按时间戳全局排序。
+4. 扩展历史上限为估算正文 16 MiB 或 1000 条，任一达到即暂停继续接纳。最近相邻整轮放不下时停住，不跳过它；游标只到已接纳边界，包括无正文的原始空轮次。
+5. 自动分页需要用户滚动意图及一次重新抵达边界。布局补偿不触发额外读取；短页面保留显式加载按钮。
+6. 无新内容的滚动、重复快照和普通返回最新均保留扩展历史。历史阅读中不因新消息强制滚到底部。
+7. 真正有新内容且跟随最新时，在快照／完成边界按正常 20 轮、2 MiB 预算收敛；流式 delta 不逐条回收历史。活跃轮和待处理内容继续受保护。
+8. “释放历史并返回最新”先读取，成功后释放；失败保留窗口及容量状态。中英文一致。
+9. 阅读模式与服务端较新页面标记分别管理。到达已加载最新位置且无未读页面时可以退出历史保护。
+10. 侧窗扩展历史与有界实时缓冲分开；增量预算路径只处理实时缓冲。最小化仍执行原 10 轮／512 KiB 预算、文本预览及草稿队列保护。
+11. 非活跃普通正文继续保留最多 3 个会话，各 10 轮／512 KiB。缓存失效、删除、切账号／停止状态和侧窗结束清理新增标记。
+12. 搜索按消息 ID 找虚拟索引；独立窗口迁移重建测量，以消息 ID + 相对偏移恢复位置。
 
----
+## 退役与保留
 
-### Task 1: Pure render-window bounds
+删除本地 render-window 起止索引、方向步进、焦点轮次绕过预算障碍的算法及专属测试。过滤分组消息、完整轮次回收、读取代次、生命周期和实时前缀保护仍有生产调用，继续保留。
 
-**Files:**
-- Create: `src/components/content/threadConversationWindow.ts`
-- Create: `src/components/content/threadConversationWindow.test.ts`
+虚拟列表只承担布局和挂载，不承担历史数据删除。新增容量接纳只发生在历史读取边界，不新增回收定时器、全量历史读取或全会话刷新。
 
-**Interfaces:**
-- Produces: `THREAD_RENDER_WINDOW_SIZE = 50`
-- Produces: `THREAD_RENDER_LOAD_CHUNK = 30`
-- Produces: `clampThreadRenderWindowStart(start: number, messageCount: number): number`
-- Produces: `latestThreadRenderWindowStart(messageCount: number): number`
-- Produces: `earlierThreadRenderWindowStart(start: number, messageCount: number): number`
+## 验证与性能边界
 
-- [ ] **Step 1: Write the failing helper tests**
+本轮仅执行不产生构建产物的类型／静态检查及 `git diff --check`。Mock 用例已补充，未运行；浏览器、真实休眠恢复、帧率、堆内存、包体增量未测量。历史通过数和截图不作为本轮验收证据。
 
-```ts
-import { describe, expect, it } from 'vitest'
-import {
-  clampThreadRenderWindowStart,
-  earlierThreadRenderWindowStart,
-  latestThreadRenderWindowStart,
-} from './threadConversationWindow'
+代码路径核对：历史接纳使用 Map／Set，复杂度为现有有界集合加单页；游标排序仅针对单页轮次。复用已有读取锁及代次，不增加并发扇出。渲染使用视口和固定像素缓冲；超高单行、完整源复制和活跃超大普通轮次仍是内存预算例外。
 
-describe('thread conversation render window', () => {
-  it('clamps a stale oversized start so a non-empty list remains visible', () => {
-    expect(clampThreadRenderWindowStart(140, 94)).toBe(93)
-  })
+待运行用例见：
+- `tests/thread-loading-state/thread-conversation-loads-earlier-turns-on-demand.md`
+- `tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md`
+- `tests/chat-composer-rendering/side-conversation-btw-mobile-sheet-and-desktop-window.md`
 
-  it('uses zero for empty lists and invalid negative starts', () => {
-    expect(clampThreadRenderWindowStart(20, 0)).toBe(0)
-    expect(clampThreadRenderWindowStart(-4, 10)).toBe(0)
-  })
+## 回滚
 
-  it('expands from the effective bounded start in one click', () => {
-    expect(earlierThreadRenderWindowStart(140, 94)).toBe(63)
-  })
-
-  it('keeps the latest render window bounded to fifty messages', () => {
-    expect(latestThreadRenderWindowStart(94)).toBe(44)
-    expect(latestThreadRenderWindowStart(20)).toBe(0)
-  })
-})
-```
-
-- [ ] **Step 2: Run the focused test and verify RED**
-
-Run: `pnpm exec vitest run src/components/content/threadConversationWindow.test.ts`
-
-Expected: FAIL because `threadConversationWindow.ts` does not exist.
-
-- [ ] **Step 3: Implement the minimal pure helper**
-
-```ts
-export const THREAD_RENDER_WINDOW_SIZE = 50
-export const THREAD_RENDER_LOAD_CHUNK = 30
-
-export function clampThreadRenderWindowStart(start: number, messageCount: number): number {
-  const boundedCount = Math.max(0, Math.floor(messageCount))
-  if (boundedCount === 0) return 0
-  const normalizedStart = Number.isFinite(start) ? Math.max(0, Math.floor(start)) : 0
-  return Math.min(normalizedStart, boundedCount - 1)
-}
-
-export function latestThreadRenderWindowStart(messageCount: number): number {
-  return Math.max(0, Math.floor(messageCount) - THREAD_RENDER_WINDOW_SIZE)
-}
-
-export function earlierThreadRenderWindowStart(start: number, messageCount: number): number {
-  const effectiveStart = clampThreadRenderWindowStart(start, messageCount)
-  return Math.max(0, effectiveStart - THREAD_RENDER_LOAD_CHUNK)
-}
-```
-
-- [ ] **Step 4: Run the focused test and verify GREEN**
-
-Run: `pnpm exec vitest run src/components/content/threadConversationWindow.test.ts`
-
-Expected: 1 file and 4 tests pass.
-
-- [ ] **Step 5: Commit the helper and tests**
-
-```bash
-git add src/components/content/threadConversationWindow.ts src/components/content/threadConversationWindow.test.ts
-git commit -m "fix: bound conversation render window"
-```
-
----
-
-### Task 2: Wire manual history mode into the conversation component
-
-**Files:**
-- Modify: `src/components/content/ThreadConversation.vue:1428-1440,4238-4270,4338-4355,4398-4422`
-- Create: `src/components/content/threadConversationWindow.wiring.test.ts`
-- Modify: `tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md`
-
-**Interfaces:**
-- Consumes: all exports from `threadConversationWindow.ts` created in Task 1.
-- Produces: a clamped `effectiveRenderWindowStart` computed value used by rendering, button visibility, and earlier-window expansion.
-
-- [ ] **Step 1: Write the failing component wiring test**
-
-```ts
-import { readFile } from 'node:fs/promises'
-import { describe, expect, it } from 'vitest'
-
-describe('ThreadConversation render-window wiring', () => {
-  it('clamps visible messages and enters manual history mode before expansion', async () => {
-    const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
-    expect(source).toContain('const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(')
-    expect(source).toContain('props.messages.slice(effectiveRenderWindowStart.value)')
-    expect(source).toMatch(/async function loadMoreAbove[\s\S]*autoFollowOutput\.value = false[\s\S]*earlierThreadRenderWindowStart/u)
-  })
-
-  it('restores the bounded latest window only when jumping to latest', async () => {
-    const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
-    expect(source).toMatch(/function jumpToLatest[\s\S]*autoFollowOutput\.value = true[\s\S]*latestThreadRenderWindowStart/u)
-  })
-})
-```
-
-- [ ] **Step 2: Run the wiring test and verify RED**
-
-Run: `pnpm exec vitest run src/components/content/threadConversationWindow.wiring.test.ts`
-
-Expected: FAIL because the component does not yet use the helper or disable auto-follow.
-
-- [ ] **Step 3: Replace local constants and derive a safe effective start**
-
-Add the helper import beside the existing component imports:
-
-```ts
-import {
-  clampThreadRenderWindowStart,
-  earlierThreadRenderWindowStart,
-  latestThreadRenderWindowStart,
-} from './threadConversationWindow'
-```
-
-Replace the local render constants and computed values with:
-
-```ts
-const LOAD_MORE_SCROLL_THRESHOLD_PX = 200
-const renderWindowStart = ref(0)
-const isLoadingMore = ref(false)
-const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
-  renderWindowStart.value,
-  props.messages.length,
-))
-const visibleMessages = computed(() => props.messages.slice(effectiveRenderWindowStart.value))
-const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
-```
-
-- [ ] **Step 4: Make manual load and jump-to-latest explicit state transitions**
-
-Update `jumpToLatest`:
-
-```ts
-function jumpToLatest(): void {
-  autoFollowOutput.value = true
-  renderWindowStart.value = latestThreadRenderWindowStart(props.messages.length)
-  enforceBottomState()
-  scheduleBottomLock(4)
-}
-```
-
-At the start of `loadMoreAbove`, after its guard and before `isLoadingMore.value = true`, add:
-
-```ts
-autoFollowOutput.value = false
-```
-
-Replace the local expansion branch with:
-
-```ts
-if (effectiveRenderWindowStart.value > 0) {
-  renderWindowStart.value = earlierThreadRenderWindowStart(
-    effectiveRenderWindowStart.value,
-    props.messages.length,
-  )
-} else if (props.hasMorePersistedAbove === true) {
-  await props.loadEarlierMessages?.(threadIdAtStart)
-}
-```
-
-- [ ] **Step 5: Use helper bounds for all message/thread transitions**
-
-In the `props.messages` watcher, use:
-
-```ts
-if (autoFollowOutput.value) {
-  renderWindowStart.value = latestThreadRenderWindowStart(next.length)
-} else {
-  renderWindowStart.value = clampThreadRenderWindowStart(renderWindowStart.value, next.length)
-}
-```
-
-In the `props.isLoading` and `props.activeThreadId` watchers, replace the latest-window arithmetic with:
-
-```ts
-renderWindowStart.value = latestThreadRenderWindowStart(props.messages.length)
-```
-
-- [ ] **Step 6: Update manual validation for live updates during history reading**
-
-Append these actions after the existing manual-load steps:
-
-```markdown
-13. While older messages are visible, allow the active thread to receive several new messages.
-14. Confirm the current reading position and expanded older-message window remain unchanged.
-15. Click `Jump to latest` and confirm the conversation returns to the newest bounded window and resumes following output.
-16. Force a message-list shrink or rollback and confirm at least one message remains visible whenever the list is non-empty.
-```
-
-Update the expected results to state that a non-empty conversation never renders only the load control.
-
-- [ ] **Step 7: Run focused tests and production type/build verification**
-
-Run:
-
-```bash
-pnpm exec vitest run src/components/content/threadConversationWindow.test.ts src/components/content/threadConversationWindow.wiring.test.ts
-pnpm run build
-```
-
-Expected: 2 focused test files pass; Vue typecheck and production build succeed.
-
-- [ ] **Step 8: Commit the component behavior**
-
-```bash
-git add src/components/content/ThreadConversation.vue \
-  src/components/content/threadConversationWindow.wiring.test.ts \
-  tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md
-git commit -m "fix: preserve mobile history reading window"
-```
-
----
-
-### Task 3: Full verification and local deployment
-
-**Files:**
-- Verify only; no source files should change.
-
-**Interfaces:**
-- Consumes: the completed render-window helper and component wiring.
-- Produces: test/build/runtime evidence suitable for the PR and local service handoff.
-
-- [ ] **Step 1: Run the complete automated suite**
-
-Run: `pnpm run test:unit`
-
-Expected: all test files and tests pass with zero failures.
-
-- [ ] **Step 2: Run production build and CLI safety smoke**
-
-Run:
-
-```bash
-pnpm run build
-node dist-cli/safe.js doctor
-git diff --check
-```
-
-Expected: build succeeds, doctor reports `ok`, and diff check is clean.
-
-- [ ] **Step 3: Audit performance-sensitive behavior**
-
-Inspect the diff and confirm:
-
-- no new network requests or polling paths;
-- no unbounded watcher or loop;
-- the render window remains 50 and expansion remains 30;
-- helper work is constant-time arithmetic;
-- frontend build output has no material bundle increase.
-
-- [ ] **Step 4: Install from the persistent local main clone and restart the service**
-
-After the branch is merged to `main`, run from the persistent clone:
-
-```bash
-pnpm run service:install
-codex-mobile-safe doctor
-systemctl --user is-active codex-mobile-safe.service
-```
-
-Expected: doctor reports `ok` and the service reports `active` on loopback port 5900.
-
-- [ ] **Step 5: Publish through the existing GitHub workflow**
-
-Push `codex/fix-mobile-message-window`, create a draft PR targeting `main`, include the focused/full test evidence, and keep the worktree for review follow-up.
+回滚本次源码与 package.json 依赖变更，按仓库依赖管理方式恢复 node_modules；无需数据迁移或源会话恢复。pnpm-lock.yaml 按现有仓库忽略规则留在本地，不强制加入版本控制。未执行发布、服务重启或会话写入。

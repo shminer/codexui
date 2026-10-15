@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UiMessage } from '../types/codex'
-import { ACTIVE_THREAD_TEXT_BUDGET, estimateMessageTextBytes, getThreadPageFocusTurnId, retainThreadMessageWindow } from './threadMessageRetention'
+import { ACTIVE_THREAD_TEXT_BUDGET, admitThreadHistoryPage, estimateMessageTextBytes, retainThreadMessageWindow } from './threadMessageRetention'
 
 function turns(count: number): UiMessage[] {
   return Array.from({ length: count }, (_, index) => [
@@ -32,45 +32,62 @@ describe('thread message retention', () => {
     expect(retained).toMatchObject({ removedOlder: false, removedNewer: true })
   })
 
-  it.each([
-    { direction: 'earliest' as const, focusTurnId: 'turn-29', start: 20, end: 50, first: 26, last: 45 },
-    { direction: 'latest' as const, focusTurnId: 'turn-20', start: 0, end: 30, first: 5, last: 24 },
-  ])('stops before an oversized middle turn when paging $direction', ({ direction, focusTurnId, start, end, first, last }) => {
-    const messages = turns(50).slice(start * 2, end * 2)
-    messages.find((message) => message.id === 'answer-25')!.text = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
-    const retained = retainThreadMessageWindow(messages, { maxTurns: 20, maxBytes: ACTIVE_THREAD_TEXT_BUDGET, direction, focusTurnId })
-    expect(retained.messages).toHaveLength(40)
-    expect(retained.messages[0]?.id).toBe(`user-${first}`)
-    expect(retained.messages.at(-1)?.id).toBe(`answer-${last}`)
-    expect(new Set(retained.messages.map((message) => message.turnId)).size).toBe(20)
-    expect(retained.messages.every((message) => message.turnId !== 'turn-25')).toBe(true)
-    expect(retained).toMatchObject({ removedOlder: true, removedNewer: true, oversized: false })
+  it.each(['older', 'newer'] as const)('admits adjacent complete turns without evicting the other end when paging %s', (direction) => {
+    const all = turns(5)
+    const existing = direction === 'older' ? all.slice(6) : all.slice(0, 4)
+    const incoming = direction === 'older' ? all.slice(0, 6) : all.slice(4)
+    const nearest = direction === 'older' ? incoming.slice(-2) : incoming.slice(0, 2)
+    const maxBytes = [...existing, ...nearest].reduce((sum, message) => sum + estimateMessageTextBytes(message), 0)
+    const result = admitThreadHistoryPage(existing, incoming, direction, [], { maxBytes, maxMessages: 1000 })
+    expect(result.messages).toEqual(nearest)
+    expect(result.blocked).toBe(true)
+    expect(existing).toEqual(direction === 'older' ? all.slice(6) : all.slice(0, 4))
   })
 
-  it.each(['earliest', 'latest'] as const)('keeps an oversized focused turn alone when paging %s', (direction) => {
-    const messages = turns(5)
-    messages[5].text = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
-    const retained = retainThreadMessageWindow(messages, {
-      maxTurns: 20, maxBytes: ACTIVE_THREAD_TEXT_BUDGET, direction, focusTurnId: 'turn-2',
+  it.each(['older', 'newer'] as const)('pauses at an oversized adjacent turn rather than skipping it when paging %s', (direction) => {
+    const all = turns(4)
+    const existing = direction === 'older' ? all.slice(6) : all.slice(0, 2)
+    const incoming = direction === 'older' ? all.slice(0, 6) : all.slice(2)
+    const nearest = direction === 'older' ? incoming.at(-1)! : incoming[0]
+    nearest.text = 'x'.repeat(2000)
+    const result = admitThreadHistoryPage(existing, incoming, direction, [], { maxBytes: 1000, maxMessages: 1000 })
+    expect(result.messages).toEqual([])
+    expect(result.blocked).toBe(true)
+    expect(result.turnIds.size).toBe(0)
+  })
+
+  it('counts unique IDs and admits empty raw turns without losing their cursors', () => {
+    const existing = turns(1)
+    const result = admitThreadHistoryPage(existing, [...existing, existing[0]], 'newer', ['turn-0', 'turn-1'], {
+      maxBytes: 1000, maxMessages: 2,
     })
-    expect(retained.messages).toEqual(messages.slice(4, 6))
-    expect(retained).toMatchObject({ removedOlder: true, removedNewer: true, oversized: true })
+    expect(result.messages).toEqual(existing)
+    expect([...result.turnIds]).toEqual(['turn-0', 'turn-1'])
+    expect(result.blocked).toBe(false)
   })
 
-  it.each(['earliest', 'latest'] as const)('preserves inactive retention even with a focus when paging %s', (direction) => {
-    const messages = turns(5)
-    messages[5].text = 'x'.repeat(1000)
-    const options = { maxTurns: 10, maxBytes: 500, direction, keepOversizedTurn: false }
-    expect(retainThreadMessageWindow(messages, { ...options, focusTurnId: 'turn-2' })).toEqual(retainThreadMessageWindow(messages, options))
+  it('enforces the message cap at whole-turn boundaries', () => {
+    const all = turns(501)
+    const result = admitThreadHistoryPage(all.slice(0, 998), all.slice(998), 'newer')
+    expect(result.messages.map(message => message.id)).toEqual(['user-499', 'answer-499'])
+    expect(result.turnIds.has('turn-500')).toBe(false)
+    expect(result.blocked).toBe(true)
   })
 
-  it('chooses the nearest displayable incoming turn and ignores messages without a turn', () => {
-    const metadata: UiMessage = { id: 'metadata', role: 'system', text: '' }
-    const messages = [metadata, ...turns(2), metadata]
-    expect(getThreadPageFocusTurnId(messages, 'older')).toBe('turn-1')
-    expect(getThreadPageFocusTurnId(messages, 'newer')).toBe('turn-0')
-    expect(getThreadPageFocusTurnId([], 'older')).toBeUndefined()
-    expect(getThreadPageFocusTurnId([metadata], 'newer')).toBeUndefined()
+  it('reports a full cache separately from a partially rejected page', () => {
+    const all = turns(2)
+    const result = admitThreadHistoryPage(all.slice(0, 2), all.slice(2), 'newer', [], { maxBytes: 1000, maxMessages: 4 })
+    expect(result.blocked).toBe(false)
+    expect(result.capacityReached).toBe(true)
+    expect(result.messages).toEqual(all.slice(2))
+  })
+
+  it('keeps an existing window even if it already exceeds the history budget', () => {
+    const existing = turns(1)
+    const result = admitThreadHistoryPage(existing, turns(2).slice(2), 'newer', [], { maxBytes: 1, maxMessages: 1 })
+    expect(result.messages).toEqual([])
+    expect(result.blocked).toBe(true)
+    expect(existing).toHaveLength(2)
   })
 
   it('applies the byte budget to command output, image data, and diffs', () => {

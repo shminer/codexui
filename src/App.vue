@@ -1010,6 +1010,9 @@
                       :is-loading-persisted-below="isLoadingNewerMessages"
                       :load-later-messages="loadNewerMessages"
                       :load-latest-messages="loadLatestMessages"
+                      :release-history="releaseThreadHistory"
+                      :history-capacity-reached="selectedThreadHistoryCapacityReached"
+                      @reading-history-change="setThreadReadingHistory(composerThreadContextId, $event)"
                       @fork-thread="onForkThreadFromMessage"
                       @edit-message="onEditMessage"
                       @implement-plan="onImplementPlan"
@@ -1134,6 +1137,9 @@
     :has-more-older="sideConversationHasMoreOlder"
     :has-more-newer="sideConversationHasMoreNewer"
     :is-history-window="sideConversationIsHistoryWindow"
+    :history-capacity-reached="sideConversationHistoryCapacityReached"
+    :release-history="releaseThreadHistory"
+    @reading-history-change="setThreadReadingHistory(sideConversationThreadId, $event)"
     :loading-older="sideConversationLoadingOlder"
     :loading-newer="sideConversationLoadingNewer"
     :load-earlier-messages="loadOlderMessages"
@@ -1418,6 +1424,10 @@ const {
   selectedThreadServerRequests,
   selectedThreadSubagents,
   selectedThreadIsHistoryWindow,
+  selectedThreadHistoryCapacityReached,
+  sideConversationHistoryCapacityReached,
+  releaseThreadHistory,
+  setThreadReadingHistory,
   selectedLiveOverlay,
   sideConversationThreadId,
   sideConversationMessages,

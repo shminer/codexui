@@ -86,7 +86,7 @@ import {
   INACTIVE_THREAD_CACHE_LIMIT,
   INACTIVE_THREAD_TEXT_BUDGET,
   INACTIVE_THREAD_TURN_LIMIT,
-  getThreadPageFocusTurnId,
+  admitThreadHistoryPage,
   retainThreadMessageWindow,
 } from './threadMessageRetention'
 
@@ -1827,6 +1827,49 @@ export function useDesktopState() {
   const hasMoreNewerMessagesByThreadId = ref<Record<string, boolean>>({})
   const loadingNewerMessagesByThreadId = ref<Record<string, boolean>>({})
   const historyWindowThreadIds = reactive(new Set<string>())
+  const readingHistoryThreadIds = new Set<string>()
+  const expandedHistoryThreadIds = new Set<string>()
+  const changedHistoryThreadIds = new Set<string>()
+  const historyCapacityByThreadId = ref<Record<string, boolean>>({})
+
+  function setThreadReadingHistory(threadId: string, reading: boolean): void {
+    if (reading) {
+      readingHistoryThreadIds.add(threadId)
+      if (expandedHistoryThreadIds.has(threadId)) historyWindowThreadIds.add(threadId)
+    }
+    else {
+      readingHistoryThreadIds.delete(threadId)
+      if (!hasMoreNewerMessagesByThreadId.value[threadId]) historyWindowThreadIds.delete(threadId)
+      if (changedHistoryThreadIds.has(threadId) && !historyWindowThreadIds.has(threadId)) {
+        setPersistedMessagesForThread(threadId, persistedMessagesByThreadId.value[threadId] ?? [], true)
+      }
+    }
+  }
+
+  function admitHistoryPage(threadId: string, messages: UiMessage[], indices: Record<string, number>, direction: 'older' | 'newer') {
+    const turns = Object.keys(indices).sort((a, b) => indices[a] - indices[b])
+    const prepared = messages.map((message) => isKnownSideConversationThread(threadId)
+      ? previewEphemeralMessage(message, true)
+      : message.commandExecution ? { ...message, commandExecution: limitCommandExecutionOutput(message.commandExecution) } : message)
+    const page = admitThreadHistoryPage(persistedMessagesByThreadId.value[threadId] ?? [], prepared, direction, turns)
+    historyCapacityByThreadId.value = { ...historyCapacityByThreadId.value, [threadId]: page.capacityReached }
+    expandedHistoryThreadIds.add(threadId)
+    return { ...page, indices: Object.fromEntries(Object.entries(indices).filter(([id]) => page.turnIds.has(id))) }
+  }
+
+  function observeHistorySnapshotChanges(threadId: string, snapshot: UiMessage[]): void {
+    if (!expandedHistoryThreadIds.has(threadId) || changedHistoryThreadIds.has(threadId)) return
+    const current = new Map((persistedMessagesByThreadId.value[threadId] ?? []).map((message) => [message.id, message]))
+    const lastIndex = threadWindowBoundsByThreadId.get(threadId)?.end ?? -1
+    if (snapshot.some((source) => {
+      const message = isKnownSideConversationThread(threadId) ? previewEphemeralMessage(source, true)
+        : source.commandExecution ? { ...source, commandExecution: limitCommandExecutionOutput(source.commandExecution) } : source
+      const previous = current.get(message.id)
+      return previous ? (!previous.text.startsWith(message.text) || message.text.length > previous.text.length)
+        || (message.commandExecution?.outputTotalLength ?? message.commandExecution?.aggregatedOutput.length ?? 0) > (previous.commandExecution?.outputTotalLength ?? previous.commandExecution?.aggregatedOutput.length ?? 0)
+        : typeof message.turnIndex === 'number' && message.turnIndex >= lastIndex
+    })) changedHistoryThreadIds.add(threadId)
+  }
   const threadBodyLru = new Set<string>()
   const threadBodyGeneration = new Map<string, number>()
   const threadWindowBoundsByThreadId = new Map<string, { first: string; last: string; start: number; end: number }>()
@@ -1869,7 +1912,7 @@ export function useDesktopState() {
   const sideConversationCollaborationMode = ref<CollaborationModeKind>('default')
   const isSideConversationImplementingPlan = ref(false)
   const sideConversationFollowLatestRevision = ref(0)
-  let sideConversationWindowRequest: { latest: boolean; lifecycleRevision: number } | undefined
+  let sideConversationWindowRequest: { latest: boolean; releaseHistory: boolean; lifecycleRevision: number } | undefined
   let sideConversationTurnStartPromise: Promise<string> | null = null
   const sideConversationPendingTurnStarts = new Set<Promise<string>>()
   let sideConversationEpoch = 0
@@ -2031,6 +2074,10 @@ export function useDesktopState() {
   }
 
   function invalidateThreadBody(threadId: string): void {
+    expandedHistoryThreadIds.delete(threadId)
+    changedHistoryThreadIds.delete(threadId)
+    readingHistoryThreadIds.delete(threadId)
+    historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
     threadBodyGeneration.set(threadId, (threadBodyGeneration.get(threadId) ?? 0) + 1)
     threadBodyLru.delete(threadId)
     threadWindowBoundsByThreadId.delete(threadId)
@@ -2061,6 +2108,10 @@ export function useDesktopState() {
     let cached = 0
     for (const threadId of [...threadBodyLru].reverse()) {
       if (threadId === selectedThreadId.value || isThreadBodyProtected(threadId)) continue
+      expandedHistoryThreadIds.delete(threadId)
+      changedHistoryThreadIds.delete(threadId)
+      readingHistoryThreadIds.delete(threadId)
+      historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
       const body = persistedMessagesByThreadId.value[threadId]
       if (!body && !loadMessagePromiseByThreadId.has(threadId)) { threadBodyLru.delete(threadId); continue }
       const retained = retainThreadMessageWindow(body ?? [], {
@@ -2589,6 +2640,8 @@ export function useDesktopState() {
   const isLoadingNewerMessages = computed(() => loadingNewerMessagesByThreadId.value[selectedThreadId.value] === true)
   const selectedThreadIsHistoryWindow = computed(() => historyWindowThreadIds.has(selectedThreadId.value))
   const sideConversationIsHistoryWindow = computed(() => historyWindowThreadIds.has(sideConversationThreadId.value))
+  const selectedThreadHistoryCapacityReached = computed(() => historyCapacityByThreadId.value[selectedThreadId.value] === true)
+  const sideConversationHistoryCapacityReached = computed(() => historyCapacityByThreadId.value[sideConversationThreadId.value] === true)
 
   function getFirstPersistedTurnId(threadId: string): string {
     const boundary = threadWindowBoundsByThreadId.get(threadId)?.first
@@ -3804,20 +3857,23 @@ export function useDesktopState() {
     setThreadTerminalOpen(threadId, !selectedThreadTerminalOpen.value)
   }
 
-  function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[], direction: 'latest' | 'earliest' = 'latest', focusTurnId?: string): boolean {
-    if (!isKnownSideConversationThread(threadId)) {
+  function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[], compact = false): boolean {
+    if (isKnownSideConversationThread(threadId)) {
+      nextMessages = nextMessages.map((message) => previewEphemeralMessage(message, isSideConversationVisible.value))
+    } else {
       nextMessages = nextMessages.map((message) => {
         if (!message.commandExecution) return message
         const commandExecution = limitCommandExecutionOutput(message.commandExecution)
         return areCommandExecutionsEqual(commandExecution, message.commandExecution) ? message : { ...message, commandExecution }
       })
       observeNextTurnIndex(threadId, nextMessages)
-      if (!isThreadBodyProtected(threadId)) {
+      const preserveHistory = expandedHistoryThreadIds.has(threadId)
+        && (readingHistoryThreadIds.has(threadId) || historyWindowThreadIds.has(threadId) || !changedHistoryThreadIds.has(threadId))
+      if (!isThreadBodyProtected(threadId) && (compact || !inProgressById.value[threadId]) && !preserveHistory) {
         const retained = retainThreadMessageWindow(nextMessages, {
           maxTurns: threadId === selectedThreadId.value ? ACTIVE_THREAD_TURN_LIMIT : INACTIVE_THREAD_TURN_LIMIT,
           maxBytes: threadId === selectedThreadId.value ? ACTIVE_THREAD_TEXT_BUDGET : INACTIVE_THREAD_TEXT_BUDGET,
-          direction,
-          focusTurnId: threadId === selectedThreadId.value ? focusTurnId : undefined,
+          direction: 'latest',
           keepOversizedTurn: threadId === selectedThreadId.value,
         })
         if (nextMessages.length > 0 && retained.messages.length === 0 && threadId !== selectedThreadId.value) {
@@ -3825,27 +3881,42 @@ export function useDesktopState() {
           return false
         }
         nextMessages = retained.messages
+        expandedHistoryThreadIds.delete(threadId)
+        changedHistoryThreadIds.delete(threadId)
+        historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
         cropThreadWindowBounds(threadId, nextMessages, retained.removedOlder, retained.removedNewer)
         if (retained.removedOlder) hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: true }
         if (retained.removedNewer) hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
       }
     }
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
-    if (areMessageArraysEqual(previous, nextMessages)) return true
+    if (areMessageArraysEqual(previous, nextMessages)) {
+      if (compact) enforceSideConversationBudget(threadId, true)
+      return true
+    }
     persistedMessagesByThreadId.value = {
       ...persistedMessagesByThreadId.value,
       [threadId]: nextMessages,
     }
     updateRetainedTurnLookup(threadId, nextMessages)
     touchThreadBody(threadId)
-    enforceSideConversationBudget(threadId, direction)
+    enforceSideConversationBudget(threadId, compact)
     enforceInactiveThreadBodies()
     return true
   }
 
-  function enforceSideConversationBudget(threadId: string, direction?: 'latest' | 'earliest'): void {
+  function enforceSideConversationBudget(threadId: string, compact = false): void {
     if (!isKnownSideConversationThread(threadId)) return
-    const states = [persistedMessagesByThreadId, livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]
+    // Delta updates scan only the live buffer while the reader keeps expanded history.
+    if (!isSideConversationVisible.value || (!readingHistoryThreadIds.has(threadId) && !historyWindowThreadIds.has(threadId)
+      && (compact || !inProgressById.value[threadId]) && changedHistoryThreadIds.has(threadId))) {
+      expandedHistoryThreadIds.delete(threadId)
+      changedHistoryThreadIds.delete(threadId)
+      historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
+    }
+    const preserveHistory = isSideConversationVisible.value && expandedHistoryThreadIds.has(threadId)
+    const liveStates = [livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]
+    const states = preserveHistory ? liveStates : [persistedMessagesByThreadId, ...liveStates]
     const combined = new Map<string, UiMessage>()
     for (const state of states) {
       for (const message of state.value[threadId] ?? []) {
@@ -3858,12 +3929,20 @@ export function useDesktopState() {
       }
     }
     const all = [...combined.values()]
-    const retained = retainEphemeralMessageWindow(all, isSideConversationVisible.value, direction ?? (historyWindowThreadIds.has(threadId) && isSideConversationVisible.value ? 'earliest' : 'latest'), 2 * (liveReasoningTextByThreadId.value[threadId]?.length ?? 0))
+    const retained = retainEphemeralMessageWindow(all,
+      isSideConversationVisible.value, 'latest', 2 * (liveReasoningTextByThreadId.value[threadId]?.length ?? 0))
     const byId = new Map(retained.messages.map((message) => [message.id, message]))
     for (const state of states) {
       const previous = state.value[threadId] ?? []
       const next = previous.flatMap((message) => byId.has(message.id) ? [byId.get(message.id)!] : [])
       if (!areMessageArraysEqual(previous, next)) state.value = { ...state.value, [threadId]: next }
+    }
+    if (preserveHistory) {
+      if (retained.removedOlder || retained.removedNewer) {
+        historyWindowThreadIds.add(threadId)
+        hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
+      }
+      return
     }
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
     cropThreadWindowBounds(threadId, persisted, retained.removedOlder, retained.removedNewer)
@@ -5198,6 +5277,11 @@ export function useDesktopState() {
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
     const notificationThreadId = extractThreadIdFromNotification(notification)
+    if (notificationThreadId && expandedHistoryThreadIds.has(notificationThreadId)
+      && (((notification.method.endsWith('/delta') || notification.method.endsWith('Delta')) && Boolean(readString(asRecord(notification.params)?.delta)))
+        || (notification.method === 'turn/started' && readString(asRecord(asRecord(notification.params)?.turn)?.id) !== threadWindowBoundsByThreadId.get(notificationThreadId)?.last))) {
+      changedHistoryThreadIds.add(notificationThreadId)
+    }
     if (notification.method === 'thread/deleted' && notificationThreadId) {
       forgetDeletedThread(notificationThreadId)
       return
@@ -6218,10 +6302,10 @@ export function useDesktopState() {
         }
         if (activeTurnId) sideConversationTurnIds.add(activeTurnId)
       }
-      const nextMessages = isSideConversation
+      let nextMessages = isSideConversation
         ? messages.filter((message) => Boolean(message.turnId && sideConversationTurnIds.has(message.turnId)))
         : messages
-      const nextTurnIndexByTurnId = isSideConversation
+      let nextTurnIndexByTurnId = isSideConversation
         ? Object.fromEntries(Object.entries(turnIndexByTurnId).filter(([turnId]) => sideConversationTurnIds.has(turnId)))
         : turnIndexByTurnId
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
@@ -6238,10 +6322,16 @@ export function useDesktopState() {
       const lifecycleUnchanged = snapshotLifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)
         && snapshotActiveTurnId === (activeTurnIdByThreadId.value[threadId] ?? '')
       const isHistoryWindow = historyWindowThreadIds.has(threadId)
+      observeHistorySnapshotChanges(threadId, nextMessages)
       if (!isHistoryWindow) {
+        if (expandedHistoryThreadIds.has(threadId) && !changedHistoryThreadIds.has(threadId)) {
+          const admitted = admitHistoryPage(threadId, nextMessages, nextTurnIndexByTurnId, 'older')
+          nextMessages = admitted.messages
+          nextTurnIndexByTurnId = admitted.indices
+        }
         hasMoreOlderMessagesByThreadId.value = {
           ...hasMoreOlderMessagesByThreadId.value,
-          [threadId]: !isSideConversation && (olderLoadedDuringResume
+          [threadId]: !isSideConversation && (olderLoadedDuringResume || expandedHistoryThreadIds.has(threadId)
             ? hasMoreOlderMessagesByThreadId.value[threadId] === true
             : detail.hasMoreOlder === true),
         }
@@ -6250,28 +6340,27 @@ export function useDesktopState() {
           ? { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...nextTurnIndexByTurnId }
           : nextTurnIndexByTurnId)
         rebindLiveFileChangeTurnIndices(threadId)
-        const mergedMessages = mergeMessageSnapshot(previousPersisted, nextMessages, initialBodyById,
+        const mergedMessages = mergeMessageSnapshot(previousPersisted, nextMessages, protectFullerSnapshotBaseline(initialBodyById, nextMessages),
           getLiveMessagesForThread(threadId), initialLiveById, {
-            preserveMissing: olderLoadedDuringResume || options.silent === true || hasOptimisticUserMessages(previousPersisted),
+            preserveMissing: expandedHistoryThreadIds.has(threadId) || olderLoadedDuringResume || options.silent === true || hasOptimisticUserMessages(previousPersisted),
             turnIndexByTurnId: nextTurnIndexByTurnId,
             pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex: snapshotNextTurnIndex,
           })
-        extendThreadWindowBounds(threadId, nextTurnIndexByTurnId, !olderLoadedDuringResume && options.silent !== true && !hasOptimisticUserMessages(previousPersisted))
-        if (!setPersistedMessagesForThread(threadId, mergedMessages)) return
+        extendThreadWindowBounds(threadId, nextTurnIndexByTurnId, !expandedHistoryThreadIds.has(threadId) && !olderLoadedDuringResume && options.silent !== true && !hasOptimisticUserMessages(previousPersisted))
+        if (!setPersistedMessagesForThread(threadId, mergedMessages, true)) return
         updateRetainedTurnLookup(threadId, persistedMessagesByThreadId.value[threadId] ?? [])
       } else {
         const rebound = previousPersisted.map((message) => {
           const index = message.turnId ? nextTurnIndexByTurnId[message.turnId] : undefined
           return typeof index === 'number' && index !== message.turnIndex ? { ...message, turnIndex: index } : message
         })
-        setPersistedMessagesForThread(threadId, rebound, 'earliest')
+        setPersistedMessagesForThread(threadId, rebound)
         const boundary = threadWindowBoundsByThreadId.get(threadId)
         if (boundary) {
           if (typeof nextTurnIndexByTurnId[boundary.first] === 'number') boundary.start = nextTurnIndexByTurnId[boundary.first]
           if (typeof nextTurnIndexByTurnId[boundary.last] === 'number') boundary.end = nextTurnIndexByTurnId[boundary.last]
         }
-        const retainedTurnIds = new Set(previousPersisted.map((message) => message.turnId))
-        if (messages.some((message) => !retainedTurnIds.has(message.turnId))) {
+        if (changedHistoryThreadIds.has(threadId)) {
           hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
         }
       }
@@ -6340,7 +6429,7 @@ export function useDesktopState() {
     if (!threadId) return
     if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('older')
     if (loadingOlderMessagesByThreadId.value[threadId] === true || loadingNewerMessagesByThreadId.value[threadId] === true) return
-    if (hasMoreOlderMessagesByThreadId.value[threadId] !== true) return
+    if (hasMoreOlderMessagesByThreadId.value[threadId] !== true || historyCapacityByThreadId.value[threadId]) return
 
     const beforeTurnId = getFirstPersistedTurnId(threadId)
     if (!beforeTurnId) {
@@ -6361,18 +6450,19 @@ export function useDesktopState() {
       const page = await getOlderThreadMessages(threadId, beforeTurnId)
       if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
-      const mergedMessages = mergeMessages(page.messages, previousPersisted, { preserveMissing: true })
+      const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, 'older')
+      const mergedMessages = mergeMessages(admitted.messages, previousPersisted, { preserveMissing: true })
       historyWindowThreadIds.add(threadId)
       if (inProgressById.value[threadId] === true || (liveAgentMessagesByThreadId.value[threadId]?.length ?? 0) > 0 || (liveCommandsByThreadId.value[threadId]?.length ?? 0) > 0) {
         hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
       }
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
-        [threadId]: page.hasMoreOlder,
+        [threadId]: page.hasMoreOlder || admitted.blocked,
       }
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
-      extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'older')
-      setPersistedMessagesForThread(threadId, mergedMessages, 'earliest', getThreadPageFocusTurnId(page.messages, 'older'))
+      extendThreadWindowBounds(threadId, admitted.indices, false, 'older')
+      setPersistedMessagesForThread(threadId, mergedMessages)
       rebindLiveFileChangeTurnIndices(threadId)
     } catch (loadError) {
       if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
@@ -6383,18 +6473,19 @@ export function useDesktopState() {
     }
   }
 
-  function loadSideConversationWindow(direction: 'older' | 'newer' | 'latest'): Promise<void> {
+  function loadSideConversationWindow(direction: 'older' | 'newer' | 'latest', releaseHistory = false): Promise<void> {
     const threadId = sideConversationThreadId.value
     if (!threadId) return Promise.resolve()
+    if (direction !== 'latest' && historyCapacityByThreadId.value[threadId]) return Promise.resolve()
     const existing = latestWindowPromiseByThreadId.get(threadId)
     if (existing) {
       const request = sideConversationWindowRequest
-      if (direction !== 'latest' || request?.latest) return existing
+      if (direction !== 'latest' || (request?.latest && (!releaseHistory || request.releaseHistory))) return existing
       const epoch = sideConversationEpoch
       return existing.catch(() => undefined).then(() => {
         if (epoch !== sideConversationEpoch || threadId !== sideConversationThreadId.value) return
-        if (request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)) return
-        return loadSideConversationWindow('latest')
+        if (!releaseHistory && request?.latest && request.lifecycleRevision === (threadLifecycleRevisionByThreadId.get(threadId) ?? 0)) return
+        return loadSideConversationWindow('latest', releaseHistory)
       })
     }
     flushPendingContentDeltas(threadId)
@@ -6412,6 +6503,7 @@ export function useDesktopState() {
     const current = () => epoch === sideConversationEpoch && threadId === sideConversationThreadId.value && generation === (threadBodyGeneration.get(threadId) ?? 0)
     const request = {
       latest: direction === 'latest' || (direction === 'older' ? !before : !after),
+      releaseHistory,
       lifecycleRevision: threadLifecycleRevisionByThreadId.get(threadId) ?? 0,
     }
     sideConversationWindowRequest = request
@@ -6437,29 +6529,45 @@ export function useDesktopState() {
         sideConversationHistoryTruncated.value = page.historyTruncated === true
         sideConversationHistoryError.value = ''
         const previous = persistedMessagesByThreadId.value[threadId] ?? []
+        if (latest || direction === 'newer') observeHistorySnapshotChanges(threadId, page.messages)
+        const resetHistory = releaseHistory || (latest && changedHistoryThreadIds.has(threadId))
+        if (!latest || (!resetHistory && expandedHistoryThreadIds.has(threadId))) {
+          const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, latest || direction === 'older' ? 'older' : 'newer')
+          page = { ...page, messages: admitted.messages, turnIndexByTurnId: admitted.indices,
+            hasMoreOlder: direction === 'older' ? page.hasMoreOlder || admitted.blocked : hasMoreOlderMessagesByThreadId.value[threadId] === true,
+            hasMoreNewer: latest ? page.hasMoreNewer === true : direction === 'newer' ? page.hasMoreNewer || admitted.blocked : hasMoreNewerMessagesByThreadId.value[threadId] === true }
+        }
         const indices = { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId }
         const snapshot = latest ? page.messages
           : direction === 'older' ? mergeMessages(page.messages, previous, { preserveMissing: true })
             : mergeMessages(previous, page.messages, { preserveMissing: true })
         const live = getAllLiveMessagesForThread(threadId)
+        const pageIds = new Set(page.messages.map(message => message.id))
+        const coveredLive = latest ? live : live.filter(message => pageIds.has(message.id))
         const baseline = protectFullerSnapshotBaseline(initialBody, snapshot)
         const snapshotIds = new Set(snapshot.map((message) => message.id))
         for (const message of live) if (!snapshotIds.has(message.id)) baseline.delete(message.id)
-        const next = latest && !page.messages.length ? previous
-          : mergeMessageSnapshot([...previous, ...live], snapshot, baseline,
-            live, protectFullerSnapshotBaseline(initialLive, snapshot), {
+        const next = latest && !page.messages.length && !resetHistory ? previous
+          : mergeMessageSnapshot([...previous, ...coveredLive], snapshot, baseline,
+            coveredLive, protectFullerSnapshotBaseline(initialLive, snapshot), {
+              preserveMissing: !resetHistory && expandedHistoryThreadIds.has(threadId),
               turnIndexByTurnId: indices, pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
             })
-        hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: page.hasMoreOlder }
+        hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: latest && !resetHistory && expandedHistoryThreadIds.has(threadId) ? hasMoreOlderMessagesByThreadId.value[threadId] === true : page.hasMoreOlder }
         hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: page.hasMoreNewer === true }
         if (!latest && direction === 'older') {
           historyWindowThreadIds.add(threadId)
-          hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
+          if (inProgressById.value[threadId] || live.length) hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
         } else if (!page.hasMoreNewer) historyWindowThreadIds.delete(threadId)
         observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
-        extendThreadWindowBounds(threadId, page.turnIndexByTurnId, latest, direction === 'latest' ? undefined : direction)
-        if (!latest || page.messages.length) removeSnapshotLiveMessages(threadId, next)
-        setPersistedMessagesForThread(threadId, next, direction === 'older' && !latest ? 'earliest' : 'latest')
+        extendThreadWindowBounds(threadId, page.turnIndexByTurnId, latest && (resetHistory || !expandedHistoryThreadIds.has(threadId)), direction === 'latest' ? undefined : direction)
+        if (resetHistory) {
+          expandedHistoryThreadIds.delete(threadId)
+          changedHistoryThreadIds.delete(threadId)
+          historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
+        }
+        if (!latest || page.messages.length) removeSnapshotLiveMessages(threadId, latest ? next : page.messages)
+        setPersistedMessagesForThread(threadId, next, latest)
         request.latest = latest
       } catch (cause) {
         if (!current() || (latest && !lifecycleCurrent())) return
@@ -6481,7 +6589,7 @@ export function useDesktopState() {
       }
     }).then(() => {
       // Explicit latest callers must await a valid window, including from history.
-      if (direction === 'latest' && current() && !lifecycleCurrent()) return loadSideConversationWindow('latest')
+      if (direction === 'latest' && current() && !lifecycleCurrent()) return loadSideConversationWindow('latest', releaseHistory)
     })
     latestWindowPromiseByThreadId.set(threadId, windowPromise)
     return windowPromise
@@ -6491,7 +6599,7 @@ export function useDesktopState() {
     if (!threadId) return
     if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('newer')
     if (loadingOlderMessagesByThreadId.value[threadId] || loadingNewerMessagesByThreadId.value[threadId]) return
-    if (hasMoreNewerMessagesByThreadId.value[threadId] !== true) return
+    if (hasMoreNewerMessagesByThreadId.value[threadId] !== true || historyCapacityByThreadId.value[threadId]) return
     const body = persistedMessagesByThreadId.value[threadId] ?? []
     const afterTurnId = threadWindowBoundsByThreadId.get(threadId)?.last ?? [...body].reverse().find((message) => message.turnId)?.turnId
     if (!afterTurnId) return loadLatestMessages(threadId)
@@ -6505,19 +6613,21 @@ export function useDesktopState() {
       const page = await getNewerThreadMessages(threadId, afterTurnId)
       if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
       flushPendingContentDeltas(threadId)
-      hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: page.hasMoreNewer === true }
+      observeHistorySnapshotChanges(threadId, page.messages)
+      const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, 'newer')
+      hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: page.hasMoreNewer === true || admitted.blocked }
       observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
-      extendThreadWindowBounds(threadId, page.turnIndexByTurnId, false, 'newer')
-      const pageIds = new Set(page.messages.map((message) => message.id))
+      extendThreadWindowBounds(threadId, admitted.indices, false, 'newer')
+      const pageIds = new Set(admitted.messages.map((message) => message.id))
       const current = persistedMessagesByThreadId.value[threadId] ?? []
       const pageLive = getAllLiveMessagesForThread(threadId).filter((message) => pageIds.has(message.id))
-      const pageMessages = mergeMessageSnapshot([...current.filter((message) => pageIds.has(message.id)), ...pageLive], page.messages,
+      const pageMessages = mergeMessageSnapshot([...current.filter((message) => pageIds.has(message.id)), ...pageLive], admitted.messages,
         protectFullerSnapshotBaseline(initialBody, page.messages), pageLive, initialLive, {
           turnIndexByTurnId: { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId },
           pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
         })
       const merged = mergeMessages(current, pageMessages, { preserveMissing: true })
-      if (!setPersistedMessagesForThread(threadId, merged, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))) return
+      if (!setPersistedMessagesForThread(threadId, merged)) return
       // Rebase covered live rows even on intermediate pages; later deltas prefer live.
       const rebasedById = new Map(pageMessages.map((message) => [message.id, message]))
       for (const state of [livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]) {
@@ -6538,9 +6648,13 @@ export function useDesktopState() {
           preserveMissing: true, turnIndexByTurnId: { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...page.turnIndexByTurnId },
           pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
         })
-        if (!setPersistedMessagesForThread(threadId, latest, 'latest', getThreadPageFocusTurnId(page.messages, 'newer'))) return
+        const admittedLatest = admitHistoryPage(threadId, latest,
+          { ...(turnIndexByTurnIdByThreadId.value[threadId] ?? {}), ...admitted.indices }, 'newer')
+        const acceptedLatest = mergeMessages(retained, admittedLatest.messages, { preserveMissing: true })
+        if (admittedLatest.blocked) hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: true }
+        if (!setPersistedMessagesForThread(threadId, acceptedLatest)) return
         if (!hasMoreNewerMessagesByThreadId.value[threadId]) {
-          removeSnapshotLiveMessages(threadId, latest)
+          removeSnapshotLiveMessages(threadId, acceptedLatest)
           historyWindowThreadIds.delete(threadId)
         }
       }
@@ -6554,11 +6668,11 @@ export function useDesktopState() {
     }
   }
 
-  function loadLatestMessages(threadId: string = selectedThreadId.value): Promise<void> {
+  function loadLatestMessages(threadId: string = selectedThreadId.value, releaseHistory = false): Promise<void> {
     if (!threadId) return Promise.resolve()
-    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('latest')
+    if (isKnownSideConversationThread(threadId)) return loadSideConversationWindow('latest', releaseHistory)
     const existing = latestWindowPromiseByThreadId.get(threadId)
-    if (existing) return existing
+    if (existing) return releaseHistory ? existing.then(() => expandedHistoryThreadIds.has(threadId) ? loadLatestMessages(threadId, true) : undefined) : existing
     flushPendingContentDeltas(threadId)
     const generation = (threadBodyGeneration.get(threadId) ?? 0) + 1
     const lifecycleRevision = threadLifecycleRevisionByThreadId.get(threadId) ?? 0
@@ -6572,19 +6686,31 @@ export function useDesktopState() {
     loadingNewerMessagesByThreadId.value = { ...loadingNewerMessagesByThreadId.value, [threadId]: true }
     const promise = (async () => {
       try {
-        const page = await getLatestThreadMessages(threadId, ACTIVE_THREAD_TURN_LIMIT)
+        let page = await getLatestThreadMessages(threadId, ACTIVE_THREAD_TURN_LIMIT)
         if ((threadBodyGeneration.get(threadId) ?? 0) !== generation) return
         flushPendingContentDeltas(threadId)
+        observeHistorySnapshotChanges(threadId, page.messages)
+        const resetHistory = releaseHistory || changedHistoryThreadIds.has(threadId)
+        if (!resetHistory && expandedHistoryThreadIds.has(threadId)) {
+          const admitted = admitHistoryPage(threadId, page.messages, page.turnIndexByTurnId, 'older')
+          page = { ...page, messages: admitted.messages, turnIndexByTurnId: admitted.indices }
+        }
         const nextMessages = mergeMessageSnapshot(persistedMessagesByThreadId.value[threadId] ?? [], page.messages,
-          initialBodyById, getLiveMessagesForThread(threadId), initialLiveById, {
+          protectFullerSnapshotBaseline(initialBodyById, page.messages), getLiveMessagesForThread(threadId), initialLiveById, {
+            preserveMissing: !resetHistory && expandedHistoryThreadIds.has(threadId),
             turnIndexByTurnId: page.turnIndexByTurnId, pendingTurnId: activeTurnIdByThreadId.value[threadId], nextTurnIndex,
           })
         historyWindowThreadIds.delete(threadId)
-        hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: page.hasMoreOlder }
+        hasMoreOlderMessagesByThreadId.value = { ...hasMoreOlderMessagesByThreadId.value, [threadId]: !resetHistory && expandedHistoryThreadIds.has(threadId) ? hasMoreOlderMessagesByThreadId.value[threadId] === true : page.hasMoreOlder }
         hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [threadId]: false }
         observeNextTurnIndex(threadId, page.messages, page.nextTurnIndex)
-        extendThreadWindowBounds(threadId, page.turnIndexByTurnId, true)
-        if (!setPersistedMessagesForThread(threadId, nextMessages)) return
+        extendThreadWindowBounds(threadId, page.turnIndexByTurnId, resetHistory || !expandedHistoryThreadIds.has(threadId))
+        if (resetHistory) {
+          expandedHistoryThreadIds.delete(threadId)
+          changedHistoryThreadIds.delete(threadId)
+          historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
+        }
+        if (!setPersistedMessagesForThread(threadId, nextMessages, true)) return
         const lifecycleUnchanged = (threadLifecycleRevisionByThreadId.get(threadId) ?? 0) === lifecycleRevision
           && observedTurnId === (activeTurnIdByThreadId.value[threadId] ?? '')
         if (lifecycleUnchanged) setThreadInProgress(threadId, page.inProgress || Boolean(pendingTurnRequestByThreadId.value[threadId]))
@@ -6609,6 +6735,10 @@ export function useDesktopState() {
       if (latestWindowPromiseByThreadId.get(threadId) === promise) latestWindowPromiseByThreadId.delete(threadId)
     }).catch(() => undefined)
     return promise
+  }
+
+  function releaseThreadHistory(threadId: string): Promise<void> {
+    return loadLatestMessages(threadId, true)
   }
 
   async function ensureThreadMessagesLoaded(threadId: string, options: { silent?: boolean } = {}): Promise<void> {
@@ -6949,6 +7079,10 @@ export function useDesktopState() {
 
   function clearSideConversationThreadState(threadId: string): void {
     if (!threadId) return
+    expandedHistoryThreadIds.delete(threadId)
+    changedHistoryThreadIds.delete(threadId)
+    readingHistoryThreadIds.delete(threadId)
+    historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
     threadBodyGeneration.set(threadId, (threadBodyGeneration.get(threadId) ?? 0) + 1)
     latestWindowPromiseByThreadId.delete(threadId)
     nextTurnIndexByThreadId.delete(threadId)
@@ -8225,6 +8359,10 @@ export function useDesktopState() {
     loadMessagePromiseByThreadId.clear()
     latestWindowPromiseByThreadId.clear()
     historyWindowThreadIds.clear()
+    expandedHistoryThreadIds.clear()
+    changedHistoryThreadIds.clear()
+    readingHistoryThreadIds.clear()
+    historyCapacityByThreadId.value = {}
     nextTurnIndexByThreadId.clear()
     threadWindowBoundsByThreadId.clear()
     threadLifecycleRevisionByThreadId.clear()
@@ -8382,6 +8520,10 @@ export function useDesktopState() {
     selectedThreadSubagents,
     selectedLiveOverlay,
     selectedThreadIsHistoryWindow,
+    selectedThreadHistoryCapacityReached,
+    sideConversationHistoryCapacityReached,
+    setThreadReadingHistory,
+    releaseThreadHistory,
     getLiveOverlayForThread,
     getLiveMessagesForThread,
     getCurrentTurnMessagesForThread,

@@ -68,6 +68,9 @@
             :load-earlier-messages="loadEarlierMessages"
             :load-later-messages="loadLaterMessages"
             :load-latest-messages="loadLatestMessages"
+            :release-history="releaseHistory"
+            :history-capacity-reached="historyCapacityReached"
+            @reading-history-change="emit('reading-history-change', $event)"
             @edit-message="onEditMessage"
             @implement-plan="emit('implement-plan', $event)"
           />
@@ -188,6 +191,8 @@ const props = defineProps<{
   loadEarlierMessages: (threadId: string) => Promise<void>
   loadLaterMessages: (threadId: string) => Promise<void>
   loadLatestMessages: (threadId: string) => Promise<void>
+  releaseHistory?: (threadId: string) => Promise<void>
+  historyCapacityReached?: boolean
   cwd: string
   messages: UiMessage[]
   pendingRequests: UiServerRequest[]
@@ -213,6 +218,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  'reading-history-change': [reading: boolean]
   minimize: []
   end: []
   send: [payload: SubmitPayload]

@@ -5,6 +5,52 @@ export const ACTIVE_THREAD_TEXT_BUDGET = 2 * 1024 * 1024
 export const INACTIVE_THREAD_TURN_LIMIT = 10
 export const INACTIVE_THREAD_TEXT_BUDGET = 512 * 1024
 export const INACTIVE_THREAD_CACHE_LIMIT = 3
+export const THREAD_HISTORY_TEXT_BUDGET = 16 * 1024 * 1024
+export const THREAD_HISTORY_MESSAGE_LIMIT = 1000
+
+// Admit adjacent complete turns without evicting anything the reader already loaded.
+export function admitThreadHistoryPage(
+  existing: UiMessage[],
+  incoming: UiMessage[],
+  direction: 'older' | 'newer',
+  orderedTurnIds: string[] = [],
+  limits = { maxBytes: THREAD_HISTORY_TEXT_BUDGET, maxMessages: THREAD_HISTORY_MESSAGE_LIMIT },
+): { messages: UiMessage[]; turnIds: Set<string>; blocked: boolean; capacityReached: boolean } {
+  const byId = new Map(existing.map((message) => [message.id, message]))
+  let bytes = [...byId.values()].reduce((total, message) => total + estimateMessageTextBytes(message), 0)
+  let count = byId.size
+  const groups = new Map<string, Map<string, UiMessage>>(orderedTurnIds.map((id) => [id, new Map()]))
+  for (const message of incoming) {
+    const key = message.turnId || `message:${message.id}`
+    if (!groups.has(key)) groups.set(key, new Map())
+    groups.get(key)!.set(message.id, message)
+  }
+  const entries = [...groups]
+  if (direction === 'older') entries.reverse()
+  const turnIds = new Set<string>()
+  let blocked = false
+  for (const [key, group] of entries) {
+    let addedBytes = 0
+    let addedCount = 0
+    for (const message of group.values()) {
+      const previous = byId.get(message.id)
+      // A stale duplicate may be protected by the snapshot merger; never spend its apparent shrinkage.
+      addedBytes += Math.max(0, estimateMessageTextBytes(message) - (previous ? estimateMessageTextBytes(previous) : 0))
+      if (!previous) addedCount += 1
+    }
+    if ((bytes + addedBytes > limits.maxBytes || count + addedCount > limits.maxMessages)
+      && (addedBytes > 0 || addedCount > 0)) {
+      blocked = true
+      break
+    }
+    bytes += addedBytes
+    count += addedCount
+    turnIds.add(key)
+  }
+  return { messages: [...new Map(incoming.map((message) => [message.id, message])).values()]
+    .filter((message) => turnIds.has(message.turnId || `message:${message.id}`)), turnIds, blocked,
+    capacityReached: blocked || bytes >= limits.maxBytes || count >= limits.maxMessages }
+}
 
 export function estimateMessageTextBytes(message: UiMessage): number {
   let chars = message.id.length + message.text.length + (message.rawPayload?.length ?? 0)
@@ -15,15 +61,9 @@ export function estimateMessageTextBytes(message: UiMessage): number {
   for (const image of message.images ?? []) chars += image.length
   for (const attachment of message.fileAttachments ?? []) chars += attachment.path.length + attachment.label.length
   for (const step of message.plan?.steps ?? []) chars += step.step.length
+  chars += message.plan?.explanation?.length ?? 0
+  for (const skill of message.skills ?? []) chars += skill.name.length + skill.path.length
   return chars * 2
-}
-
-export function getThreadPageFocusTurnId(messages: UiMessage[], direction: 'older' | 'newer'): string | undefined {
-  const step = direction === 'older' ? -1 : 1
-  for (let index = direction === 'older' ? messages.length - 1 : 0; index >= 0 && index < messages.length; index += step) {
-    if (messages[index].turnId) return messages[index].turnId
-  }
-  return undefined
 }
 
 export function retainThreadMessageWindow(
@@ -32,7 +72,6 @@ export function retainThreadMessageWindow(
     maxTurns: number
     maxBytes: number
     direction: 'latest' | 'earliest'
-    focusTurnId?: string
     protectedTurnIds?: ReadonlySet<string>
     keepOversizedTurn?: boolean
   },
@@ -80,24 +119,9 @@ export function retainThreadMessageWindow(
     return true
   }
 
-  const focusIndex = options.focusTurnId && options.keepOversizedTurn !== false
-    ? entries.findIndex(([key]) => key === options.focusTurnId) : -1
-  if (focusIndex >= 0) {
-    // Reach the nearest incoming turn before moving past any budget barrier.
-    if (retainGroup(focusIndex)) {
-      const step = options.direction === 'earliest' ? -1 : 1
-      for (let index = focusIndex + step; index >= 0 && index < entries.length; index += step) {
-        if (!retainGroup(index)) break
-      }
-      for (let index = focusIndex - step; index >= 0 && index < entries.length; index -= step) {
-        if (!retainGroup(index)) break
-      }
-    }
-  } else {
-    const step = options.direction === 'latest' ? -1 : 1
-    for (let index = step === -1 ? entries.length - 1 : 0; index >= 0 && index < entries.length; index += step) {
-      if (!retainGroup(index)) break
-    }
+  const step = options.direction === 'latest' ? -1 : 1
+  for (let index = step === -1 ? entries.length - 1 : 0; index >= 0 && index < entries.length; index += step) {
+    if (!retainGroup(index)) break
   }
 
   const firstRetained = entries.findIndex(([key]) => retained.has(key))

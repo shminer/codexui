@@ -36,8 +36,7 @@ export function retainEphemeralMessageWindow(messages: UiMessage[], visible: boo
   for (let index = step < 0 ? preview.length - 1 : 0; index >= 0 && index < preview.length; index += step) {
     const message = preview[index]!
     const turn = message.turnId || message.id
-    const size = estimateMessageTextBytes(message) + 2 * ((message.plan?.explanation?.length ?? 0)
-      + (message.skills?.reduce((sum, skill) => sum + skill.name.length + skill.path.length, 0) ?? 0))
+    const size = estimateMessageTextBytes(message)
     if (ids.size >= 1000 || bytes + size > maxBytes || (!turns.has(turn) && turns.size >= maxTurns)) break
     ids.add(message.id)
     turns.add(turn)

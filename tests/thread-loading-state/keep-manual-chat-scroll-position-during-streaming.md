@@ -19,7 +19,7 @@
 - User can continue reading older history while the response streams.
 - If the thread is already at the bottom when streaming starts, the latest streaming overlay remains visible.
 - History/newer flags stop bottom locking immediately. Clearing those flags in a same-thread background update does not independently turn following back on.
-- Local render-window paging does not cause a server latest request; a retained server history window or persisted-newer boundary does.
+- Scrolling inside the loaded virtual list does not request history or evict body content. Ordinary return to latest preserves expanded history when no new content exists; an unread server boundary requests latest, and explicit Release history performs a successful read before eviction.
 
 #### Verification Boundary
 - New history-window and latest-failure checks have unit/wiring coverage; live browser anchor verification remains pending.

@@ -1,55 +1,25 @@
-### Feature: Lazy message rendering (windowed conversation)
+### 功能：稳定历史缓存与动态高度虚拟列表
 
-#### Prerequisites
-- App is running from this repository.
-- A thread exists with more than 50 messages (send many short messages, or use a long-running session).
+本轮状态：仅完成静态／类型检查；下列 Mock、浏览器和真实会话用例待运行。下方既有截图、请求数和测试通过数属于此前提交，不代表本轮虚拟列表的验收结果。
 
-#### Steps — initial load window
+前提：准备超过 100 轮、包含代码块、图片、表格、折叠命令和超长单轮的可控会话。主对话、侧窗、子 Agent、归档共用以下用例；主对话与侧窗另检查搜索定位和独立窗口。使用 1440x1000、768x1024、375x812，覆盖明暗主题及中英文。
 
-1. Open a thread with 60+ messages.
-2. Observe that the conversation list does **not** show all messages immediately — only the most recent ~50 are rendered.
-3. Verify the latest messages are visible and the chat is scrolled to the bottom.
-4. Confirm a "Load earlier messages" button appears at the top of the visible list.
+| 操作 | 预期 |
+| --- | --- |
+| 打开会话并停在最新位置。 | 初次请求最近 20 轮；仅挂载视口和上下各 400px 缓冲区内的动态高度行。正文不按 50／30／100 条移动窗口。 |
+| 向上抵达已加载边界一次，或点击加载更早消息。 | 请求相邻 10 轮，整轮 prepend；首个可见消息 ID 和相对位置保持，不删除已加载的较新端。 |
+| 在已加载范围内上下滚动，多次回到底部。 | 正文集合保持；无新内容时不回收，不额外请求历史。虚拟行随视口挂载／回收。 |
+| 用一页高度变化很大的内容触发 prepend，再停止输入。 | 布局补偿不连读，不触发反方向请求；每次抵达边界至多一笔自动分页。短页面仍可点按钮继续。 |
+| 展开命令、加载图片、切换代码块折叠状态。 | ResizeObserver 更新行高；阅读位置不异常跳转，最新位置仍跟随输出。 |
+| 阅读历史时流式产生新正文，再完成该轮。 | 保持阅读位置，显示新内容／返回最新入口；重复完成通知不裁历史。 |
+| 无新内容时重复静默同步、普通返回最新。 | 已加载历史保留；不因滚动到下方、重复快照而移除较早端。 |
+| 有实际新内容后返回最新，再继续完成新轮。 | 显示最新内容；在快照／完成边界收敛到正常 20 轮、2 MiB 预算，保留活跃轮及待处理内容。 |
+| 加载历史至估算 16 MiB 或 1000 条。 | 保留已加载集合，暂停继续接纳，显示容量提示；相邻一轮放不下时停在它之前，不跳过，不把另一端挤掉。 |
+| 点击“释放历史并返回最新”，先失败再重试成功。 | 失败不变更窗口；成功后才释放历史并恢复最新预算和跟随。 |
+| 搜索旧消息；切到独立侧窗再移回。 | 按稳定消息 ID 转换为虚拟索引定位；文档切换重建测量环境，以消息 ID 和偏移恢复阅读位置。 |
+| 回滚使消息变少；切会话；最小化侧窗后恢复。 | 非空会话正常显示；切换重置测量缓存；既有非活跃／最小化预算、草稿与队列保护仍有效。 |
 
-#### Steps — scroll-triggered load
-
-5. Scroll up slowly toward the top of the conversation list.
-6. When the scroll position reaches within ~200 px of the top, verify that the previous 30 messages appear automatically above the current ones.
-7. Confirm the viewport does **not** jump — the messages you were reading stay in view.
-8. Repeat scrolling up to verify additional chunks load on demand.
-9. Once the oldest persisted messages are reached, verify the "Load earlier messages" button disappears. The newest end may be unloaded while reading older history.
-
-#### Steps — manual load button
-
-10. Reload the page and open the same long thread.
-11. Click "Load earlier messages" button without scrolling.
-12. Verify 30 older messages are prepended and scroll position is preserved.
-13. While older messages are visible, allow the active thread to receive several new messages.
-14. Confirm the current reading position stays anchored and the older-message window remains bounded to 100 rendered rows.
-15. Click `Jump to latest` and confirm the conversation returns to the newest bounded window and resumes following output.
-16. Force a message-list shrink or rollback and confirm at least one message remains visible whenever the list is non-empty.
-
-#### Steps — live session growth
-
-17. Start an active Codex session (or send many messages in quick succession).
-18. Let the conversation exceed 50 messages while staying scrolled to the bottom.
-19. Verify the rendered count stays bounded (top of the DOM list advances as new messages arrive).
-20. Scroll up and confirm "Load earlier messages" works to reveal trimmed messages.
-
-#### Steps — rollback / message shrink
-
-21. In a thread with a turn that can be rolled back, trigger a rollback.
-22. Verify the conversation does **not** go blank — messages still render after the list shrinks.
-23. Confirm `renderWindowStart` recovers gracefully and earlier messages remain accessible.
-
-#### Expected Results
-- Only ≤50 messages are in the DOM on initial load.
-- Scrolling to the top (or clicking the button) reveals older messages without a viewport jump; distant rows are removed from the opposite end.
-- During live output, the rendered window stays bounded; old messages are trimmed from the top while the user follows the bottom.
-- After a rollback the conversation remains visible; a non-empty conversation never renders only the load control.
-
-#### Rollback/Cleanup
-- No persistent state is changed — closing or refreshing the tab resets the render window.
+清理：关闭测试侧窗和独立窗口，恢复主题、语言及视口；只删除专门建立的测试会话。本次无存储格式迁移，源码回滚恢复原分页实现。
 
 ### 回答完成后正文自动显示与手动滚动
 
@@ -92,11 +62,11 @@
 11. In browser developer tools, compare retained heap after repeated thread/history navigation and garbage collection. Check that old output buffers and evicted message windows are released. Record measurements separately; this change has only been checked statically.
 
 #### Expected Results
-- Latest rendering stays at 50 message rows; history rendering stays at at most 100 rows, excluding independent approval/live overlays.
+- Rendering follows the viewport plus a 400px buffer on each side, using measured dynamic row heights; loaded history remains independent of mounted rows.
 - Collapsed command contents have no output DOM. An expanded group renders at most 30 commands per page.
 - Ordinary command state retains a tail preview of at most 65,536 UTF-16 code units, with explicit truncated metadata. Completed history can be read page by page; copying uses the complete source rather than the preview.
 - Tail previews are materialized separately from the original output buffer. Ordinary live output is copied/truncated per 50 ms batch, with an immediate flush when the temporary combined preview reaches 131,072 code units.
-- Older loaded history is replaced as the window moves, rather than accumulated. Source history and real running commands remain intact.
+- Loaded older history is kept until new content is followed, explicit release succeeds, or the thread becomes inactive. Historical admission pauses at 16 MiB estimated text or 1000 messages without evicting the opposite end.
 - Streaming code is shown without repeated syntax highlighting; completed large code blocks avoid synchronous highlighting and oversized cache entries.
 - Protected temporary/unpersisted content, a single oversized turn, explicit full-copy allocations, and upstream full-item reads are documented exceptions to strict memory bounds.
 

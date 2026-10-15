@@ -1,5 +1,20 @@
 # Side conversation `/btw` mobile sheet and desktop window
 
+## 稳定历史与虚拟列表专项（本轮待运行）
+
+前提：使用可控 Mock 会话与 HTTP/RPC/WebSocket 延迟响应，覆盖 1440x1000、768x1024、375x812 及桌面独立窗口，检查明暗主题和中英文。下文既有通过数／截图均为以前提交的结果。
+
+| 操作 | 预期 |
+| --- | --- |
+| 连续加载较早历史，再在已加载范围内上下滚动，不产生新内容。 | 保留两端正文，不请求本地已缓存范围，不因滚回底部而回收。 |
+| 加载到 16 MiB 估算正文或 1000 条边界；包含相邻整轮超出剩余容量的页面。 | 仅接纳能放下的相邻连续整轮；暂停分页并提示容量满，不丢弃另一端，不越过拒收轮次推进游标。 |
+| 普通返回最新，与“释放历史并返回最新”分别操作；让释放先失败再成功。 | 无新内容的普通返回保留历史；显式释放只在读取成功后生效，失败保留原窗口。 |
+| 阅读旧内容时接收新回答；随后返回最新并完成轮次。 | 保持阅读锚点，实时缓冲继续有界；恢复跟随后收敛到原正常预算。重复完成／快照不回收。 |
+| 图片加载、命令折叠、搜索定位后，移入独立窗口再返回原页。 | 动态行高正常，消息 ID 顺序与主对话一致；文档迁移重建测量并恢复 ID + 相对偏移。 |
+| 最小化、恢复、结束侧窗；切换父会话。 | 原有隐藏预算、草稿队列、源缓存过期和生命周期保护保持；结束／切换后清理新增容量及阅读标记。 |
+
+清理：释放延迟响应，关闭专用 Mock 会话及独立窗口，恢复主题和视口；不修改已有真实会话。回滚本次源码与前端依赖变更即可，无持久化迁移。
+
 ## Feature / Change
 
 The composer voice-input control is replaced by a temporary side-conversation button. A side conversation snapshots the parent thread model and Thinking value when it is created, remains scoped to the current main thread, survives minimization, and ends from X or when the original page closes. Its transcript uses bounded browser memory and temporary server memory; draft, selections, completion statistics, and queue remain in browser memory. Pop-out moves the same instance into a new window; it depends on the original page remaining open.
@@ -140,7 +155,7 @@ Mock 回归位于 `src/composables/useDesktopState.test.ts`，两次修复共新
 | Item | Actions | Expected result |
 | --- | --- | --- |
 | Setup | Prepare desktop, 375x812 and 768x1024 viewports; repeat in light/dark themes. Generate over 20 turns, a response over 256 Ki characters and command output over 64 Ki characters. | Side assistant text, command output and reasoning deltas use the existing 50 ms batch path; completion/idle synchronization flushes pending content first. |
-| Retention | Continue sending while observing browser state and heap snapshots. Include a single turn with many commands. | Visible transcript retains at most 20 turns, 1000 items and an estimated 2 MiB text budget including live content and reasoning. A single huge turn is cropped by item, not exempted. |
+| Retention | Continue sending while observing browser state and heap snapshots. Include a single turn with many commands. | Following latest targets 20 turns, 1000 items and 2 MiB including live content and reasoning. Expanded history uses a separate 16 MiB / 1000-message admission cap; live updates stay bounded without evicting the reading body. A single huge temporary turn is still cropped by item in the normal live budget. |
 | Output | Expand a long completed command; page earlier/later output and copy full output. | State stores only the latest 64 Ki characters plus offset/total metadata. Older output and full copy read the temporary source only when requested. |
 | Text | Edit/copy a truncated user message and copy a truncated assistant response. Then expire the source and repeat. | A truncated marker is shown. Successful actions use the full source; an expired/running source shows an error without editing the draft or copying the preview as full content. |
 | Minimize | Keep a draft, skill, attachment and queued messages; minimize while running. | Only the transcript component unmounts. Its render caches/timers are cleared. Browser transcript drops to 10 turns and an estimated 512 KiB budget; draft, queue, selections and child execution remain. |

@@ -143,6 +143,9 @@
                 :is-loading-persisted-below="loadingNewer"
                 :load-later-messages="loadAgentNewerMessages"
                 :load-latest-messages="loadAgentLatestMessages"
+                :release-history="releaseAgentHistory"
+                :history-capacity-reached="agentHistoryCapacityReached"
+                @reading-history-change="onAgentReadingHistoryChange"
               />
             </template>
           </section>
@@ -214,13 +217,21 @@ const desktopPanelWidth = ref(loadDesktopPanelWidth())
 const desktopLayoutWidth = ref(typeof window === 'undefined' ? Number.POSITIVE_INFINITY : window.innerWidth)
 const desktopPanelCollapsed = ref(loadDesktopPanelCollapsed())
 const selectedThreadId = ref('')
+const agentReadingHistory = ref(false)
 const loadingThreadId = ref('')
 const {
   detail: selectedDetail, error: detailError, loadingOlder, loadingNewer,
   loading: agentWindowLoading,
   loadLatest: loadAgentLatestMessages, loadOlder: loadAgentOlderMessages,
   loadNewer: loadAgentNewerMessages, reset: resetAgentWindow, retry: retryAgentHistory,
+  releaseHistory: releaseAgentHistory, capacityReached: agentHistoryCapacityReached,
+  setReadingHistory: setAgentReadingHistory,
 } = useThreadHistoryWindow(selectedThreadId, props.prepareSnapshotForThread)
+
+function onAgentReadingHistoryChange(reading: boolean): void {
+  agentReadingHistory.value = reading
+  setAgentReadingHistory(reading)
+}
 let detailRequestId = 0
 let historyRequestId = 0
 const historyAgents = ref<UiSubagent[]>([])
@@ -240,12 +251,12 @@ const activeAgents = computed(() => allAgents.value.filter((agent) => isActiveSu
 const visibleAgents = computed(() => allAgents.value.filter((agent) => agentView.value === 'running' ? isActiveSubagentStatus(agent.status) : !isActiveSubagentStatus(agent.status)))
 const selectedAgent = computed(() => allAgents.value.find((agent) => agent.threadId === selectedThreadId.value) ?? null)
 const selectedAgentIndex = computed(() => allAgents.value.findIndex((agent) => agent.threadId === selectedThreadId.value))
-const selectedLiveOverlay = computed(() => selectedAgent.value && !selectedDetail.value?.hasMoreNewer
+const selectedLiveOverlay = computed(() => selectedAgent.value && !agentReadingHistory.value && !selectedDetail.value?.hasMoreNewer
   ? props.liveOverlayForThread(selectedAgent.value.threadId) : null)
 const selectedMessages = computed(() => {
   const detail = selectedDetail.value
   if (!detail) return []
-  if (detail.hasMoreNewer || !selectedAgent.value) return detail.messages
+  if (agentReadingHistory.value || detail.hasMoreNewer || !selectedAgent.value) return detail.messages
   const live = props.liveMessagesForThread(selectedAgent.value.threadId)
   if (!detail.inProgress && !isActiveSubagentStatus(selectedAgent.value.status)) {
     const persistedIds = new Set(detail.messages.map((message) => message.id))
@@ -454,6 +465,7 @@ function onDesktopResizerKeyDown(event: KeyboardEvent): void {
 async function selectAgent(threadId: string, force = false): Promise<void> {
   if (!allAgents.value.some((agent) => agent.threadId === threadId)) return
   if (selectedThreadId.value !== threadId) {
+    agentReadingHistory.value = false
     selectedDetail.value = null
     loadingOlder.value = false
   }
@@ -478,6 +490,7 @@ async function selectAgent(threadId: string, force = false): Promise<void> {
 }
 
 function closeDetail(): void {
+  agentReadingHistory.value = false
   detailRequestId += 1
   resetAgentWindow()
   selectedThreadId.value = ''
@@ -503,7 +516,10 @@ watch(
 watch(() => [selectedAgent.value?.threadId, selectedAgent.value?.status], ([threadId, status], previous) => {
   if (threadId && threadId === previous?.[0] && status !== previous?.[1] && !isActiveSubagentStatus(status)
     && !loadingOlder.value && !loadingNewer.value && !agentWindowLoading.value
-    && !selectedDetail.value?.hasMoreNewer) void selectAgent(threadId, true)
+    && !selectedDetail.value?.hasMoreNewer) {
+    if (agentReadingHistory.value && selectedDetail.value) selectedDetail.value = { ...selectedDetail.value, hasMoreNewer: true }
+    else void selectAgent(threadId, true)
+  }
 })
 
 watch(() => props.parentThreadId, () => {

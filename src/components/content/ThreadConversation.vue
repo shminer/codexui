@@ -13,11 +13,19 @@
       No messages in this thread yet.
     </p>
 
-    <ul
+    <DynamicScroller
       v-else
-      ref="conversationListRef"
+      :key="scrollerGeneration"
+      ref="scrollerRef"
       class="conversation-list"
+      :items="timeline"
+      :min-item-size="56"
+      :buffer="400"
+      :shift="true"
+      :emit-update="true"
       tabindex="0"
+      role="list"
+      @update="onVirtualUpdate"
       @scroll="onConversationScroll"
       @wheel.passive="onConversationWheel"
       @touchstart.passive="onConversationTouchStart"
@@ -25,18 +33,22 @@
       @pointerdown="onConversationPointerDown"
       @keydown="onConversationKeyDown"
     >
-      <li v-if="hasMoreAbove && !searchTargetId" class="conversation-load-more">
+      <template #before>
+      <div v-if="hasMoreAbove && !searchTargetId" class="conversation-load-more">
         <button
           type="button"
           class="load-more-button"
-          :disabled="isLoadingMore || isLoadingPersistedAbove"
+          :disabled="historyCapacityReached || isLoadingMore || isLoadingPersistedAbove"
           @click="loadMoreAbove"
         >
-          {{ isLoadingMore || isLoadingPersistedAbove ? 'Loading…' : 'Load earlier messages' }}
+          {{ t(isLoadingMore || isLoadingPersistedAbove ? 'Loading…' : 'Load earlier messages') }}
         </button>
-      </li>
-      <template v-for="message in visibleTimeline" :key="message?.id ?? 'live-overlay'">
-      <li v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay">
+      </div>
+      </template>
+      <template #default="{ item, index, active }">
+      <DynamicScrollerItem :item="item" :index="index" :active="active" class="conversation-virtual-row">
+      <template v-for="message in [item.message]" :key="item.id">
+      <div v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay" role="listitem">
         <div class="message-row">
           <div class="message-stack">
             <article class="live-overlay-inline" aria-live="polite">
@@ -49,10 +61,11 @@
             </article>
           </div>
         </div>
-      </li>
-      <li
+      </div>
+      <div
         v-else-if="message"
         class="conversation-item"
+        role="listitem"
         :class="{ 'is-search-target': message.id === searchTargetId }"
         :data-message-id="message.id"
         :data-role="message.role"
@@ -820,15 +833,21 @@
             >{{ formatMessageDateTime(message.createdAtIso) }}</time>
           </div>
         </div>
-      </li>
+      </div>
       </template>
-      <li v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more conversation-load-more-later">
-        <button type="button" class="load-more-button" :disabled="isLoadingMore || isLoadingPersistedBelow" @click="loadMoreBelow">{{ isLoadingMore || isLoadingPersistedBelow ? 'Loading…' : 'Load later messages' }}</button>
-      </li>
-      <li v-if="historyLoadError" class="conversation-history-error" role="status">{{ historyLoadError }}</li>
-      <li v-if="messageSourceError" class="conversation-history-error" role="status">{{ messageSourceError }}</li>
-      <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
-    </ul>
+      </DynamicScrollerItem>
+      </template>
+      <template #after>
+      <div v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more conversation-load-more-later">
+        <button type="button" class="load-more-button" :disabled="historyCapacityReached || isLoadingMore || isLoadingPersistedBelow" @click="loadMoreBelow">{{ t(isLoadingMore || isLoadingPersistedBelow ? 'Loading…' : 'Load later messages') }}</button>
+      </div>
+      <p v-if="historyLoadError" class="conversation-history-error" role="status">{{ historyLoadError }}</p>
+      <p v-if="messageSourceError" class="conversation-history-error" role="status">{{ messageSourceError }}</p>
+      <div class="conversation-bottom-anchor" />
+      </template>
+    </DynamicScroller>
+    <div v-if="historyCapacityReached" class="conversation-capacity" role="status">{{ t('History cache is full. Loaded messages are kept.') }}</div>
+    <button v-if="releaseHistory && (showJumpToLatestButton || historyCapacityReached || hasMoreAbove)" type="button" class="conversation-release-history" :disabled="isLoadingLatest || isLoadingMore" @click="jumpToLatest(true)">{{ t('Release history and return to latest') }}</button>
 
     <button
       v-if="showJumpToLatestButton"
@@ -837,7 +856,7 @@
       title="Jump to latest"
       aria-label="Jump to latest output"
       :disabled="isLoadingLatest || isLoadingMore"
-      @click="jumpToLatest"
+      @click="jumpToLatest()"
     >
       <IconTablerArrowUp class="icon-svg jump-to-latest-icon" />
     </button>
@@ -998,6 +1017,8 @@
 <script setup lang="ts">
 import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { DynamicScroller, DynamicScrollerItem, type DynamicScrollerExposed } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import type { ThreadHistorySource, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { getThreadResourceSource, updateThreadFileChanges } from '../../api/codexGateway'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -1007,14 +1028,8 @@ import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard } from '../../utils/clipboard'
 import { createMessageCopyController, isCopyableUserMessage } from './messageCopyController'
 import {
-  clampThreadRenderWindow,
-  clampThreadRenderWindowStart,
-  earlierThreadRenderWindow,
   historyScrollDirection,
   filterRenderableThreadMessages,
-  laterThreadRenderWindow,
-  latestThreadRenderWindowStart,
-  THREAD_RENDER_HISTORY_LIMIT,
 } from './threadConversationWindow'
 import { BoundedRenderCache } from './boundedRenderCache'
 import type { ListItem, MessageBlock, TableAlignment, TaskListItem } from './messageBlockTypes'
@@ -1450,6 +1465,8 @@ const props = withDefaults(defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
+  releaseHistory?: (threadId: string) => Promise<void>
+  historyCapacityReached?: boolean
 }>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined })
 
 const emit = defineEmits<{
@@ -1458,9 +1475,15 @@ const emit = defineEmits<{
   implementPlan: [payload: { turnId: string }]
   referenceResource: [resource: UiThreadResource]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
+  readingHistoryChange: [reading: boolean]
 }>()
 
-const conversationListRef = ref<HTMLElement | null>(null)
+type TimelineRow = { id: string; message: UiMessage | null }
+const scrollerRef = ref<(Omit<DynamicScrollerExposed<TimelineRow>, 'cacheSnapshot'> & { $el: HTMLElement }) | null>(null)
+const conversationListRef = computed(() => scrollerRef.value?.$el ?? null)
+const scrollerGeneration = ref(0)
+const virtualStart = ref(0)
+const virtualEnd = ref(0)
 const searchPanel = ref<InstanceType<typeof ThreadSearchPanel> | null>(null)
 const resourcesPanel = ref<InstanceType<typeof ThreadResourcesPanel> | null>(null)
 const searchOpen = ref(false)
@@ -1480,8 +1503,6 @@ const messageSourceError = ref('')
 let messageSourceGeneration = 0
 const searchTargetId = ref('')
 const searchTurnMessages = ref<UiMessage[]>([])
-const searchWindowEnd = ref<number | undefined>(undefined)
-const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const messageCopy = createMessageCopyController({
   getThreadId: () => props.activeThreadId,
@@ -1568,8 +1589,6 @@ function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: n
 
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 200
 
-const renderWindowStart = ref(0)
-const renderWindowEnd = ref<number | undefined>(undefined)
 const isLoadingMore = ref(false)
 const isLoadingLatest = ref(false)
 const historyLoadError = ref('')
@@ -2033,26 +2052,21 @@ const renderableMessages = computed(() => {
   }
   return filterRenderableThreadMessages(messages, hiddenCommands, hiddenChanges)
 })
-const effectiveRenderWindowStart = computed(() => clampThreadRenderWindowStart(
-  renderWindowStart.value,
-  renderableMessages.value.length,
-))
-const effectiveRenderWindow = computed(() => clampThreadRenderWindow(
-  effectiveRenderWindowStart.value,
-  searchWindowEnd.value ?? renderWindowEnd.value ?? renderableMessages.value.length,
-  renderableMessages.value.length,
-))
-const visibleMessages = computed(() => renderableMessages.value.slice(effectiveRenderWindow.value.start, effectiveRenderWindow.value.end))
-const visibleTimeline = computed<Array<UiMessage | null>>(() => {
-  const rows: Array<UiMessage | null> = [...visibleMessages.value]
+const timeline = computed<TimelineRow[]>(() => {
+  const rows: TimelineRow[] = renderableMessages.value.map((message) => ({ id: message.id, message }))
   if (!props.liveOverlay) return rows
-  const steeringIndex = props.liveOverlay.turnId ? rows.findIndex((message) => message?.turnId === props.liveOverlay?.turnId
+  const steeringIndex = props.liveOverlay.turnId ? rows.findIndex(({ message }) => message?.turnId === props.liveOverlay?.turnId
     && (message?.messageType === 'userMessage.optimistic.steer' || message?.messageType === 'userMessage.steer')) : -1
-  rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, null)
+  rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, { id: 'conversation:live-overlay', message: null })
   return rows
 })
-const hasMoreAbove = computed(() => effectiveRenderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
-const hasMoreBelow = computed(() => effectiveRenderWindow.value.end < renderableMessages.value.length || props.hasMorePersistedBelow === true)
+const visibleMessages = computed(() => timeline.value.slice(virtualStart.value, virtualEnd.value).flatMap((row) => row.message ? [row.message] : []))
+function onVirtualUpdate(start: number, end: number): void {
+  virtualStart.value = start
+  virtualEnd.value = end
+}
+const hasMoreAbove = computed(() => props.hasMorePersistedAbove === true)
+const hasMoreBelow = computed(() => props.hasMorePersistedBelow === true)
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
   return anchoredFileChangeSummaryByAnchorId.value[message.id] ?? null
@@ -4142,11 +4156,10 @@ function onRejectUnknownRequest(requestId: number): void {
 }
 
 function scrollToBottom(): void {
+  const last = timeline.value.length - 1
+  if (last >= 0) scrollerRef.value?.scrollToItem(last, { align: 'end' })
   const container = conversationListRef.value
-  const anchor = bottomAnchorRef.value
-  if (!container || !anchor) return
-  container.scrollTop = container.scrollHeight
-  anchor.scrollIntoView({ block: 'end' })
+  if (container) container.scrollTop = container.scrollHeight
 }
 
 function isAtBottom(container: HTMLElement): boolean {
@@ -4204,19 +4217,17 @@ function onPendingImageSettled(): void {
   scheduleBottomLock(3)
 }
 
-function setLatestRenderWindow(): void {
-  renderWindowStart.value = latestThreadRenderWindowStart(renderableMessages.value.length)
-  renderWindowEnd.value = renderableMessages.value.length
-}
-
-async function jumpToLatest(): Promise<void> {
+async function jumpToLatest(release = false): Promise<void> {
   if (isLoadingLatest.value || isLoadingMore.value) return
   const threadId = props.activeThreadId
   const generation = ++navigationGeneration
   isLoadingLatest.value = true
   historyLoadError.value = ''
   try {
-    if (props.isHistoryWindow || props.hasMorePersistedBelow) {
+    if (release) {
+      if (!props.releaseHistory) return
+      await props.releaseHistory(threadId)
+    } else if (props.isHistoryWindow || props.hasMorePersistedBelow) {
       if (!props.loadLatestMessages) throw new Error('Latest message loading is not available.')
       await props.loadLatestMessages(threadId)
     }
@@ -4225,10 +4236,8 @@ async function jumpToLatest(): Promise<void> {
     if (threadId !== props.activeThreadId || generation !== navigationGeneration) return
     if (props.isHistoryWindow || props.hasMorePersistedBelow) throw new Error('Latest message window is not available.')
     searchTurnMessages.value = []
-    searchWindowEnd.value = undefined
     searchTargetId.value = ''
     autoFollowOutput.value = true
-    setLatestRenderWindow()
     await scheduleConversationScroll()
   } catch (cause) {
     if (threadId === props.activeThreadId && generation === navigationGeneration) {
@@ -4250,11 +4259,10 @@ async function locateMessage(itemId: string): Promise<void> {
   const threadId = props.activeThreadId
   const previousTarget = searchTargetId.value
   searchTargetId.value = itemId
-  const index = renderableMessages.value.findIndex((message) => message.id === itemId)
+  const index = timeline.value.findIndex((row) => row.id === itemId)
   if (index < 0) { searchTargetId.value = previousTarget; return }
   autoFollowOutput.value = false
-  renderWindowStart.value = Math.max(0, index - 5)
-  searchWindowEnd.value = renderWindowStart.value + 50
+  scrollerRef.value?.scrollToItem(index, { align: 'center' })
   await nextTick()
   if (threadId !== props.activeThreadId) return
   conversationListRef.value?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(itemId)}"]`)?.scrollIntoView({ block: 'center' })
@@ -4269,6 +4277,24 @@ async function onSearchLocate(value: { threadId: string; itemId: string; message
 type ConversationAnchor = { id: string; offset: number }
 let lastConversationScrollTop = 0
 let conversationTouchY = 0
+let paginationIntent: 'earlier' | 'later' | 'either' | null = null
+const historyEdgeArmed = { earlier: true, later: true }
+
+watch(autoFollowOutput, (following) => emit('readingHistoryChange', !following), { immediate: true, flush: 'sync' })
+
+// A popup uses another document/ResizeObserver context. Remount measurements there.
+watch(() => props.ownerDocument, async () => {
+  const anchor = autoFollowOutput.value ? null : captureConversationAnchor()
+  scrollerGeneration.value += 1
+  await nextTick()
+  if (autoFollowOutput.value) await scheduleConversationScroll()
+  else if (anchor) {
+    const index = timeline.value.findIndex((row) => row.id === anchor.id)
+    if (index >= 0) scrollerRef.value?.scrollToItem(index)
+    await nextTick()
+    restoreConversationAnchor(anchor)
+  }
+})
 
 function captureConversationAnchor(): ConversationAnchor | null {
   const container = conversationListRef.value
@@ -4295,36 +4321,34 @@ function restoreConversationAnchor(anchor: ConversationAnchor | null): void {
 async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> {
   const container = conversationListRef.value
   const hasMore = direction === 'earlier' ? hasMoreAbove.value : hasMoreBelow.value
-  if (!container || !hasMore || isLoadingMore.value || isLoadingLatest.value || props.isLoadingPersistedAbove || props.isLoadingPersistedBelow) return
+  if (!container || !hasMore || props.historyCapacityReached || isLoadingMore.value || isLoadingLatest.value || props.isLoadingPersistedAbove || props.isLoadingPersistedBelow) return
 
   autoFollowOutput.value = false
   isLoadingMore.value = true
   const threadIdAtStart = props.activeThreadId
   const generation = ++navigationGeneration
-  const anchor = captureConversationAnchor()
   historyLoadError.value = ''
 
   try {
-    if (direction === 'earlier' && effectiveRenderWindowStart.value === 0 && props.hasMorePersistedAbove) {
+    if (direction === 'earlier' && props.hasMorePersistedAbove) {
       if (!props.loadEarlierMessages) throw new Error('Earlier message loading is not available.')
       await props.loadEarlierMessages(threadIdAtStart)
-    } else if (direction === 'later' && effectiveRenderWindow.value.end >= renderableMessages.value.length && props.hasMorePersistedBelow) {
+    } else if (direction === 'later' && props.hasMorePersistedBelow) {
       if (!props.loadLaterMessages) throw new Error('Later message loading is not available.')
       await props.loadLaterMessages(threadIdAtStart)
     }
     if (props.activeThreadId !== threadIdAtStart || generation !== navigationGeneration) return
-    const moveWindow = direction === 'earlier' ? earlierThreadRenderWindow : laterThreadRenderWindow
-    const window = moveWindow(effectiveRenderWindowStart.value, effectiveRenderWindow.value.end, renderableMessages.value.length)
-    renderWindowStart.value = window.start
-    renderWindowEnd.value = window.end
     await nextTick()
-    if (props.activeThreadId === threadIdAtStart && generation === navigationGeneration) restoreConversationAnchor(anchor)
+    lastConversationScrollTop = container.scrollTop
   } catch (cause) {
     if (props.activeThreadId === threadIdAtStart && generation === navigationGeneration) {
       historyLoadError.value = cause instanceof Error ? cause.message : 'Failed to load message history.'
     }
   } finally {
-    if (generation === navigationGeneration) isLoadingMore.value = false
+    if (generation === navigationGeneration) {
+      isLoadingMore.value = false
+      paginationIntent = null
+    }
   }
 }
 
@@ -4383,11 +4407,6 @@ watch(
   () => props.messages,
   async (next) => {
     if (props.isLoading) return
-    const threadId = props.activeThreadId
-    const anchor = autoFollowOutput.value ? null : captureConversationAnchor()
-    const previousRows = conversationListRef.value?.querySelectorAll<HTMLElement>('[data-message-id]')
-    const firstRenderedId = previousRows?.[0]?.dataset.messageId
-    const previousSize = Math.min(THREAD_RENDER_HISTORY_LIMIT, previousRows?.length || 50)
 
     const commandIds = new Set(
       next
@@ -4413,23 +4432,7 @@ watch(
       ]),
     )
 
-    if (autoFollowOutput.value) {
-      setLatestRenderWindow()
-    } else {
-      const retainedStart = firstRenderedId ? renderableMessages.value.findIndex((message) => message.id === firstRenderedId) : -1
-      const anchorIndex = anchor ? renderableMessages.value.findIndex((message) => message.id === anchor.id) : -1
-      const previousAnchorIndex = anchor && previousRows ? Array.from(previousRows).findIndex((row) => row.dataset.messageId === anchor.id) : -1
-      renderWindowStart.value = retainedStart >= 0
-        ? retainedStart
-        : anchorIndex >= 0 && previousAnchorIndex >= 0
-          ? Math.max(0, anchorIndex - previousAnchorIndex)
-          : clampThreadRenderWindowStart(renderWindowStart.value, renderableMessages.value.length)
-      renderWindowEnd.value = Math.min(renderableMessages.value.length, renderWindowStart.value + previousSize)
-      if (searchTargetId.value) searchWindowEnd.value = renderWindowStart.value + 50
-    }
-
     await scheduleConversationScroll()
-    if (threadId === props.activeThreadId && !autoFollowOutput.value) restoreConversationAnchor(anchor)
   },
 )
 
@@ -4482,7 +4485,6 @@ watch(
   () => props.isLoading,
   async (loading) => {
     if (loading) return
-    if (autoFollowOutput.value) setLatestRenderWindow()
     await scheduleConversationScroll()
   },
   { immediate: true },
@@ -4505,7 +4507,7 @@ watch(
     navigationGeneration += 1
     searchTargetId.value = ''
     searchTurnMessages.value = []
-    searchWindowEnd.value = undefined
+    scrollerGeneration.value += 1
     clearRenderCaches()
     expandedCommandIds.value = new Set()
     collapsedAutoCommandIds.value = new Set()
@@ -4528,6 +4530,8 @@ watch(
     isLoadingLatest.value = false
     historyLoadError.value = ''
     lastConversationScrollTop = 0
+    paginationIntent = null
+    historyEdgeArmed.earlier = historyEdgeArmed.later = true
     conversationTouchY = 0
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
@@ -4537,21 +4541,30 @@ watch(
       return
     }
     // Apply immediately for cached threads where isLoading never toggles.
-    setLatestRenderWindow()
     await scheduleConversationScroll()
   },
   { flush: 'post' },
 )
 
 function stopFollowingForEarlierScroll(target: EventTarget | null): void {
-  for (let node = target as HTMLElement | null; node && node !== conversationListRef.value; node = node.parentElement) {
-    if (node.scrollTop > 0 && /^(auto|scroll)$/.test(node.ownerDocument.defaultView?.getComputedStyle(node).overflowY ?? '')) return
-  }
+  if (innerScrollConsumes(target, 'earlier')) return
   autoFollowOutput.value = false
 }
 
+function innerScrollConsumes(target: EventTarget | null, direction: 'earlier' | 'later'): boolean {
+  for (let node = target as HTMLElement | null; node && node !== conversationListRef.value; node = node.parentElement) {
+    const canMove = direction === 'earlier' ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight
+    if (canMove && /^(auto|scroll)$/.test(node.ownerDocument.defaultView?.getComputedStyle(node).overflowY ?? '')) return true
+  }
+  return false
+}
+
 function onConversationWheel(event: WheelEvent): void {
-  if (!event.ctrlKey && event.deltaY < 0) stopFollowingForEarlierScroll(event.target)
+  if (event.ctrlKey || !event.deltaY) return
+  const direction = event.deltaY < 0 ? 'earlier' : 'later'
+  if (innerScrollConsumes(event.target, direction)) return
+  paginationIntent = direction
+  if (direction === 'earlier') autoFollowOutput.value = false
 }
 
 function onConversationTouchStart(event: TouchEvent): void {
@@ -4561,7 +4574,13 @@ function onConversationTouchStart(event: TouchEvent): void {
 function onConversationTouchMove(event: TouchEvent): void {
   const y = event.touches[0]?.clientY
   if (y === undefined) return
-  if (event.touches.length === 1 && y > conversationTouchY) stopFollowingForEarlierScroll(event.target)
+  if (event.touches.length === 1 && y !== conversationTouchY) {
+    const direction = y > conversationTouchY ? 'earlier' : 'later'
+    if (!innerScrollConsumes(event.target, direction)) {
+      paginationIntent = direction
+      if (direction === 'earlier') autoFollowOutput.value = false
+    }
+  }
   conversationTouchY = y
 }
 
@@ -4572,6 +4591,7 @@ function onConversationPointerDown(event: PointerEvent): void {
   const scrollbarWidth = Math.max(12, container.offsetWidth - container.clientWidth)
   if (event.button === 1 || (event.target === container && event.clientX >= right - scrollbarWidth)) {
     autoFollowOutput.value = false
+    paginationIntent = 'either'
   }
 }
 
@@ -4579,6 +4599,9 @@ function onConversationKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented || (event.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]')) return
   if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) {
     stopFollowingForEarlierScroll(event.target)
+    paginationIntent = 'earlier'
+  } else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) {
+    paginationIntent = 'later'
   }
 }
 
@@ -4590,12 +4613,21 @@ function onConversationScroll(): void {
   lastConversationScrollTop = container.scrollTop
   if (props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
   if (searchTargetId.value) return
+  if (paginationIntent) {
+    if (container.scrollTop >= LOAD_MORE_SCROLL_THRESHOLD_PX) historyEdgeArmed.earlier = true
+    if (container.scrollHeight - container.scrollTop - container.clientHeight >= LOAD_MORE_SCROLL_THRESHOLD_PX) historyEdgeArmed.later = true
+  }
   // Content growth and scroll anchoring also emit scroll; only user intent stops following.
   if (shouldLockToBottom()) {
+    paginationIntent = null
     if (!isAtBottom(container)) scheduleBottomLock(3)
     return
   }
-  autoFollowOutput.value = container.scrollTop > previousTop && isAtBottom(container) && !props.isHistoryWindow && !hasMoreBelow.value
+  if (paginationIntent && container.scrollTop > previousTop && isAtBottom(container) && !hasMoreBelow.value) autoFollowOutput.value = true
+  if (!direction || (paginationIntent !== direction && paginationIntent !== 'either')) return
+  paginationIntent = null
+  if (!historyEdgeArmed[direction]) return
+  historyEdgeArmed[direction] = false
   if (direction === 'earlier' && hasMoreAbove.value) {
     void loadMoreAbove()
   } else if (direction === 'later' && hasMoreBelow.value) {
@@ -4675,7 +4707,20 @@ onBeforeUnmount(() => {
 }
 
 .conversation-list {
-  @apply h-full min-h-0 list-none m-0 px-2 sm:px-6 py-0 overflow-y-auto overflow-x-visible flex flex-col gap-2 sm:gap-3;
+  @apply flex-1 h-full min-h-0 list-none m-0 px-2 sm:px-6 py-0 overflow-y-auto overflow-x-hidden;
+  overflow-anchor: none;
+}
+
+.conversation-virtual-row {
+  @apply pb-2 sm:pb-3;
+}
+
+.conversation-capacity {
+  @apply px-4 py-1 text-xs text-zinc-500 dark:text-zinc-400;
+}
+
+.conversation-release-history {
+  @apply self-center shrink-0 px-3 py-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100;
 }
 
 .conversation-load-more {

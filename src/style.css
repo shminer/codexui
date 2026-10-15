@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github-dark.css";
 
+:root.dark .conversation-capacity,
+:root.dark .conversation-release-history { color: #a1a1aa; }
+:root.dark .conversation-release-history:hover { color: #f4f4f5; }
+
 .thread-header-actions { position: relative; }
 .composer-dropdown-menu-wrap-teleported .composer-dropdown-menu { width: min(18rem, calc(100vw - 1rem)); min-width: min(14rem, calc(100vw - 1rem)); }
 .composer-dropdown-menu-wrap-teleported .composer-dropdown-option { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

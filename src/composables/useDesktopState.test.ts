@@ -5295,7 +5295,7 @@ describe('bounded thread working sets', () => {
     expect(state.messages.value.map(message => message.id)).toEqual(['A', 'C'])
     expect(state.getCurrentTurnMessagesForThread('thread-1')[0]?.text).toHaveLength(800_000)
     gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce({ messages: [{ ...current, text: `${current.text}${'d'.repeat(200_000)}` }], inProgress: true, activeTurnId: 'turn-C', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-C': 1 } })
-    await state.loadLatestMessages()
+    await state.releaseThreadHistory('thread-1')
     expect(state.selectedThreadIsHistoryWindow.value).toBe(false)
     expect(state.messages.value.map(message => message.id)).toEqual(['C'])
     expect(state.messages.value[0]?.text).toHaveLength(800_000)
@@ -5676,115 +5676,83 @@ describe('bounded thread working sets', () => {
     state.stopPolling()
   })
 
-  it('slides both directions without accumulating history and replaces it when returning to latest', async () => {
+  it('keeps expanded history across scrolling state, duplicate sync and ordinary return to latest', async () => {
     const state = useDesktopState()
     state.primeSelectedThread('bounded')
     await state.loadMessages('bounded')
-    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    state.setThreadReadingHistory('bounded', true)
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10)).mockResolvedValueOnce(page(0, 10))
     await state.loadOlderMessages()
-    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(0, 10))
     await state.loadOlderMessages()
-    expect(state.messages.value.map((message) => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index))
-    expect(state.hasMoreNewerMessages.value).toBe(true)
-
-    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(30, 10), model: '', modelProvider: '', subagents: [] })
-    await state.loadMessages('bounded', { silent: true, force: true })
-    expect(state.messages.value.at(-1)?.turnIndex).toBe(19)
-
-    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(page(20, 10, true))
-    await state.loadNewerMessages()
-    expect(gatewayMocks.getNewerThreadMessages).toHaveBeenCalledWith('bounded', 'turn-19')
-    expect(state.messages.value[0].turnIndex).toBe(10)
-    expect(state.messages.value.at(-1)?.turnIndex).toBe(29)
-    await state.loadLatestMessages()
-    expect(state.messages.value[0].turnIndex).toBe(20)
-    expect(state.messages.value.at(-1)?.turnIndex).toBe(39)
+    const indexes = Array.from({ length: 30 }, (_, index) => index)
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
     expect(state.hasMoreNewerMessages.value).toBe(false)
+    state.setThreadReadingHistory('bounded', false)
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(20, 10), model: '', modelProvider: '', subagents: [] })
+    await state.loadMessages('bounded', { silent: true, force: true })
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(page(20, 10))
+    await state.loadLatestMessages()
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
+    expect(state.selectedThreadHistoryCapacityReached.value).toBe(false)
+    await state.releaseThreadHistory('bounded')
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index + 20))
     state.stopPolling()
   })
 
-  it('reaches an oversized middle turn in both directions without skipping history', async () => {
-    const historyPage = (start: number, count: number) => {
-      const result = { ...page(start, count, start + count < 50), nextTurnIndex: 50 }
-      const oversized = result.messages.find(message => message.turnId === 'turn-25')
-      if (oversized) oversized.text = 'x'.repeat(2 * 1024 * 1024)
-      return result
-    }
-    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(30, 20), model: '', modelProvider: '', subagents: [] })
-    gatewayMocks.getOlderThreadMessages
-      .mockResolvedValueOnce(historyPage(20, 10))
-      .mockResolvedValueOnce(historyPage(16, 10))
-      .mockResolvedValueOnce(historyPage(15, 10))
-      .mockResolvedValueOnce(historyPage(5, 10))
-      .mockResolvedValueOnce(historyPage(0, 5))
-    gatewayMocks.getNewerThreadMessages
-      .mockResolvedValueOnce(historyPage(20, 10))
-      .mockResolvedValueOnce(historyPage(25, 10))
-      .mockResolvedValueOnce(historyPage(26, 10))
-      .mockResolvedValueOnce(historyPage(36, 10))
-      .mockResolvedValueOnce(historyPage(46, 4))
+  it('keeps a turn larger than the normal budget in expanded history without replacing the latest end', async () => {
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(30, 20), model: '', modelProvider: '', subagents: [] })
+    const older = page(20, 10)
+    older.messages[5].text = 'x'.repeat(2 * 1024 * 1024)
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(older).mockResolvedValueOnce(page(10, 10))
     const state = useDesktopState()
     state.primeSelectedThread('bounded')
     await state.loadMessages('bounded')
-    const visited = new Set(state.messages.value.map(message => message.turnIndex ?? -1))
-    for (const direction of ['older', 'newer'] as const) {
-      const load = direction === 'older' ? state.loadOlderMessages : state.loadNewerMessages
-      for (let step = 0; step < 5; step += 1) {
-        await load()
-        for (const message of state.messages.value) visited.add(message.turnIndex ?? -1)
-        expect(state.messages.value.length).toBeLessThanOrEqual(20)
-        if (step === 1) {
-          expect(state.messages.value).toHaveLength(1)
-          expect(state.messages.value[0]).toMatchObject({ turnId: 'turn-25', turnIndex: 25 })
-          expect(state.messages.value[0].text).toHaveLength(2 * 1024 * 1024)
-          expect(state.hasMoreOlderMessages.value).toBe(true)
-          expect(state.hasMoreNewerMessages.value).toBe(true)
-        }
-      }
-      expect([...visited].sort((left, right) => left - right)).toEqual(Array.from({ length: 50 }, (_, index) => index))
-      visited.clear()
-      for (const message of state.messages.value) visited.add(message.turnIndex ?? -1)
-    }
+    await state.loadOlderMessages()
+    await state.loadOlderMessages()
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 40 }, (_, index) => index + 10))
+    expect(state.messages.value.find(message => message.turnId === 'turn-25')?.text).toHaveLength(2 * 1024 * 1024)
     expect(gatewayMocks.getOlderThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
-      ['bounded', 'turn-30'], ['bounded', 'turn-26'], ['bounded', 'turn-25'], ['bounded', 'turn-15'], ['bounded', 'turn-5'],
+      ['bounded', 'turn-30'], ['bounded', 'turn-20'],
     ])
-    expect(gatewayMocks.getNewerThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
-      ['bounded', 'turn-19'], ['bounded', 'turn-24'], ['bounded', 'turn-25'], ['bounded', 'turn-35'], ['bounded', 'turn-45'],
-    ])
-    expect(state.hasMoreNewerMessages.value).toBe(false)
+    state.stopPolling()
+  })
+
+  it('keeps manual reading until an explicit successful latest snapshot with new content', async () => {
+    const state = useDesktopState()
+    state.primeSelectedThread('bounded')
+    await state.loadMessages('bounded')
+    state.setThreadReadingHistory('bounded', true)
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(10, 10))
+    await state.loadOlderMessages()
+    gatewayMocks.getLatestThreadMessages.mockResolvedValueOnce(page(30, 20))
+    await state.loadLatestMessages()
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index + 30))
+    state.setThreadReadingHistory('bounded', false)
     expect(state.messages.value.map(message => message.turnIndex)).toEqual(Array.from({ length: 20 }, (_, index) => index + 30))
     state.stopPolling()
   })
 
-  it('keeps reading history when a final newer page is only partly retained', async () => {
-    const historyPage = (start: number, count: number) => {
-      const result = { ...page(start, count, start + count < 30), nextTurnIndex: 30 }
-      const oversized = result.messages.find(message => message.turnId === 'turn-25')
-      if (oversized) oversized.text = 'x'.repeat(2 * 1024 * 1024)
-      return result
-    }
-    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(20, 10), model: '', modelProvider: '', subagents: [] })
-    gatewayMocks.getOlderThreadMessages
-      .mockResolvedValueOnce(historyPage(16, 10))
-      .mockResolvedValueOnce(historyPage(15, 10))
-      .mockResolvedValueOnce(historyPage(5, 10))
-      .mockResolvedValueOnce(historyPage(0, 5))
+  it('admits only the adjacent complete portion at the hard limit and preserves it if release fails', async () => {
+    const older = page(10, 10)
+    older.messages[5].text = 'x'.repeat(8 * 1024 * 1024)
+    gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(older)
     const state = useDesktopState()
     state.primeSelectedThread('bounded')
     await state.loadMessages('bounded')
-    for (let step = 0; step < 4; step += 1) await state.loadOlderMessages()
-    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(historyPage(20, 10))
-    await state.loadNewerMessages()
-    expect(state.messages.value.at(-1)?.turnIndex).toBe(24)
-    expect(state.hasMoreNewerMessages.value).toBe(true)
-    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...historyPage(20, 10), model: '', modelProvider: '', subagents: [] })
-    await state.loadMessages('bounded', { silent: true, force: true })
-    expect(state.messages.value.at(-1)?.turnIndex).toBe(24)
-    expect(state.hasMoreNewerMessages.value).toBe(true)
-    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce(historyPage(25, 5))
-    await state.loadNewerMessages()
-    expect(gatewayMocks.getNewerThreadMessages).toHaveBeenLastCalledWith('bounded', 'turn-24')
-    expect(state.messages.value.map(message => message.turnIndex)).toEqual([25])
+    await state.loadOlderMessages()
+    const indexes = Array.from({ length: 14 }, (_, index) => index + 16)
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
+    expect(state.selectedThreadHistoryCapacityReached.value).toBe(true)
+    expect(state.hasMoreOlderMessages.value).toBe(true)
+    await state.loadOlderMessages()
+    expect(gatewayMocks.getOlderThreadMessages).toHaveBeenCalledTimes(1)
+    gatewayMocks.getLatestThreadMessages.mockRejectedValueOnce(new Error('offline'))
+    await expect(state.releaseThreadHistory('bounded')).rejects.toThrow('offline')
+    expect(state.messages.value.map(message => message.turnIndex)).toEqual(indexes)
+    expect(state.selectedThreadHistoryCapacityReached.value).toBe(true)
+    await state.releaseThreadHistory('bounded')
+    expect(state.selectedThreadHistoryCapacityReached.value).toBe(false)
+    expect(state.messages.value[0]?.turnIndex).toBe(20)
     state.stopPolling()
   })
 
@@ -5944,14 +5912,16 @@ describe('bounded thread working sets', () => {
     await state.loadOlderMessages()
     gatewayMocks.getOlderThreadMessages.mockResolvedValueOnce(page(0, 10))
     await state.loadOlderMessages()
-    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({ ...page(20, 10, true), messages: [] })
-    await state.loadNewerMessages()
+    gatewayMocks.getThreadDetail.mockResolvedValueOnce({ ...page(40, 10), model: '', modelProvider: '', subagents: [] })
+    await state.loadMessages('bounded', { silent: true, force: true })
     gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({ ...page(30, 10, true), messages: [] })
     await state.loadNewerMessages()
+    gatewayMocks.getNewerThreadMessages.mockResolvedValueOnce({ ...page(40, 10, true), messages: [] })
+    await state.loadNewerMessages()
     expect(gatewayMocks.getNewerThreadMessages.mock.calls.map(call => call.slice(0, 2))).toEqual([
-      ['bounded', 'turn-19'], ['bounded', 'turn-29'],
+      ['bounded', 'turn-29'], ['bounded', 'turn-39'],
     ])
-    expect(state.messages.value).toHaveLength(20)
+    expect(state.messages.value).toHaveLength(30)
     state.stopPolling()
   })
 

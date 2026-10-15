@@ -3,7 +3,7 @@ import { getLatestThreadMessages, getNewerThreadMessages, getOlderThreadMessages
 import {
   ACTIVE_THREAD_TEXT_BUDGET,
   ACTIVE_THREAD_TURN_LIMIT,
-  getThreadPageFocusTurnId,
+  admitThreadHistoryPage,
   retainThreadMessageWindow,
 } from './threadMessageRetention'
 
@@ -16,8 +16,11 @@ export function useThreadHistoryWindow(
   const loadingOlder = ref(false)
   const loadingNewer = ref(false)
   const error = ref('')
+  const capacityReached = ref(false)
   let generation = 0
   let lastDirection: 'latest' | 'older' | 'newer' = 'latest'
+  let lastReleaseHistory = false
+  let historyChanged = false
   let olderAnchor = ''
   let newerAnchor = ''
 
@@ -26,18 +29,39 @@ export function useThreadHistoryWindow(
     detail.value = null
     loading.value = loadingOlder.value = loadingNewer.value = false
     error.value = ''
+    capacityReached.value = false
+    lastReleaseHistory = false
+    historyChanged = false
     olderAnchor = newerAnchor = ''
   }
 
-  async function load(direction: 'latest' | 'older' | 'newer'): Promise<void> {
+  function setReadingHistory(reading: boolean): void {
+    const current = detail.value
+    if (reading || !historyChanged || !current || current.hasMoreNewer) return
+    const retained = retainThreadMessageWindow(current.messages, {
+      maxTurns: ACTIVE_THREAD_TURN_LIMIT, maxBytes: ACTIVE_THREAD_TEXT_BUDGET, direction: 'latest',
+    })
+    if (retained.removedOlder) olderAnchor = retained.messages.find(message => message.turnId)?.turnId ?? olderAnchor
+    const ids = new Set(retained.messages.map(message => message.turnId))
+    detail.value = { ...current, messages: retained.messages,
+      hasMoreOlder: current.hasMoreOlder || retained.removedOlder,
+      startTurnIndex: current.turnIndexByTurnId[olderAnchor] ?? current.startTurnIndex,
+      turnIndexByTurnId: Object.fromEntries(Object.entries(current.turnIndexByTurnId).filter(([id]) => ids.has(id) || id === olderAnchor || id === newerAnchor)) }
+    capacityReached.value = false
+    historyChanged = false
+  }
+
+  async function load(direction: 'latest' | 'older' | 'newer', releaseHistory = false): Promise<void> {
     const id = threadId.value
     const previous = detail.value
     if (!id || (direction !== 'latest' && (!previous || loading.value || loadingOlder.value || loadingNewer.value))) return
+    if (direction !== 'latest' && capacityReached.value) return
     const anchor = direction === 'older' ? olderAnchor : newerAnchor
     if (direction !== 'latest' && !anchor) return
     const request = ++generation
     const acceptSnapshot = prepareLatestSnapshot?.(id)
     lastDirection = direction
+    lastReleaseHistory = releaseHistory
     loading.value = direction === 'latest'
     loadingOlder.value = direction === 'older'
     loadingNewer.value = direction === 'newer'
@@ -49,34 +73,65 @@ export function useThreadHistoryWindow(
           ? await getOlderThreadMessages(id, anchor)
           : await getNewerThreadMessages(id, anchor)
       if (request !== generation || id !== threadId.value) return
-      const merged = direction === 'latest' ? page.messages : direction === 'older'
-        ? [...page.messages, ...previous!.messages] : [...previous!.messages, ...page.messages]
-      const window = retainThreadMessageWindow([...new Map(merged.map((message) => [message.id, message])).values()], {
-        maxTurns: ACTIVE_THREAD_TURN_LIMIT,
-        maxBytes: ACTIVE_THREAD_TEXT_BUDGET,
-        direction: direction === 'older' ? 'earliest' : 'latest',
-        focusTurnId: direction === 'latest' ? undefined : getThreadPageFocusTurnId(page.messages, direction),
+      const previousById = new Map(previous?.messages.map(message => [message.id, message]))
+      const lastIndex = previous?.turnIndexByTurnId[newerAnchor] ?? -1
+      const hasNewContent = direction === 'latest' && page.messages.some(message => {
+        const old = previousById.get(message.id)
+        return old ? !old.text.startsWith(message.text)
+          || (message.commandExecution?.outputTotalLength ?? message.commandExecution?.aggregatedOutput.length ?? 0) > (old.commandExecution?.outputTotalLength ?? old.commandExecution?.aggregatedOutput.length ?? 0)
+          : (message.turnIndex ?? page.turnIndexByTurnId[message.turnId ?? ''] ?? -1) >= lastIndex
       })
-      const indices = { ...(direction === 'latest' ? {} : previous?.turnIndexByTurnId), ...page.turnIndexByTurnId }
-      const retainedIds = new Set(window.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
-      const omittedLatestBoundary = direction === 'older' && window.messages.length > 0
-        && Boolean(newerAnchor) && !retainedIds.has(newerAnchor)
+      const replace = !previous || releaseHistory || hasNewContent
       const pageTurns = Object.entries(page.turnIndexByTurnId).sort((first, second) => first[1] - second[1])
-      if (direction !== 'newer' && pageTurns.length) olderAnchor = pageTurns[0][0]
-      if (direction !== 'older' && pageTurns.length) newerAnchor = pageTurns[pageTurns.length - 1][0]
-      if (direction === 'latest' && !pageTurns.length) olderAnchor = newerAnchor = ''
+      const admitted = replace ? null : admitThreadHistoryPage(previous.messages, page.messages,
+        direction === 'latest' ? 'older' : direction, pageTurns.map(([turnId]) => turnId))
+      const acceptedMessages = (admitted?.messages ?? page.messages).map(message => {
+        const old = previousById.get(message.id)
+        if (!old) return message
+        const text = old.text.length > message.text.length && old.text.startsWith(message.text) ? old.text : message.text
+        const before = old.commandExecution
+        const incoming = message.commandExecution
+        const commandExecution = before && incoming && (
+          (before.outputTotalLength ?? before.aggregatedOutput.length) > (incoming.outputTotalLength ?? incoming.aggregatedOutput.length)
+          || (before.status !== 'inProgress' && incoming.status === 'inProgress')
+        ) ? before : incoming
+        return { ...message, text, commandExecution }
+      })
+      if (replace) historyChanged = false
+      else if (direction === 'newer' && acceptedMessages.some(message => {
+        const old = previousById.get(message.id)
+        return !old || old.text !== message.text || old.commandExecution?.aggregatedOutput !== message.commandExecution?.aggregatedOutput
+      })) historyChanged = true
+      const acceptedTurns = pageTurns.filter(([turnId]) => !admitted || admitted.turnIds.has(turnId))
+      const coveredTurns = new Set(acceptedTurns.map(([id]) => id))
+      const outside = replace ? [] : previous.messages.filter(message => !message.turnId || !coveredTurns.has(message.turnId))
+      const merged = replace ? acceptedMessages : direction === 'older'
+        ? [...acceptedMessages, ...outside] : [...outside, ...acceptedMessages]
+      const unique = [...new Map(merged.map((message) => [message.id, message])).values()]
+      const window = replace ? retainThreadMessageWindow(unique, {
+        maxTurns: ACTIVE_THREAD_TURN_LIMIT, maxBytes: ACTIVE_THREAD_TEXT_BUDGET, direction: 'latest',
+      }) : { messages: unique, removedOlder: false, removedNewer: false }
+      const indices = { ...(replace ? {} : previous?.turnIndexByTurnId),
+        ...Object.fromEntries(acceptedTurns) }
+      const retainedIds = new Set(window.messages.flatMap((message) => message.turnId ? [message.turnId] : []))
+      capacityReached.value = admitted?.capacityReached ?? (replace ? false : capacityReached.value)
+      if ((replace || direction === 'older') && acceptedTurns.length) olderAnchor = acceptedTurns[0][0]
+      if (direction !== 'older' && acceptedTurns.length) newerAnchor = acceptedTurns[acceptedTurns.length - 1][0]
+      if (replace && !acceptedTurns.length) olderAnchor = newerAnchor = ''
       if (window.removedOlder) olderAnchor = window.messages.find((message) => message.turnId)?.turnId ?? olderAnchor
-      if (window.removedNewer || omittedLatestBoundary) newerAnchor = [...window.messages].reverse().find((message) => message.turnId)?.turnId ?? newerAnchor
+      if (window.removedNewer) newerAnchor = [...window.messages].reverse().find((message) => message.turnId)?.turnId ?? newerAnchor
       detail.value = {
         ...page,
+        inProgress: direction === 'older' ? previous!.inProgress : page.inProgress,
+        activeTurnId: direction === 'older' ? previous!.activeTurnId : page.activeTurnId,
         messages: window.messages,
-        hasMoreOlder: (direction === 'newer' ? previous!.hasMoreOlder : page.hasMoreOlder) || window.removedOlder,
-        hasMoreNewer: (direction === 'older' ? previous!.hasMoreNewer === true : page.hasMoreNewer === true) || window.removedNewer || omittedLatestBoundary,
-        turnIndexByTurnId: Object.fromEntries(Object.entries(indices).filter(([turnId]) => retainedIds.has(turnId))),
+        hasMoreOlder: (!replace && direction !== 'older' ? previous.hasMoreOlder : page.hasMoreOlder) || window.removedOlder || (direction === 'older' && admitted?.blocked === true),
+        hasMoreNewer: (direction === 'older' ? previous!.hasMoreNewer === true : page.hasMoreNewer === true) || window.removedNewer || (direction === 'newer' && admitted?.blocked === true),
+        turnIndexByTurnId: Object.fromEntries(Object.entries(indices).filter(([turnId]) => retainedIds.has(turnId) || turnId === olderAnchor || turnId === newerAnchor)),
         startTurnIndex: indices[olderAnchor] ?? (direction === 'newer' ? previous!.startTurnIndex : page.startTurnIndex),
         nextTurnIndex: direction === 'latest' ? page.nextTurnIndex : Math.max(previous?.nextTurnIndex ?? 0, page.nextTurnIndex ?? 0),
       }
-      if (!detail.value.hasMoreNewer) acceptSnapshot?.(direction === 'latest' ? window.messages : page.messages)
+      if (direction !== 'older' && !detail.value.hasMoreNewer) acceptSnapshot?.(direction === 'latest' ? window.messages : acceptedMessages)
     } catch (failure) {
       if (request !== generation || id !== threadId.value) return
       error.value = failure instanceof Error ? failure.message : 'Failed to load conversation history'
@@ -89,10 +144,11 @@ export function useThreadHistoryWindow(
   watch(threadId, reset, { flush: 'sync' })
   onScopeDispose(reset)
   return {
-    detail, loading, loadingOlder, loadingNewer, error, reset,
+    detail, loading, loadingOlder, loadingNewer, error, reset, capacityReached, setReadingHistory,
+    releaseHistory: () => load('latest', true),
     loadLatest: () => load('latest'),
     loadOlder: () => load('older'),
     loadNewer: () => load('newer'),
-    retry: () => load(lastDirection),
+    retry: () => load(lastDirection, lastReleaseHistory),
   }
 }

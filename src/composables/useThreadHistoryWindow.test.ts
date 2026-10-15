@@ -2,7 +2,7 @@ import { effectScope, ref, type EffectScope } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ThreadTurnPage } from '../api/codexGateway'
 import { useThreadHistoryWindow } from './useThreadHistoryWindow'
-import { ACTIVE_THREAD_TEXT_BUDGET } from './threadMessageRetention'
+import { ACTIVE_THREAD_TEXT_BUDGET, THREAD_HISTORY_TEXT_BUDGET } from './threadMessageRetention'
 
 const api = vi.hoisted(() => ({ latest: vi.fn(), older: vi.fn(), newer: vi.fn() }))
 vi.mock('../api/codexGateway', () => ({
@@ -39,7 +39,7 @@ describe('read-only thread history windows', () => {
     const prepare = vi.fn(() => accept)
     api.latest.mockResolvedValue(page(80, 20))
     api.older.mockResolvedValue(page(70, 10))
-    api.newer.mockResolvedValue(page(90, 10))
+    api.newer.mockResolvedValue({ ...page(100, 10), hasMoreNewer: false })
     const { state } = windowFor(ref('thread'), prepare)
     await state.loadLatest()
     expect(prepare).toHaveBeenCalledWith('thread')
@@ -48,7 +48,8 @@ describe('read-only thread history windows', () => {
     expect(accept).toHaveBeenCalledTimes(1)
     await state.loadNewer()
     expect(accept).toHaveBeenCalledTimes(2)
-    expect(accept).toHaveBeenLastCalledWith(page(90, 10).messages)
+    expect(accept).toHaveBeenLastCalledWith(page(100, 10).messages)
+    expect(api.newer).toHaveBeenCalledWith('thread', 'turn-99')
   })
 
   it('does not apply an obsolete snapshot callback after changing the selected thread', async () => {
@@ -66,37 +67,68 @@ describe('read-only thread history windows', () => {
     expect(accepts.get('other-thread')).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves the latest empty running turn behind while browsing older messages', async () => {
-    const latest = { ...page(100, 0), messages: [], inProgress: true, activeTurnId: 'turn-100', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-100': 100 } }
-    api.latest.mockResolvedValue(latest)
+  it('keeps the latest empty running turn cursor while prepending history', async () => {
+    api.latest.mockResolvedValue({ ...page(100, 0), inProgress: true, activeTurnId: 'turn-100', hasMoreOlder: true, hasMoreNewer: false, turnIndexByTurnId: { 'turn-100': 100 } })
     api.older.mockResolvedValue(page(90, 10))
-    api.newer.mockResolvedValue(latest)
     const { state } = windowFor()
     await state.loadLatest()
-    expect(state.detail.value?.hasMoreNewer).toBe(false)
     await state.loadOlder()
-    expect(state.detail.value?.hasMoreNewer).toBe(true)
-    expect(state.detail.value?.messages.at(-1)?.turnId).toBe('turn-99')
-    await state.loadNewer()
-    expect(api.newer).toHaveBeenCalledWith('thread', 'turn-99')
     expect(state.detail.value?.hasMoreNewer).toBe(false)
+    expect(state.detail.value?.messages.at(-1)?.turnId).toBe('turn-99')
+    expect(state.detail.value?.inProgress).toBe(true)
   })
-  it('replaces the opposite end when paging in either direction', async () => {
+
+  it('keeps both ends when paging and preserves expanded history on ordinary return to latest', async () => {
     api.latest.mockResolvedValue(page(80, 20))
     api.older.mockResolvedValue(page(70, 10))
     api.newer.mockResolvedValue(page(90, 10))
     const { state } = windowFor()
     await state.loadLatest()
     await state.loadOlder()
-    expect(state.detail.value?.messages).toHaveLength(20)
+    expect(state.detail.value?.messages).toHaveLength(30)
     expect(state.detail.value?.messages[0]?.turnId).toBe('turn-70')
-    expect(state.detail.value?.hasMoreNewer).toBe(true)
-    expect(api.older).toHaveBeenCalledWith('thread', 'turn-80')
-    await state.loadNewer()
-    expect(api.newer).toHaveBeenCalledWith('thread', 'turn-89')
-    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-80')
     expect(state.detail.value?.hasMoreNewer).toBe(false)
-    expect(Object.keys(state.detail.value?.turnIndexByTurnId ?? {})).toHaveLength(20)
+    expect(api.older).toHaveBeenCalledWith('thread', 'turn-80')
+    await state.loadLatest()
+    expect(state.detail.value?.messages).toHaveLength(30)
+    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-70')
+    await state.releaseHistory()
+    expect(state.detail.value?.messages).toHaveLength(20)
+    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-80')
+  })
+
+  it('compacts new pages only after the reader follows their latest boundary', async () => {
+    api.latest.mockResolvedValue(page(80, 20))
+    api.older.mockResolvedValue(page(70, 10))
+    api.newer.mockResolvedValue({ ...page(100, 10), hasMoreNewer: false })
+    const { state } = windowFor()
+    await state.loadLatest()
+    await state.loadOlder()
+    state.setReadingHistory(false)
+    expect(state.detail.value?.messages).toHaveLength(30)
+    await state.loadNewer()
+    expect(state.detail.value?.messages).toHaveLength(40)
+    state.setReadingHistory(true)
+    expect(state.detail.value?.messages).toHaveLength(40)
+    state.setReadingHistory(false)
+    expect(state.detail.value?.messages).toHaveLength(20)
+    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-90')
+  })
+
+  it('keeps fuller duplicate content and expanded history when a stale latest snapshot repeats', async () => {
+    const latest = page(80, 20)
+    latest.messages[19].text = 'complete answer'
+    api.latest.mockResolvedValueOnce(latest)
+    api.older.mockResolvedValue(page(70, 10))
+    const { state } = windowFor()
+    await state.loadLatest()
+    await state.loadOlder()
+    const stale = page(80, 20)
+    stale.messages[19].text = 'complete'
+    api.latest.mockResolvedValueOnce(stale)
+    await state.loadLatest()
+    expect(state.detail.value?.messages).toHaveLength(30)
+    expect(state.detail.value?.messages.at(-1)?.text).toBe('complete answer')
   })
 
   it('rejects a late response after a thread switch', async () => {
@@ -112,66 +144,39 @@ describe('read-only thread history windows', () => {
     expect(state.detail.value?.messages[0]?.turnId).toBe('turn-0')
   })
 
-  it.each(['older', 'newer'] as const)('reaches and passes an oversized middle turn when paging %s', async (direction) => {
-    const oversizedText = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
-    const oversizedPage = (start: number, count: number) => {
-      const result = page(start, count)
-      result.messages.find((message) => message.turnId === 'turn-25')!.text = oversizedText
-      return result
-    }
+  it.each(['older', 'newer'] as const)('retains adjacent turns beyond the normal budget when paging %s', async (direction) => {
+    const incoming = page(20, 10)
+    incoming.messages[5].text = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
     api.latest.mockResolvedValue(page(direction === 'older' ? 30 : 0, 20))
-    api[direction].mockResolvedValueOnce(oversizedPage(20, 10))
-    api[direction].mockResolvedValueOnce(oversizedPage(direction === 'older' ? 16 : 25, 10))
-    api[direction].mockResolvedValueOnce(page(direction === 'older' ? 15 : 26, 10))
+    api[direction].mockResolvedValue(incoming)
     const { state } = windowFor()
-    const load = direction === 'older' ? state.loadOlder : state.loadNewer
     await state.loadLatest()
-    await load()
-    expect(state.detail.value?.messages).toHaveLength(20)
-    expect(state.detail.value?.messages[0]?.turnId).toBe(direction === 'older' ? 'turn-26' : 'turn-5')
-    expect(state.detail.value?.messages.at(-1)?.turnId).toBe(direction === 'older' ? 'turn-45' : 'turn-24')
-    expect(state.detail.value).toMatchObject({ hasMoreOlder: true, hasMoreNewer: true })
-    await load()
-    expect(state.detail.value?.messages).toEqual([expect.objectContaining({ turnId: 'turn-25', text: oversizedText, turnIndex: 25 })])
-    expect(state.detail.value?.startTurnIndex).toBe(25)
-    expect(state.detail.value).toMatchObject({ hasMoreOlder: true, hasMoreNewer: true })
-    await load()
-    expect(state.detail.value?.messages).toHaveLength(10)
-    expect(state.detail.value?.messages[0]?.turnId).toBe(direction === 'older' ? 'turn-15' : 'turn-26')
-    expect(state.detail.value?.messages.at(-1)?.turnId).toBe(direction === 'older' ? 'turn-24' : 'turn-35')
-    expect(api[direction].mock.calls).toEqual(direction === 'older'
-      ? [['thread', 'turn-30'], ['thread', 'turn-26'], ['thread', 'turn-25']]
-      : [['thread', 'turn-19'], ['thread', 'turn-24'], ['thread', 'turn-25']])
-    expect(state.detail.value?.nextTurnIndex).toBe(100)
-    expect(Object.keys(state.detail.value?.turnIndexByTurnId ?? {})).toHaveLength(10)
+    await (direction === 'older' ? state.loadOlder() : state.loadNewer())
+    expect(state.detail.value?.messages).toHaveLength(30)
+    expect(state.detail.value?.messages.find(message => message.turnId === 'turn-25')?.text).toHaveLength(ACTIVE_THREAD_TEXT_BUDGET / 2)
+    expect(state.capacityReached.value).toBe(false)
   })
 
-  it('keeps newer paging available for unseen turns in an end page', async () => {
-    const accept = vi.fn()
-    const oversizedText = 'x'.repeat(ACTIVE_THREAD_TEXT_BUDGET / 2)
-    const endPage = (start: number) => {
-      const result = { ...page(start, 30 - start), hasMoreNewer: false }
-      const oversized = result.messages.find((message) => message.turnId === 'turn-25')
-      if (oversized) oversized.text = oversizedText
-      return result
-    }
-    api.latest.mockResolvedValue(page(0, 20))
-    api.newer.mockResolvedValueOnce(endPage(20))
-    api.newer.mockResolvedValueOnce(endPage(25))
-    api.newer.mockResolvedValueOnce(endPage(26))
-    const { state } = windowFor(ref('thread'), () => accept)
+  it.each(['older', 'newer'] as const)('pauses at the hard byte limit and leaves the loaded window intact when paging %s', async (direction) => {
+    const incoming = page(20, 10)
+    incoming.messages[direction === 'older' ? 9 : 0].text = 'x'.repeat(THREAD_HISTORY_TEXT_BUDGET / 2)
+    api.latest.mockResolvedValue(page(direction === 'older' ? 30 : 0, 20))
+    api[direction].mockResolvedValue(incoming)
+    const { state } = windowFor()
     await state.loadLatest()
-    await state.loadNewer()
-    expect(state.detail.value?.hasMoreNewer).toBe(true)
-    expect(accept).not.toHaveBeenCalled()
-    await state.loadNewer()
-    expect(state.detail.value?.messages[0]?.turnId).toBe('turn-25')
-    expect(state.detail.value?.hasMoreNewer).toBe(true)
-    await state.loadNewer()
-    expect(state.detail.value?.hasMoreNewer).toBe(false)
-    expect(accept).toHaveBeenCalledTimes(1)
-    expect(state.detail.value?.messages.map((message) => message.turnId)).toEqual(['turn-26', 'turn-27', 'turn-28', 'turn-29'])
-    expect(api.newer.mock.calls).toEqual([['thread', 'turn-19'], ['thread', 'turn-24'], ['thread', 'turn-25']])
+    const original = state.detail.value?.messages
+    const load = direction === 'older' ? state.loadOlder : state.loadNewer
+    await load()
+    expect(state.detail.value?.messages).toEqual(original)
+    expect(state.capacityReached.value).toBe(true)
+    await load()
+    expect(api[direction]).toHaveBeenCalledTimes(1)
+    api.latest.mockRejectedValueOnce(new Error('offline'))
+    await expect(state.releaseHistory()).rejects.toThrow('offline')
+    expect(state.detail.value?.messages).toEqual(original)
+    expect(state.capacityReached.value).toBe(true)
+    await state.releaseHistory()
+    expect(state.capacityReached.value).toBe(false)
   })
 
   it.each(['older', 'newer'] as const)('advances consecutive empty raw pages and preserves the start watermark when paging %s', async (direction) => {
