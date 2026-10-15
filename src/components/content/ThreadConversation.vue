@@ -13,6 +13,7 @@
       No messages in this thread yet.
     </p>
 
+    <!-- Position rows without composited transforms to avoid blurry text after browser zoom. -->
     <DynamicScroller
       v-else
       :key="scrollerGeneration"
@@ -22,6 +23,7 @@
       :min-item-size="56"
       :buffer="400"
       :shift="true"
+      :disable-transform="true"
       :emit-update="true"
       tabindex="0"
       role="list"

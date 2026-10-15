@@ -12,6 +12,7 @@ describe('ThreadConversation render-window wiring', () => {
     expect(source).toContain('<DynamicScroller')
     expect(source).toContain('<DynamicScrollerItem :item="item" :index="index" :active="active"')
     expect(source).toContain(':shift="true"')
+    expect(source).toContain(':disable-transform="true"')
     expect(source).toContain(':buffer="400"')
     expect(source).toContain('renderableMessages.value.map((message) => ({ id: message.id, message }))')
     expect(source).toContain('return filterRenderableThreadMessages(messages, hiddenCommands, hiddenChanges)')
