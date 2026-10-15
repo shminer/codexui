@@ -27,6 +27,7 @@
       role="list"
       @update="onVirtualUpdate"
       @scroll="onConversationScroll"
+      @scrollend="onConversationScrollEnd"
       @wheel.passive="onConversationWheel"
       @touchstart.passive="onConversationTouchStart"
       @touchmove.passive="onConversationTouchMove"
@@ -845,8 +846,12 @@
       <div class="conversation-bottom-anchor" />
       </template>
     </DynamicScroller>
-    <div v-if="historyCapacityReached" class="conversation-capacity" role="status">{{ t('History cache is full. Loaded messages are kept.') }}</div>
-    <button v-if="releaseHistory && (showJumpToLatestButton || historyCapacityReached || hasMoreAbove)" type="button" class="conversation-release-history" :disabled="isLoadingLatest || isLoadingMore" @click="jumpToLatest(true)">{{ t('Release history and return to latest') }}</button>
+    <Teleport :to="historyStatusTarget ?? 'body'" :disabled="!historyStatusTarget">
+      <div v-if="historyCapacityReached || (releaseHistory && (showJumpToLatestButton || hasMoreAbove))" class="conversation-history-status" :class="{ 'conversation-history-status--inline': historyStatusTarget }">
+        <span v-if="historyCapacityReached" class="conversation-capacity" :title="t('History cache is full. Loaded messages are kept.')" role="status">{{ t('History cache full') }}</span>
+        <button v-if="releaseHistory && (showJumpToLatestButton || historyCapacityReached || hasMoreAbove)" type="button" class="conversation-release-history" :title="t('Only the page cache is cleared. Saved messages can be loaded again.')" :disabled="isLoadingLatest || isLoadingMore" @click="jumpToLatest(true)">{{ t('Clear history cache & go to latest') }}</button>
+      </div>
+    </Teleport>
 
     <button
       v-if="showJumpToLatestButton"
@@ -1466,6 +1471,7 @@ const props = withDefaults(defineProps<{
   loadLatestMessages?: (threadId: string) => Promise<void>
   releaseHistory?: (threadId: string) => Promise<void>
   historyCapacityReached?: boolean
+  historyStatusTarget?: HTMLElement | null
 }>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined })
 
 const emit = defineEmits<{
@@ -1518,6 +1524,7 @@ const toolQuestionAnswers = ref<Record<string, string>>({})
 const toolQuestionOtherAnswers = ref<Record<string, string>>({})
 const mcpElicitationAnswers = ref<Record<string, string | number | boolean | string[]>>({})
 const autoFollowOutput = ref(!props.isHistoryWindow && !props.hasMorePersistedBelow)
+const conversationAtBottom = ref(true)
 const BOTTOM_THRESHOLD_PX = 16
 const CODE_LANGUAGE_ALIASES: Record<string, string> = {
   js: 'javascript',
@@ -1623,7 +1630,8 @@ const displayMessages = computed(() => props.messages.map((message) =>
 ))
 
 const showJumpToLatestButton = computed(
-  () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay) || props.isHistoryWindow || props.hasMorePersistedBelow === true),
+  () => (props.hasMorePersistedBelow || (!autoFollowOutput.value && !conversationAtBottom.value))
+    && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay) || props.isHistoryWindow || props.hasMorePersistedBelow === true),
 )
 
 function ensureHighlightJsLoaded(): Promise<void> {
@@ -2063,6 +2071,7 @@ const visibleMessages = computed(() => timeline.value.slice(virtualStart.value, 
 function onVirtualUpdate(start: number, end: number): void {
   virtualStart.value = start
   virtualEnd.value = end
+  void nextTick(updateConversationBottom)
 }
 const hasMoreAbove = computed(() => props.hasMorePersistedAbove === true)
 const hasMoreBelow = computed(() => props.hasMorePersistedBelow === true)
@@ -4166,14 +4175,19 @@ function isAtBottom(container: HTMLElement): boolean {
   return distance <= BOTTOM_THRESHOLD_PX
 }
 
+function updateConversationBottom(): void {
+  const container = conversationListRef.value
+  if (container) conversationAtBottom.value = isAtBottom(container)
+}
+
 function applyConversationScrollState(): void {
   const container = conversationListRef.value
   if (!container) return
 
   if (shouldLockToBottom()) {
     enforceBottomState()
-    return
   }
+  updateConversationBottom()
 }
 
 function enforceBottomState(): void {
@@ -4236,6 +4250,7 @@ async function jumpToLatest(release = false): Promise<void> {
     if (props.isHistoryWindow || props.hasMorePersistedBelow) throw new Error('Latest message window is not available.')
     searchTurnMessages.value = []
     searchTargetId.value = ''
+    resumeFollowOnBottom = false
     autoFollowOutput.value = true
     await scheduleConversationScroll()
   } catch (cause) {
@@ -4261,6 +4276,7 @@ async function locateMessage(itemId: string): Promise<void> {
   const index = timeline.value.findIndex((row) => row.id === itemId)
   if (index < 0) { searchTargetId.value = previousTarget; return }
   autoFollowOutput.value = false
+  resumeFollowOnBottom = false
   // Explicit navigation replaces the old measurement anchor with the search target.
   scrollerGeneration.value += 1
   await nextTick()
@@ -4281,6 +4297,8 @@ type ConversationAnchor = { id: string; offset: number }
 let lastConversationScrollTop = 0
 let conversationTouchY = 0
 let paginationIntent: 'earlier' | 'later' | 'either' | null = null
+// Pagination consumes its intent before a drag or inertial scroll finishes.
+let resumeFollowOnBottom = false
 const historyEdgeArmed = { earlier: true, later: true }
 
 watch(autoFollowOutput, (following) => emit('readingHistoryChange', !following), { immediate: true, flush: 'sync' })
@@ -4288,6 +4306,7 @@ watch(autoFollowOutput, (following) => emit('readingHistoryChange', !following),
 // A popup uses another document/ResizeObserver context. Remount measurements there.
 watch(() => props.ownerDocument, async () => {
   const anchor = autoFollowOutput.value ? null : captureConversationAnchor()
+  resumeFollowOnBottom = false
   scrollerGeneration.value += 1
   await nextTick()
   if (autoFollowOutput.value) await scheduleConversationScroll()
@@ -4327,6 +4346,7 @@ async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> 
   if (!container || !hasMore || props.historyCapacityReached || isLoadingMore.value || isLoadingLatest.value || props.isLoadingPersistedAbove || props.isLoadingPersistedBelow) return
 
   autoFollowOutput.value = false
+  if (direction === 'earlier') resumeFollowOnBottom = false
   isLoadingMore.value = true
   const threadIdAtStart = props.activeThreadId
   const generation = ++navigationGeneration
@@ -4534,6 +4554,8 @@ watch(
     historyLoadError.value = ''
     lastConversationScrollTop = 0
     paginationIntent = null
+    resumeFollowOnBottom = false
+    conversationAtBottom.value = true
     historyEdgeArmed.earlier = historyEdgeArmed.later = true
     conversationTouchY = 0
     fileChangeActionState.value = {}
@@ -4551,7 +4573,23 @@ watch(
 
 function stopFollowingForEarlierScroll(target: EventTarget | null): void {
   if (innerScrollConsumes(target, 'earlier')) return
+  resumeFollowOnBottom = false
   autoFollowOutput.value = false
+}
+
+function resumeFollowingAtBottom(): boolean {
+  const container = conversationListRef.value
+  if (!resumeFollowOnBottom || !container || !isAtBottom(container) || hasMoreBelow.value
+    || props.isLoading || isLoadingMore.value || isLoadingLatest.value
+    || props.isLoadingPersistedAbove || props.isLoadingPersistedBelow) return false
+  resumeFollowOnBottom = false
+  paginationIntent = null
+  searchTargetId.value = ''
+  searchTurnMessages.value = []
+  autoFollowOutput.value = true
+  conversationAtBottom.value = true
+  void scheduleConversationScroll()
+  return true
 }
 
 function innerScrollConsumes(target: EventTarget | null, direction: 'earlier' | 'later'): boolean {
@@ -4567,7 +4605,9 @@ function onConversationWheel(event: WheelEvent): void {
   const direction = event.deltaY < 0 ? 'earlier' : 'later'
   if (innerScrollConsumes(event.target, direction)) return
   paginationIntent = direction
+  resumeFollowOnBottom = direction === 'later'
   if (direction === 'earlier') autoFollowOutput.value = false
+  else resumeFollowingAtBottom()
 }
 
 function onConversationTouchStart(event: TouchEvent): void {
@@ -4581,7 +4621,9 @@ function onConversationTouchMove(event: TouchEvent): void {
     const direction = y > conversationTouchY ? 'earlier' : 'later'
     if (!innerScrollConsumes(event.target, direction)) {
       paginationIntent = direction
+      resumeFollowOnBottom = direction === 'later'
       if (direction === 'earlier') autoFollowOutput.value = false
+      else resumeFollowingAtBottom()
     }
   }
   conversationTouchY = y
@@ -4595,6 +4637,7 @@ function onConversationPointerDown(event: PointerEvent): void {
   if (event.button === 1 || (event.target === container && event.clientX >= right - scrollbarWidth)) {
     autoFollowOutput.value = false
     paginationIntent = 'either'
+    resumeFollowOnBottom = true
   }
 }
 
@@ -4604,7 +4647,10 @@ function onConversationKeyDown(event: KeyboardEvent): void {
     stopFollowingForEarlierScroll(event.target)
     paginationIntent = 'earlier'
   } else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) {
+    if (innerScrollConsumes(event.target, 'later')) return
     paginationIntent = 'later'
+    resumeFollowOnBottom = true
+    resumeFollowingAtBottom()
   }
 }
 
@@ -4614,7 +4660,9 @@ function onConversationScroll(): void {
   const previousTop = lastConversationScrollTop
   const direction = historyScrollDirection(lastConversationScrollTop, container.scrollTop, container.scrollHeight, container.clientHeight, LOAD_MORE_SCROLL_THRESHOLD_PX)
   lastConversationScrollTop = container.scrollTop
+  updateConversationBottom()
   if (props.isLoading || isLoadingMore.value || isLoadingLatest.value) return
+  if (container.scrollTop > previousTop && resumeFollowingAtBottom()) return
   if (searchTargetId.value) return
   if (paginationIntent) {
     if (container.scrollTop >= LOAD_MORE_SCROLL_THRESHOLD_PX) historyEdgeArmed.earlier = true
@@ -4626,7 +4674,6 @@ function onConversationScroll(): void {
     if (!isAtBottom(container)) scheduleBottomLock(3)
     return
   }
-  if (paginationIntent && container.scrollTop > previousTop && isAtBottom(container) && !hasMoreBelow.value) autoFollowOutput.value = true
   if (!direction || (paginationIntent !== direction && paginationIntent !== 'either')) return
   paginationIntent = null
   if (!historyEdgeArmed[direction]) return
@@ -4636,6 +4683,13 @@ function onConversationScroll(): void {
   } else if (direction === 'later' && hasMoreBelow.value) {
     void loadMoreBelow()
   }
+}
+
+// Native scrollend ends a gesture; the virtual scroller's scrollEnd only marks an edge.
+function onConversationScrollEnd(): void {
+  updateConversationBottom()
+  resumeFollowingAtBottom()
+  resumeFollowOnBottom = false
 }
 
 const failedMarkdownImages = ref(new Set<string>())
@@ -4718,12 +4772,20 @@ onBeforeUnmount(() => {
   @apply pb-2 sm:pb-3;
 }
 
+.conversation-history-status {
+  @apply flex min-w-0 shrink-0 items-center justify-center gap-2 px-2 py-1 text-[11px] leading-4 text-zinc-500;
+}
+
+.conversation-history-status--inline {
+  @apply shrink p-0;
+}
+
 .conversation-capacity {
-  @apply px-4 py-1 text-xs text-zinc-500 dark:text-zinc-400;
+  @apply min-w-0 truncate;
 }
 
 .conversation-release-history {
-  @apply self-center shrink-0 px-3 py-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100;
+  @apply shrink-0 whitespace-nowrap hover:text-zinc-900 disabled:opacity-50;
 }
 
 .conversation-load-more {

@@ -45,7 +45,23 @@ describe('ThreadConversation render-window wiring', () => {
     const threadWatcher = source.match(/watch\(\s*\(\) => props.activeThreadId,([\s\S]*?)\n\)/u)?.[1] ?? ''
     expect(threadWatcher).toContain('await jumpToLatest()')
     expect(threadWatcher).toContain('autoFollowOutput.value = !props.isHistoryWindow && !props.hasMorePersistedBelow')
-    expect(source).toContain('paginationIntent && container.scrollTop > previousTop && isAtBottom(container) && !hasMoreBelow.value')
+    expect(source).toContain('container.scrollTop > previousTop && resumeFollowingAtBottom()')
+    expect(source).toContain('!autoFollowOutput.value && !conversationAtBottom.value')
+    expect(source).toContain('@scrollend="onConversationScrollEnd"')
+    expect(source).not.toContain('@scroll-end=')
+  })
+
+  it('moves history status to the composer with an inline fallback for missing or hidden composers', async () => {
+    const [conversation, app, side] = await Promise.all([
+      readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8'),
+      readFile(new URL('../../App.vue', import.meta.url), 'utf8'),
+      readFile(new URL('./ThreadSideConversation.vue', import.meta.url), 'utf8'),
+    ])
+    expect(conversation).toContain(':to="historyStatusTarget ?? \'body\'" :disabled="!historyStatusTarget"')
+    expect(app).toContain(':history-status-target="threadHistoryStatusTarget"')
+    expect(app).toContain('ref="threadHistoryStatusTarget" class="thread-history-status-target"')
+    expect(side).toContain(':history-status-target="pendingRequests[0] ? null : historyStatusTarget"')
+    expect(side).toContain('ref="historyStatusTarget" class="thread-history-status-target"')
   })
 
   it('unmounts collapsed command details and skips streaming snapshots in long-lived caches', async () => {

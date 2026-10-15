@@ -1012,6 +1012,7 @@
                       :load-latest-messages="loadLatestMessages"
                       :release-history="releaseThreadHistory"
                       :history-capacity-reached="selectedThreadHistoryCapacityReached"
+                      :history-status-target="threadHistoryStatusTarget"
                       @reading-history-change="setThreadReadingHistory(composerThreadContextId, $event)"
                       @fork-thread="onForkThreadFromMessage"
                       @edit-message="onEditMessage"
@@ -1094,6 +1095,9 @@
                     @open-side-conversation="onOpenSideConversation"
                     @interrupt="onInterruptTurn"
                   >
+                    <template #history-status>
+                      <div ref="threadHistoryStatusTarget" class="thread-history-status-target" />
+                    </template>
                     <template #queue>
                       <QueuedMessages
                         :messages="selectedThreadQueuedMessages"
@@ -1577,6 +1581,7 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const threadHistoryStatusTarget = ref<HTMLElement | null>(null)
 const sideConversationRef = ref<Pick<ThreadComposerExposed, 'hydrateDraft' | 'hasUnsavedDraft'> | null>(null)
 const threadSubagentPanelRef = ref<{ collapseDesktopPanel: () => void } | null>(null)
 const isSubagentPanelExpanded = ref(false)
