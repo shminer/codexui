@@ -423,7 +423,6 @@
                   v-else
                   class="message-text-flow"
                   @click="onUserMessageTextClick(message, $event)"
-                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion, hasStreamingMarkdown]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -4262,6 +4261,10 @@ async function locateMessage(itemId: string): Promise<void> {
   const index = timeline.value.findIndex((row) => row.id === itemId)
   if (index < 0) { searchTargetId.value = previousTarget; return }
   autoFollowOutput.value = false
+  // Explicit navigation replaces the old measurement anchor with the search target.
+  scrollerGeneration.value += 1
+  await nextTick()
+  if (threadId !== props.activeThreadId || searchTargetId.value !== itemId) return
   scrollerRef.value?.scrollToItem(index, { align: 'center' })
   await nextTick()
   if (threadId !== props.activeThreadId) return

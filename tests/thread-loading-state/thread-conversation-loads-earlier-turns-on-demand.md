@@ -63,7 +63,7 @@ Thread conversation incremental older-turn loading.
 
 #### Verification Boundary
 
-以下是旧实现及此前修复的历史证据，不作为本轮虚拟列表／稳定缓存的运行验收结果。本轮补充用例待运行。
+本轮虚拟列表／稳定缓存已执行用户明确要求的浏览器截图验收，证据为 `output/playwright/stable-history-{acceptance,lifecycle,capacity,archive,real,side-completion}.json` 及同名 CJS 入口、对应 PNG。详细操作、结果及性能限制见 `tests/chat-composer-rendering/lazy-message-rendering-windowed-conversation.md` 的本轮记录。下列列表为旧实现及此前修复的历史证据，不作为本轮验收结果。
 - The original snapshot-recovery verification used explicitly requested mocks and UI screenshots, without a build, publish or production-history mutation.
 - The reverse-pagination case was reproduced on an existing Windows conversation. Before the repair, earlier navigation caused automatic newer-page reads and repeated cursors. After the repair, both directions reached their boundaries with 17 distinct cursors each and no opposite-direction requests, history errors or page errors. Light/dark screenshots use 1440x1000 at `http://127.0.0.1:4173/#/thread/01a105e6-0b2e-7342-9959-3407f2bdf1a9`; evidence is under `output/playwright/real-thread-history-*`, with the read-only runner `output/playwright/verify-real-thread-history.cjs`. Builds are permitted in this verification session; the saved conversation was not sent to, edited, rolled back or deleted.
 - Focused mock suite: 273/273 passed across desktop state, retention, history windows, subagent state/wiring and conversation-window wiring. This includes the regression cases for steps 23-26 and the footer-space assertion. Evidence: `output/playwright/snapshot-recovery-focused-unit.json`.
