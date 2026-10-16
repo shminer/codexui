@@ -9,7 +9,7 @@ import { historyScrollDirection } from './threadConversationWindow'
 const filename = new URL('./ThreadConversation.vue', import.meta.url)
 const script = parse(readFileSync(filename, 'utf8')).descriptor.scriptSetup!.content
 const ast = ts.createSourceFile('ThreadConversation.ts', script, ts.ScriptTarget.Latest, true)
-const handlerNames = ['isAtBottom', 'updateConversationBottom', 'shouldLockToBottom',
+const handlerNames = ['isAtBottom', 'updateConversationBottom', 'shouldLockToBottom', 'onVirtualRowResize',
   'resumeFollowingAtBottom', 'stopFollowingForEarlierScroll', 'onConversationScroll',
   'onConversationWheel', 'onConversationTouchStart', 'onConversationTouchMove',
   'onConversationPointerDown', 'onConversationKeyDown', 'onConversationScrollEnd']
@@ -52,12 +52,14 @@ function setup() {
     loadMoreAbove: () => { calls.older += 1 },
     loadMoreBelow: () => { calls.newer += 1 },
     computed: (read: () => boolean) => ({ get value() { return read() } }),
+    nextTick: (callback: () => void) => Promise.resolve().then(callback),
   }
   const context = createContext(state)
   runInContext(code, context)
   const handlers = runInContext(`({ ${handlerNames.join(', ')}, showJumpToLatestButton })`, context) as {
     onConversationScroll: () => void
     onConversationScrollEnd: () => void
+    onVirtualRowResize: () => void
     onConversationWheel: (event: Partial<WheelEvent>) => void
     onConversationTouchStart: (event: { touches: { clientY: number }[] }) => void
     onConversationTouchMove: (event: { touches: { clientY: number }[] }) => void
@@ -69,6 +71,26 @@ function setup() {
 }
 
 describe('conversation bottom following', () => {
+  it('follows a measured row that grows after the fixed bottom-lock frames have ended', () => {
+    const { container, state, calls, handlers } = setup()
+    state.autoFollowOutput.value = true
+    state.props.isHistoryWindow = false
+    container.scrollHeight += 800
+    handlers.onVirtualRowResize()
+    expect(calls.latestScroll).toBe(1)
+  })
+
+  it.each(['reading', 'history', 'newer'] as const)('preserves %s protection when row measurement completes', async mode => {
+    const { state, calls, handlers } = setup()
+    state.autoFollowOutput.value = mode !== 'reading'
+    state.props.isHistoryWindow = mode === 'history'
+    state.props.hasMorePersistedBelow = mode === 'newer'
+    handlers.onVirtualRowResize()
+    await Promise.resolve()
+    expect(calls.latestScroll).toBe(0)
+    expect(state.autoFollowOutput.value).toBe(mode !== 'reading')
+  })
+
   it('finishes a scrollbar drag after pagination has consumed its intent', () => {
     const { container, state, calls, handlers } = setup()
     handlers.onConversationPointerDown({ button: 0, target: container as unknown as EventTarget, clientX: 500 })

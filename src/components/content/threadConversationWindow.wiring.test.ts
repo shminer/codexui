@@ -10,7 +10,7 @@ describe('ThreadConversation render-window wiring', () => {
   it('virtualizes stable message IDs and keeps loaded data independent of mounted rows', async () => {
     const source = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
     expect(source).toContain('<DynamicScroller')
-    expect(source).toContain('<DynamicScrollerItem :item="item" :index="index" :active="active"')
+    expect(source).toContain('<ConversationVirtualRow :item="item" :index="index" :active="active"')
     expect(source).toContain(':shift="true"')
     expect(source).toContain(':disable-transform="true"')
     expect(source).toContain(':buffer="400"')

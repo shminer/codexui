@@ -49,7 +49,7 @@
       </div>
       </template>
       <template #default="{ item, index, active }">
-      <DynamicScrollerItem :item="item" :index="index" :active="active" class="conversation-virtual-row">
+      <ConversationVirtualRow :item="item" :index="index" :active="active" class="conversation-virtual-row" @resize="onVirtualRowResize">
       <template v-for="message in [item.message]" :key="item.id">
       <div v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay" role="listitem">
         <div class="message-row">
@@ -837,7 +837,7 @@
         </div>
       </div>
       </template>
-      </DynamicScrollerItem>
+      </ConversationVirtualRow>
       </template>
       <template #after>
       <div v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more conversation-load-more-later">
@@ -1016,7 +1016,8 @@
 <script setup lang="ts">
 import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '../../pathUtils.js'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { DynamicScroller, DynamicScrollerItem, type DynamicScrollerExposed } from 'vue-virtual-scroller'
+import { DynamicScroller, type DynamicScrollerExposed } from 'vue-virtual-scroller'
+import ConversationVirtualRow from './ConversationVirtualRow.vue'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import type { ThreadHistorySource, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { getThreadResourceSource, updateThreadFileChanges } from '../../api/codexGateway'
@@ -2065,6 +2066,10 @@ function onVirtualUpdate(start: number, end: number): void {
   virtualStart.value = start
   virtualEnd.value = end
   void nextTick(updateConversationBottom)
+}
+function onVirtualRowResize(): void {
+  if (shouldLockToBottom()) void scheduleConversationScroll()
+  else void nextTick(updateConversationBottom)
 }
 const hasMoreAbove = computed(() => props.hasMorePersistedAbove === true)
 const hasMoreBelow = computed(() => props.hasMorePersistedBelow === true)
