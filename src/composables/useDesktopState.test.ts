@@ -3574,6 +3574,44 @@ describe('provider model selection', () => {
     expect(state.readModelIdForThread('')).toBe('gpt-5.6')
   })
 
+  it('keeps new-chat model and Thinking selections across reload with legacy effort state', async () => {
+    installTestWindow({
+      'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({ '__new-thread__': 'medium' }),
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: '', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.6'])
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAncillaryState()
+    state.setSelectedModelIdForThread('__new-thread__', 'gpt-5.6')
+    state.setSelectedReasoningEffort('ultra')
+
+    const reloaded = useDesktopState()
+    reloaded.setActiveAccountStorageId('account-a')
+    await reloaded.refreshAncillaryState()
+    expect(reloaded.selectedModelId.value).toBe('gpt-5.6')
+    expect(reloaded.selectedReasoningEffort.value).toBe('ultra')
+  })
+
+  it.each(['empty', 'failed'])('retains saved provider preferences when the catalog is %s on reload', async (catalog) => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({ '__new-thread-provider__::account-a::custom': 'chosen-model' }),
+      'codex-web-local.selected-reasoning-effort-by-context.v1': JSON.stringify({ '__new-thread-provider__::account-a::custom': 'ultra' }),
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'configured-model', providerId: 'custom', reasoningEffort: 'medium', speedMode: 'standard' })
+    if (catalog === 'empty') gatewayMocks.getAvailableModelIds.mockResolvedValue([])
+    else gatewayMocks.getAvailableModelIds.mockRejectedValue(new Error('model catalog temporarily unavailable'))
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAncillaryState()
+    expect(state.selectedModelId.value).toBe('chosen-model')
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
+    expect(state.availableModelIds.value).toContain('chosen-model')
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1')!))
+      .toEqual({ '__new-thread-provider__::account-a::custom': 'chosen-model' })
+    expect(gatewayMocks.getAvailableModelIds).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps an existing thread model absent from the refreshed visible catalog', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({ 'existing-thread': 'persisted-model' }),

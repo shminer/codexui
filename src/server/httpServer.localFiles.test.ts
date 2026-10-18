@@ -94,6 +94,33 @@ describe('local filesystem HTTP routes', () => {
     expect(await fetch(assetUrl).then((r) => r.text())).toBe('relative asset')
   })
 
+  it.skipIf(process.platform !== 'win32')('reads native and URL-style paths on the workspace drive', async () => {
+    const workspaceRoot = await mkdtemp(join(process.cwd(), '.local-paths-test-'))
+    try {
+      const file = join(workspaceRoot, 'notes # %20.txt')
+      await writeFile(file, 'workspace drive content')
+      await start()
+      const slashPath = file.replace(/\\/gu, '/')
+      for (const path of [file, slashPath, `/${slashPath}`, pathToFileURL(file).href]) {
+        expect(await fetch(`${base}/codex-local-file?${new URLSearchParams({ path })}`).then((r) => r.text())).toBe('workspace drive content')
+        const editor = await fetch(base + open(path))
+        expect(editor.status).toBe(200)
+        expect(await editor.text()).toContain('workspace drive content')
+      }
+      expect(await fetch(base + browse(file)).then((r) => r.text())).toBe('workspace drive content')
+      const listing = await fetch(`${base}/codex-local-directories?${new URLSearchParams({ path: `/${workspaceRoot.replace(/\\/gu, '/')}` })}`)
+      expect(listing.status).toBe(200)
+
+      dispose?.()
+      await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()))
+      await start(buildSafeSecurityPolicy({ ...loadSafeRuntimeConfig({}), allowedRoots: [workspaceRoot] }))
+      expect((await fetch(base + open(`/${slashPath}`))).status).toBe(200)
+      expect((await fetch(base + open(`/${root.replace(/\\/gu, '/')}`))).status).toBe(403)
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(process.platform === 'win32')('keeps whitespace filenames distinct when browsing and saving', async () => {
     const plain = join(root, 'report.txt')
     const spaced = `${plain} `

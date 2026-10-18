@@ -76,7 +76,7 @@ export function normalizeLocalPath(rawPath: string): string {
       return ''
     }
   }
-  return rawPath
+  return process.platform === 'win32' ? rawPath.replace(/^\/([A-Za-z]:[\\/])/u, '$1') : rawPath
 }
 
 // Only raw URL pathnames need decoding; Express route parameters are already decoded.
