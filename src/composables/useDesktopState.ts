@@ -350,8 +350,7 @@ function readSelectedReasoningEffort(
 ): ReasoningEffort | '' {
   const contextId = toThreadContextId(threadId)
   const threadEffort = normalizeStoredReasoningEffort(state[contextId])
-  if (threadEffort) return threadEffort
-  if (!isNewThreadContextId(contextId)) return ''
+  if (!isNewThreadContextId(contextId)) return threadEffort
 
   const providerContextId = toProviderModelContextId(providerId, accountId)
   const providerEffort = providerContextId
@@ -359,7 +358,7 @@ function readSelectedReasoningEffort(
     : ''
   if (providerEffort) return providerEffort
 
-  return normalizeStoredReasoningEffort(state[NEW_THREAD_COLLABORATION_MODE_CONTEXT])
+  return threadEffort
 }
 
 function saveSelectedReasoningEffortMap(state: Record<string, ReasoningEffort>): void {
@@ -3237,9 +3236,11 @@ export function useDesktopState() {
       const validConfiguredModelId = catalogModelIds.has(configuredModelId) || allowConfiguredFallback
         ? configuredModelId
         : ''
-      const savedNewThreadModelId = catalogModelIds.has(providerScopedModelId)
-        ? providerScopedModelId
-        : targetProviderId === 'codex' && catalogModelIds.has(threadScopedModelId) ? threadScopedModelId : ''
+      const savedNewThreadModelId = modelIds.length === 0
+        ? providerScopedModelId || (targetProviderId === 'codex' ? threadScopedModelId : '')
+        : catalogModelIds.has(providerScopedModelId)
+          ? providerScopedModelId
+          : targetProviderId === 'codex' && catalogModelIds.has(threadScopedModelId) ? threadScopedModelId : ''
       const selectedModel = (isNewThreadContext ? savedNewThreadModelId : threadScopedModelId)
         || validConfiguredModelId || modelIds[0] || ''
       availableModelIds.value = selectedModel && !catalogModelIds.has(selectedModel)
@@ -3281,6 +3282,14 @@ export function useDesktopState() {
       selectedSpeedMode.value = currentConfig.speedMode
     } catch (unknownError) {
       if (!isCurrentRequest()) return
+      if (targetProviderId !== undefined) {
+        // Catalog failure must not hide saved preferences or write a fallback over them.
+        const storedModelId = readModelIdForThread(targetThreadId)
+        const storedEffort = readReasoningEffortForThread(targetThreadId)
+        if (storedModelId) selectedModelId.value = readProviderCompatibleSelectedModel(storedModelId)
+        if (storedEffort) selectedReasoningEffort.value = storedEffort
+        ensureAvailableReasoningEffort(selectedModelId.value, selectedReasoningEffort.value)
+      }
       if (isCodexCliMissingError(unknownError)) {
         codexCliMissingError.value = CODEX_CLI_MISSING_MESSAGE
       } else {
