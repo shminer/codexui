@@ -15,7 +15,7 @@ const href = (path) => `/codex-local-open?path=${encodeURIComponent(path)}`
 
 async function main() {
   await mkdir(output, { recursive: true })
-  const temp = await mkdtemp(join(tmpdir(), 'codexui-TestChat-'))
+  const temp = await mkdtemp(join(process.env.LOCAL_PATH_TEST_ROOT || tmpdir(), 'codexui-TestChat-'))
   const root = temp.replace(/\\/g, '/')
   const file = join(temp, 'notes # %20.txt')
   const image = join(temp, 'image # %20.png')
@@ -34,6 +34,7 @@ async function main() {
       ['Parent', '../notes.md', '../notes.md', `${root.slice(0, root.lastIndexOf('/'))}/notes.md`],
       ['ActualFile', file, file, `${root}/notes # %20.txt`],
       ['ActualFileUrl', pathToFileURL(file).href, urlFilePath, urlFilePath],
+      ...(process.platform === 'win32' ? [['UrlDrivePath', `/${root}/notes # %20.txt`, `/${root}/notes # %20.txt`, `/${root}/notes # %20.txt`]] : []),
       ['Unc', '\\\\server\\share\\folder\\..\\notes.md', '\\\\server\\share\\folder\\..\\notes.md', '//server/share/notes.md'],
       ['UncFileUrl', 'file://server/share/notes.md', '\\\\server\\share\\notes.md', '//server/share/notes.md'],
       ['DevicePath', '\\\\?\\C:\\work\\notes.md', 'C:\\work\\notes.md', 'C:/work/notes.md'],
@@ -139,6 +140,14 @@ async function main() {
       }
       assert.equal(await page.getByRole('link', { name: 'Web', exact: true }).getAttribute('href'), 'https://example.com/docs?q=1#part')
       if (scenario.name === 'windows') {
+        if (process.platform === 'win32') {
+          const drivePopupPromise = page.waitForEvent('popup')
+          await page.getByRole('link', { name: 'UrlDrivePath', exact: true }).click()
+          const drivePopup = await drivePopupPromise
+          await drivePopup.waitForLoadState()
+          assert.ok((await drivePopup.textContent('body')).includes('correct target'))
+          await drivePopup.close()
+        }
         const preview = page.getByRole('img', { name: 'MockImage', exact: true })
         await preview.scrollIntoViewIfNeeded()
         assert.ok(await preview.evaluate((img) => img.decode().then(() => img.naturalWidth > 0)))

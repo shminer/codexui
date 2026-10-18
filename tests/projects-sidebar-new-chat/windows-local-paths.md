@@ -10,6 +10,7 @@
 
 1. Run `pnpm exec vitest run src/pathUtils.test.ts src/threadResources.test.ts src/api/codexGateway.test.ts src/server/httpServer.localFiles.test.ts src/server/skillsPaths.test.ts src/safe/pathPolicy.test.ts src/server/securityPolicy.test.ts`.
 2. On Windows, run `node scripts/verify-local-paths.cjs` against the current dev server.
+   To verify a real non-C drive, set `LOCAL_PATH_TEST_ROOT` to a writable directory on that drive first, for example `$env:LOCAL_PATH_TEST_ROOT = 'M:\one\source\codexui'`. Clear it afterward with `Remove-Item Env:LOCAL_PATH_TEST_ROOT`. The script creates and removes its own temporary subdirectory.
 3. Inspect `output/playwright/local-paths-mock-results.json`. Every row must have `hrefOk`, `titleOk`, and `textOk` set to `true`.
 4. Inspect the light and dark `output/playwright/testchat-*-paths-*-cjs.png` screenshots. They must show the actual TestChat conversation, readable links, and correctly themed surfaces.
 5. Run the focused unit command again on Linux, then run `pnpm run test:unit`, `pnpm run build`, `node dist-cli/index.js --help`, and `node dist-cli/safe.js doctor` on each platform.
@@ -20,6 +21,7 @@
 - HTTP(S) links retain their query strings and fragments.
 - TestChat sends a unique marker through the mocked turn endpoint. The reply links remain correct after a refresh.
 - The toolbar opens the actual temporary directory; source file links dispatch through `/codex-local-open` into the editor, while raw browse URLs still return file content. The chat Edit action opens that file's editor; saving writes to the same file. The image endpoint serves the original image bytes and the chat image decodes successfully.
+- Native paths, slash-separated drive paths, `file:` URLs and URL-style `/M:/...` query paths all open the same Windows file, including on the workspace drive. Literal `%20` names are decoded only once. Query normalization leaves Linux `/M:/...` and literal backslashes unchanged. The HTTP regression also checks the normalized path against safe allowed roots and rejects a path outside them.
 - Selecting PathSkill in the composer and opening its chip reads exactly one `SKILL.md`, including when the RPC path uses Windows backslashes. Mock server and frontend skill lists group nested skills without losing drive or UNC roots.
 - Directory navigation stops at the drive/share root. A Windows root listing survives an inaccessible entry's metadata. Linux root navigation, HTML relative assets, and Linux filenames containing question marks or backslashes still work.
 - Safe mode rejects root escapes and symlink/junction escapes. When editing is disabled, editor GET requests provide a read-only preview and PUT requests reject changes.
@@ -28,8 +30,6 @@
 - UNC URL conversion is verified without depending on a network share. Opening an actual UNC share requires an available share and permissions and must be reported separately.
 
 ## Cleanup
-
-- This merge was checked statically only. The runtime, Windows, and browser checks above remain pending under the current session restrictions.
 
 - Both automated checks clean up their temporary filesystem fixtures. Browser contexts and mock sessions are closed at the end; screenshots and the JSON report remain under ignored `output/playwright/`.
 - Leave the verification server on `4173` available. Do not restart or stop a persistent `5173` server.
