@@ -1794,8 +1794,11 @@ export function useDesktopState() {
   const automaticModelIds = ref<string[]>([])
   const manualModelIds = ref<string[]>([])
   const retainedModelIds = ref<string[]>([])
+  const selectableModelIds = computed(() => [...new Set([
+    ...automaticModelIds.value, ...manualModelIds.value,
+  ])])
   const availableModelIds = computed(() => [...new Set([
-    ...automaticModelIds.value, ...manualModelIds.value, ...retainedModelIds.value,
+    ...selectableModelIds.value, ...retainedModelIds.value,
   ])])
   const removableModelIds = computed(() => {
     const automaticIds = new Set(automaticModelIds.value)
@@ -8672,6 +8675,7 @@ export function useDesktopState() {
     selectedThreadId,
     availableCollaborationModes,
     availableModelIds,
+    selectableModelIds,
     removableModelIds,
     manualModelsError,
     isSavingManualModel,

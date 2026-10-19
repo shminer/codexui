@@ -3419,15 +3419,21 @@ describe('shared manual models', () => {
     state.setSelectedModelIdForThread('existing', 'vendor/model')
     await state.removeManualModel('vendor/model')
     expect(state.availableModelIds.value).toEqual(['auto-model'])
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
     expect(state.selectedModelId.value).toBe('auto-model')
     expect(state.readModelIdForThread('existing')).toBe('vendor/model')
     state.primeSelectedThread('existing')
     expect(state.selectedModelId.value).toBe('vendor/model')
     expect(state.availableModelIds.value).toContain('vendor/model')
+    expect(state.selectableModelIds.value).not.toContain('vendor/model')
     expect(state.removableModelIds.value).toEqual([])
   })
 
-  it('keeps an active existing thread model visible after removing its manual record', async () => {
+  it('removes an active thread model from the menu while preserving its selection after refresh and reload', async () => {
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'vendor/model', modelProvider: 'provider-a', messages: [], inProgress: false,
+      activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {},
+    })
     const state = useDesktopState()
     await state.refreshAncillaryState()
     state.primeSelectedThread('existing')
@@ -3435,7 +3441,20 @@ describe('shared manual models', () => {
     await state.removeManualModel('vendor/model')
     expect(state.selectedModelId.value).toBe('vendor/model')
     expect(state.availableModelIds.value).toContain('vendor/model')
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
     expect(state.removableModelIds.value).toEqual([])
+    await state.refreshAncillaryState()
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
+
+    const reloaded = useDesktopState()
+    reloaded.primeSelectedThread('existing')
+    await reloaded.loadMessages('existing')
+    await reloaded.refreshAncillaryState()
+    expect(reloaded.selectedModelId.value).toBe('vendor/model')
+    expect(reloaded.selectableModelIds.value).toEqual(['auto-model'])
+    await reloaded.addManualModel('vendor/model', 'existing')
+    expect(reloaded.selectableModelIds.value).toEqual(['auto-model', 'vendor/model'])
   })
 
   it('selects a model added through the home composer context and resets that draft on deletion', async () => {
@@ -3445,6 +3464,7 @@ describe('shared manual models', () => {
     expect(state.selectedModelId.value).toBe('vendor/model')
     await state.removeManualModel('vendor/model')
     expect(state.readModelIdForThread('__new-thread__')).toBe('auto-model')
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
   })
 
   it('adds to the side conversation without changing its parent and preserves the side model after removal', async () => {
@@ -3460,10 +3480,13 @@ describe('shared manual models', () => {
     await state.addManualModel('side-model', state.sideConversationThreadId.value)
     expect(state.sideConversationModelId.value).toBe('side-model')
     expect(state.selectedModelId.value).toBe('auto-model')
+    expect(state.selectableModelIds.value).toContain('side-model')
     await state.removeManualModel('side-model')
+    expect(state.selectableModelIds.value).not.toContain('side-model')
     await state.refreshAncillaryState()
     expect(state.sideConversationModelId.value).toBe('side-model')
     expect(state.availableModelIds.value).toContain('side-model')
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
     expect(state.removableModelIds.value).toEqual([])
   })
 
@@ -3473,8 +3496,21 @@ describe('shared manual models', () => {
     gatewayMocks.saveManualModelId.mockRejectedValueOnce(new Error('Failed to save manual models'))
     await expect(state.addManualModel('new-model', '')).rejects.toThrow('Failed to save manual models')
     expect(state.availableModelIds.value).toEqual(['auto-model'])
+    expect(state.selectableModelIds.value).toEqual(['auto-model'])
     expect(state.selectedModelId.value).toBe('auto-model')
     expect(state.isSavingManualModel.value).toBe(false)
+    expect(state.manualModelsError.value).toBe('Failed to save manual models')
+  })
+
+  it('keeps a manual model in the menu and selected when deletion fails', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    await state.addManualModel('vendor/model', '')
+    gatewayMocks.saveManualModelId.mockRejectedValueOnce(new Error('Failed to save manual models'))
+    await state.removeManualModel('vendor/model')
+    expect(state.selectableModelIds.value).toEqual(['auto-model', 'vendor/model'])
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.removableModelIds.value).toEqual(['vendor/model'])
     expect(state.manualModelsError.value).toBe('Failed to save manual models')
   })
 

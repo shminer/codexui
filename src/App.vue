@@ -960,7 +960,7 @@
                   :cwd="composerCwd"
                   :collaboration-modes="availableCollaborationModes"
                   :selected-collaboration-mode="selectedCollaborationMode"
-                  :models="availableModelIds" :selected-model="composerSelectedModelId"
+                  :models="selectableModelIds" :selected-model="composerSelectedModelId"
                   :removable-models="removableModelIds"
                   :add-model="addManualModel"
                   :delete-model="removeManualModel"
@@ -1062,7 +1062,7 @@
                     :cwd="composerCwd"
                     :collaboration-modes="availableCollaborationModes"
                     :selected-collaboration-mode="selectedCollaborationMode"
-                    :models="availableModelIds"
+                    :models="selectableModelIds"
                     :removable-models="removableModelIds"
                     :add-model="addManualModel"
                     :delete-model="removeManualModel"
@@ -1163,7 +1163,7 @@
     :follow-latest-revision="sideConversationFollowLatestRevision"
     :collaboration-modes="availableCollaborationModes"
     :selected-collaboration-mode="sideConversationCollaborationMode"
-    :models="availableModelIds"
+    :models="selectableModelIds"
     :removable-models="removableModelIds"
     :add-model="addManualModel"
     :delete-model="removeManualModel"
@@ -1467,7 +1467,7 @@ const {
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,
-  availableModelIds,
+  selectableModelIds,
   removableModelIds,
   addManualModel,
   removeManualModel,

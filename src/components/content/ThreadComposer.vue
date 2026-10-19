@@ -399,7 +399,7 @@
             :model-value="selectedModel"
             :options="modelOptions"
             :selected-prefix-icon="showFastModeModelIcon ? IconTablerBolt : null"
-            :placeholder="t('Model')"
+            :placeholder="selectedModel ? formatModelLabel(selectedModel) : t('Model')"
             open-direction="up"
             :disabled="isComposerConfigDisabled"
             enable-search
