@@ -33,12 +33,25 @@
             class="composer-dropdown-search-input"
             type="text"
             :placeholder="searchPlaceholderText"
+            :aria-label="searchPlaceholderText"
+            @keydown.enter.prevent="onCreate"
             @keydown.esc.prevent="onEscapeSearch"
           />
         </div>
 
+        <button
+          v-if="createLabel"
+          class="composer-dropdown-create"
+          type="button"
+          :disabled="busy || !canCreate"
+          @click="onCreate"
+        >
+          {{ duplicateQuery ? duplicateLabel : createLabel }}<template v-if="canCreate"> · {{ searchQuery.trim() }}</template>
+        </button>
+        <p v-if="error" class="composer-dropdown-error" role="alert">{{ error }}</p>
+
         <ul class="composer-dropdown-options" role="listbox">
-          <li v-for="option in filteredOptions" :key="option.value">
+          <li v-for="option in filteredOptions" :key="option.value" class="composer-dropdown-option-row">
             <button
               class="composer-dropdown-option"
               :class="{ 'is-selected': option.value === modelValue }"
@@ -47,6 +60,15 @@
             >
               {{ option.label }}
             </button>
+            <button
+              v-if="option.removable"
+              class="composer-dropdown-remove"
+              type="button"
+              :disabled="busy"
+              :aria-label="`${removeLabel} ${option.label}`"
+              :title="`${removeLabel} ${option.label}`"
+              @click.stop="emit('remove', option.value)"
+            >×</button>
           </li>
           <li v-if="filteredOptions.length === 0" class="composer-dropdown-empty">
             {{ emptyText }}
@@ -66,6 +88,7 @@ import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 type DropdownOption = {
   value: string
   label: string
+  removable?: boolean
 }
 
 const props = defineProps<{
@@ -82,10 +105,17 @@ const props = defineProps<{
   enableSearch?: boolean
   searchPlaceholder?: string
   emptyLabel?: string
+  createLabel?: string
+  duplicateLabel?: string
+  removeLabel?: string
+  busy?: boolean
+  error?: string
+  createOption?: (value: string) => Promise<void>
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  remove: [value: string]
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -117,6 +147,19 @@ const filteredOptions = computed(() => {
     return option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query)
   })
 })
+const duplicateQuery = computed(() => props.options.some((option) => option.value === searchQuery.value.trim()))
+const canCreate = computed(() => Boolean(searchQuery.value.trim()) && !duplicateQuery.value && !/[\u0000-\u001f\u007f]/u.test(searchQuery.value))
+
+async function onCreate(): Promise<void> {
+  if (!props.createOption || props.busy || !canCreate.value) return
+  try {
+    await props.createOption(searchQuery.value.trim())
+    searchQuery.value = ''
+    isOpen.value = false
+  } catch {
+    // Preserve the input so a failed save can be retried.
+  }
+}
 
 function onToggle(): void {
   if (props.disabled) return
@@ -220,6 +263,10 @@ watch(isOpen, (open) => {
   })
 })
 
+watch(() => [filteredOptions.value.length, props.error, props.busy], () => {
+  if (isOpen.value) void nextTick(updateMenuPosition)
+})
+
 let layoutWindow: Window | null = null
 watch(() => props.ownerDocument?.defaultView ?? window, (ownerWindow, _previous, onCleanup) => {
   isOpen.value = false
@@ -302,5 +349,25 @@ onBeforeUnmount(() => {
 
 .composer-dropdown-empty {
   @apply px-2 py-1.5 text-xs text-zinc-500;
+}
+
+.composer-dropdown-option-row {
+  @apply flex items-center;
+}
+
+.composer-dropdown-option-row .composer-dropdown-option {
+  @apply min-w-0 flex-1 break-all;
+}
+
+.composer-dropdown-create {
+  @apply w-full break-all rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-xs text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.composer-dropdown-remove {
+  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-lg text-zinc-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50;
+}
+
+.composer-dropdown-error {
+  @apply m-0 break-words px-2 py-1 text-xs text-red-600;
 }
 </style>

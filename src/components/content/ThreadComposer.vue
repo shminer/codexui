@@ -401,9 +401,17 @@
             :selected-prefix-icon="showFastModeModelIcon ? IconTablerBolt : null"
             :placeholder="t('Model')"
             open-direction="up"
-            :disabled="isComposerConfigDisabled || models.length === 0"
+            :disabled="isComposerConfigDisabled"
             enable-search
             :search-placeholder="t('Search models...')"
+            :create-label="addModel ? t('Add model') : undefined"
+            :duplicate-label="t('Model already exists')"
+            :remove-label="t('Remove model')"
+            :busy="isSavingModel"
+            :error="modelError ? t(modelError) : ''"
+            :create-option="createModel"
+            :empty-label="t('No results')"
+            @remove="removeModel"
             @update:model-value="onModelSelect"
         />
 
@@ -563,6 +571,11 @@ const props = withDefaults(defineProps<{
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
+  removableModels?: string[]
+  addModel?: (modelId: string, threadId: string) => Promise<void>
+  deleteModel?: (modelId: string) => Promise<void>
+  isSavingModel?: boolean
+  modelError?: string
   selectedModel: string
   supportedReasoningEfforts?: ReasoningEffort[]
   selectedReasoningEffort: ReasoningEffort | ''
@@ -730,9 +743,19 @@ function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
 
-const modelOptions = computed(() =>
-  props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
-)
+const modelOptions = computed(() => {
+  const removable = new Set(props.removableModels)
+  return props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId), removable: removable.has(modelId) }))
+})
+
+async function createModel(modelId: string): Promise<void> {
+  await props.addModel?.(modelId, props.activeThreadId)
+}
+
+function removeModel(modelId: string): void {
+  const ownerWindow = props.ownerDocument?.defaultView ?? window
+  if (ownerWindow.confirm(`${t('Remove model')} "${modelId}"?`)) void props.deleteModel?.(modelId)
+}
 const isPlanModeSelected = computed(() => props.selectedCollaborationMode === 'plan')
 
 const isPlanModeWaitingForModel = computed(() =>

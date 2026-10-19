@@ -2171,3 +2171,24 @@
     font-size: 16px !important;
   }
 }
+
+:root.dark .composer-dropdown-create {
+  color: #d4d4d8;
+}
+
+:root.dark .composer-dropdown-create:hover {
+  background-color: #27272a;
+}
+
+:root.dark .composer-dropdown-remove {
+  color: #a1a1aa;
+}
+
+:root.dark .composer-dropdown-remove:hover {
+  color: #fca5a5;
+  background-color: #450a0a;
+}
+
+:root.dark .composer-dropdown-error {
+  color: #fca5a5;
+}

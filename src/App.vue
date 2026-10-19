@@ -961,6 +961,11 @@
                   :collaboration-modes="availableCollaborationModes"
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :models="availableModelIds" :selected-model="composerSelectedModelId"
+                  :removable-models="removableModelIds"
+                  :add-model="addManualModel"
+                  :delete-model="removeManualModel"
+                  :is-saving-model="isSavingManualModel"
+                  :model-error="manualModelsError"
                   :supported-reasoning-efforts="composerSupportedReasoningEfforts"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
@@ -1058,6 +1063,11 @@
                     :collaboration-modes="availableCollaborationModes"
                     :selected-collaboration-mode="selectedCollaborationMode"
                     :models="availableModelIds"
+                    :removable-models="removableModelIds"
+                    :add-model="addManualModel"
+                    :delete-model="removeManualModel"
+                    :is-saving-model="isSavingManualModel"
+                    :model-error="manualModelsError"
                     :selected-model="composerSelectedModelId"
                     :supported-reasoning-efforts="composerSupportedReasoningEfforts"
                     :selected-reasoning-effort="selectedReasoningEffort"
@@ -1154,6 +1164,11 @@
     :collaboration-modes="availableCollaborationModes"
     :selected-collaboration-mode="sideConversationCollaborationMode"
     :models="availableModelIds"
+    :removable-models="removableModelIds"
+    :add-model="addManualModel"
+    :delete-model="removeManualModel"
+    :is-saving-model="isSavingManualModel"
+    :model-error="manualModelsError"
     :selected-model="sideConversationModelId"
     :supported-reasoning-efforts="availableModelReasoningEfforts[sideConversationModelId] ?? []"
     :selected-reasoning-effort="sideConversationReasoningEffort"
@@ -1453,6 +1468,11 @@ const {
   selectedThreadId,
   availableCollaborationModes,
   availableModelIds,
+  removableModelIds,
+  addManualModel,
+  removeManualModel,
+  isSavingManualModel,
+  manualModelsError,
   availableModelReasoningEfforts,
   selectedCollaborationMode,
   selectedModelId,

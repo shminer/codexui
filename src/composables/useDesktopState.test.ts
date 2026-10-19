@@ -23,6 +23,8 @@ const gatewayMocks = vi.hoisted(() => ({
   getAccountRateLimits: vi.fn(),
   getAvailableCollaborationModes: vi.fn(),
   getAvailableModelIds: vi.fn(),
+  getManualModelIds: vi.fn(),
+  saveManualModelId: vi.fn(),
   getCurrentModelConfig: vi.fn(),
   getPendingServerRequests: vi.fn(),
   getSkillsList: vi.fn(),
@@ -172,6 +174,7 @@ beforeEach(() => {
     mock.mockReset()
   }
   gatewayMocks.normalizeThreadGoal.mockImplementation((value: unknown) => value)
+  gatewayMocks.getManualModelIds.mockResolvedValue([])
   gatewayMocks.resumeThread.mockResolvedValue(null)
   gatewayMocks.getThreadDetail.mockResolvedValue({
     model: '', modelProvider: '', messages: [], inProgress: false,
@@ -3310,6 +3313,153 @@ describe('fork from response', () => {
     expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
     expect(state.selectedThreadId.value).toBe('forked-thread')
     expect(state.messages.value.at(-1)?.turnId).toBe('turn-16')
+  })
+})
+
+describe('shared manual models', () => {
+  let saved: string[]
+  beforeEach(() => {
+    installTestWindow()
+    saved = []
+    gatewayMocks.getManualModelIds.mockImplementation(async () => [...saved])
+    gatewayMocks.saveManualModelId.mockImplementation(async (id: string, remove: boolean) => {
+      saved = remove ? saved.filter((value) => value !== id) : [...new Set([...saved, id.trim()])]
+      return [...saved]
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'auto-model', providerId: 'provider-a', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['auto-model'])
+  })
+
+  it('restores server models and their selection after reload and shares them with other providers', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    await state.addManualModel('vendor/model', '')
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    const reloaded = useDesktopState()
+    await reloaded.refreshAncillaryState()
+    expect(reloaded.selectedModelId.value).toBe('vendor/model')
+    expect(reloaded.availableModelIds.value).toEqual(['auto-model', 'vendor/model'])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'other-model', providerId: 'provider-b', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['other-model'])
+    await reloaded.refreshAncillaryState({ providerChanged: true })
+    expect(reloaded.availableModelIds.value).toEqual(['other-model', 'vendor/model'])
+    expect(reloaded.removableModelIds.value).toEqual(['vendor/model'])
+  })
+
+  it('protects an automatic model when it also has a manual record', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    await state.addManualModel('vendor/model', '')
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['auto-model', 'vendor/model'])
+    await state.refreshAncillaryState()
+    expect(state.availableModelIds.value).toEqual(['auto-model', 'vendor/model'])
+    expect(state.removableModelIds.value).toEqual([])
+    gatewayMocks.saveManualModelId.mockClear()
+    await state.removeManualModel('vendor/model')
+    expect(gatewayMocks.saveManualModelId).not.toHaveBeenCalled()
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['auto-model'])
+    await state.refreshAncillaryState()
+    expect(state.removableModelIds.value).toEqual(['vendor/model'])
+  })
+
+  it('removes a new-chat default without changing an existing thread model', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    await state.addManualModel('vendor/model', '')
+    state.setSelectedModelIdForThread('existing', 'vendor/model')
+    await state.removeManualModel('vendor/model')
+    expect(state.availableModelIds.value).toEqual(['auto-model'])
+    expect(state.selectedModelId.value).toBe('auto-model')
+    expect(state.readModelIdForThread('existing')).toBe('vendor/model')
+    state.primeSelectedThread('existing')
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.availableModelIds.value).toContain('vendor/model')
+    expect(state.removableModelIds.value).toEqual([])
+  })
+
+  it('keeps an active existing thread model visible after removing its manual record', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    state.primeSelectedThread('existing')
+    await state.addManualModel('vendor/model', 'existing')
+    await state.removeManualModel('vendor/model')
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.availableModelIds.value).toContain('vendor/model')
+    expect(state.removableModelIds.value).toEqual([])
+  })
+
+  it('selects a model added through the home composer context and resets that draft on deletion', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    await state.addManualModel('vendor/model', '__new-thread__')
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    await state.removeManualModel('vendor/model')
+    expect(state.readModelIdForThread('__new-thread__')).toBe('auto-model')
+  })
+
+  it('adds to the side conversation without changing its parent and preserves the side model after removal', async () => {
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'auto-model', modelProvider: 'provider-a', messages: [], inProgress: false,
+      activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    state.primeSelectedThread('parent')
+    state.setSelectedModelIdForThread('parent', 'auto-model')
+    await state.openSideConversation('parent')
+    await state.addManualModel('side-model', state.sideConversationThreadId.value)
+    expect(state.sideConversationModelId.value).toBe('side-model')
+    expect(state.selectedModelId.value).toBe('auto-model')
+    await state.removeManualModel('side-model')
+    await state.refreshAncillaryState()
+    expect(state.sideConversationModelId.value).toBe('side-model')
+    expect(state.availableModelIds.value).toContain('side-model')
+    expect(state.removableModelIds.value).toEqual([])
+  })
+
+  it('keeps the list and selection intact when saving fails', async () => {
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    gatewayMocks.saveManualModelId.mockRejectedValueOnce(new Error('Failed to save manual models'))
+    await expect(state.addManualModel('new-model', '')).rejects.toThrow('Failed to save manual models')
+    expect(state.availableModelIds.value).toEqual(['auto-model'])
+    expect(state.selectedModelId.value).toBe('auto-model')
+    expect(state.isSavingManualModel.value).toBe(false)
+    expect(state.manualModelsError.value).toBe('Failed to save manual models')
+  })
+
+  it('loads manual models even when Codex config discovery fails', async () => {
+    saved = ['vendor/model']
+    gatewayMocks.getCurrentModelConfig.mockRejectedValue(new Error('Codex unavailable'))
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    expect(state.availableModelIds.value).toEqual(['vendor/model'])
+  })
+
+  it('ignores an older in-flight read after saving a model', async () => {
+    let finish!: (value: string[]) => void
+    gatewayMocks.getManualModelIds.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const state = useDesktopState()
+    const refresh = state.refreshAncillaryState()
+    await flushMicrotasks()
+    await state.addManualModel('vendor/model', '')
+    finish([])
+    await refresh
+    expect(state.availableModelIds.value).toContain('vendor/model')
+    expect(state.removableModelIds.value).toEqual(['vendor/model'])
+  })
+
+  it('keeps the last automatic catalog on failure and clears it when switching providers', async () => {
+    saved = ['vendor/model']
+    const state = useDesktopState()
+    await state.refreshAncillaryState()
+    gatewayMocks.getAvailableModelIds.mockRejectedValue(new Error('Provider unavailable'))
+    await state.refreshAncillaryState()
+    expect(state.availableModelIds.value).toEqual(['auto-model', 'vendor/model'])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: '', providerId: 'provider-b', reasoningEffort: 'medium', speedMode: 'standard' })
+    await state.refreshAncillaryState({ providerChanged: true })
+    expect(state.availableModelIds.value).not.toContain('auto-model')
+    expect(state.availableModelIds.value).toContain('vendor/model')
   })
 })
 

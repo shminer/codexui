@@ -10,6 +10,8 @@ import {
   getAccountRateLimits,
   renameThread,
   getAvailableModelIds,
+  getManualModelIds,
+  saveManualModelId,
   getCurrentModelConfig,
   getPendingServerRequests,
   getSkillsList,
@@ -1789,7 +1791,21 @@ export function useDesktopState() {
   let hasLoadedPersistedQueueState = false
   let persistedQueueStatePromise: Promise<void> | null = null
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
-  const availableModelIds = ref<string[]>([])
+  const automaticModelIds = ref<string[]>([])
+  const manualModelIds = ref<string[]>([])
+  const retainedModelIds = ref<string[]>([])
+  const availableModelIds = computed(() => [...new Set([
+    ...automaticModelIds.value, ...manualModelIds.value, ...retainedModelIds.value,
+  ])])
+  const removableModelIds = computed(() => {
+    const automaticIds = new Set(automaticModelIds.value)
+    return manualModelIds.value.filter((id) => !automaticIds.has(id))
+  })
+  const manualModelsError = ref('')
+  const isSavingManualModel = ref(false)
+  let manualModelsRequest: Promise<void> | null = null
+  let manualModelsRevision = 0
+  let loadedModelContextId = ''
   const availableModelReasoningEfforts = ref<Record<string, ReasoningEffort[]>>({})
   const availableCollaborationModes = ref<CollaborationModeOption[]>([
     { value: 'default', label: 'Default' },
@@ -2688,15 +2704,15 @@ export function useDesktopState() {
   }
 
   function ensureAvailableModelIds(...modelIds: string[]): void {
-    const nextModelIds = [...availableModelIds.value]
+    const nextModelIds = [...retainedModelIds.value]
     for (const modelId of modelIds) {
       const normalizedModelId = modelId.trim()
-      if (normalizedModelId && !nextModelIds.includes(normalizedModelId)) {
+      if (normalizedModelId && !availableModelIds.value.includes(normalizedModelId) && !nextModelIds.includes(normalizedModelId)) {
         nextModelIds.push(normalizedModelId)
       }
     }
-    if (!areStringArraysEqual(availableModelIds.value, nextModelIds)) {
-      availableModelIds.value = nextModelIds
+    if (!areStringArraysEqual(retainedModelIds.value, nextModelIds)) {
+      retainedModelIds.value = nextModelIds
     }
   }
 
@@ -3177,7 +3193,83 @@ export function useDesktopState() {
     return [`Mode: ${modeLabel}`, `Model: ${modelLabel}`, `Thinking: ${effortLabel}`, `Speed: ${speedLabel}`]
   }
 
+  async function refreshManualModels(): Promise<void> {
+    if (isSavingManualModel.value) return
+    if (manualModelsRequest) return manualModelsRequest
+    const revision = manualModelsRevision
+    manualModelsRequest = (async () => {
+      try {
+        const ids = await getManualModelIds()
+        if (revision !== manualModelsRevision) return
+        manualModelIds.value = ids
+        manualModelsError.value = ''
+      } catch {
+        if (revision === manualModelsRevision) manualModelsError.value = 'Failed to load manual models'
+      } finally {
+        manualModelsRequest = null
+      }
+    })()
+    return manualModelsRequest
+  }
+
+  async function addManualModel(modelId: string, threadId: string): Promise<void> {
+    if (isSavingManualModel.value) throw new Error('Saving manual models')
+    const targetThreadId = threadId === NEW_THREAD_COLLABORATION_MODE_CONTEXT ? '' : threadId
+    const accountId = activeAccountStorageId.value
+    const providerId = readProviderIdForThread(targetThreadId)
+    const isSideModel = Boolean(threadId) && threadId === sideConversationThreadId.value
+    isSavingManualModel.value = true
+    manualModelsRevision += 1
+    manualModelsError.value = ''
+    try {
+      manualModelIds.value = await saveManualModelId(modelId)
+      if (activeAccountStorageId.value !== accountId || readProviderIdForThread(targetThreadId) !== providerId) return
+      if (isSideModel) {
+        if (threadId === sideConversationThreadId.value) setSideConversationModel(modelId)
+      } else {
+        setSelectedModelIdForThread(targetThreadId, modelId)
+      }
+    } catch (unknownError) {
+      manualModelsError.value = unknownError instanceof Error ? unknownError.message : 'Failed to save manual models'
+      throw unknownError
+    } finally {
+      isSavingManualModel.value = false
+    }
+  }
+
+  async function removeManualModel(modelId: string): Promise<void> {
+    if (isSavingManualModel.value || !removableModelIds.value.includes(modelId)) return
+    isSavingManualModel.value = true
+    manualModelsRevision += 1
+    manualModelsError.value = ''
+    try {
+      manualModelIds.value = await saveManualModelId(modelId, true)
+      if (automaticModelIds.value.includes(modelId)) return
+      const draftModelId = readModelIdForThread('')
+      const keepCurrentThreadModel = Boolean(selectedThreadId.value) && selectedModelId.value === modelId
+      const keepSideModel = Boolean(sideConversationThreadId.value) && sideConversationModelId.value === modelId
+      retainedModelIds.value = retainedModelIds.value.filter((id) => id !== modelId)
+      if (keepCurrentThreadModel || keepSideModel) ensureAvailableModelIds(modelId)
+      const nextModelMap = cloneStringKeyedRecord(selectedModelIdByContext.value)
+      for (const [contextId, id] of Object.entries(nextModelMap)) {
+        if (id === modelId && (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT || contextId.startsWith(NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX))) {
+          delete nextModelMap[contextId]
+        }
+      }
+      selectedModelIdByContext.value = nextModelMap
+      saveSelectedModelMap(nextModelMap)
+      if (draftModelId === modelId) {
+        setSelectedModelIdForThread('', automaticModelIds.value[0] || manualModelIds.value[0] || '')
+      }
+    } catch (unknownError) {
+      manualModelsError.value = unknownError instanceof Error ? unknownError.message : 'Failed to save manual models'
+    } finally {
+      isSavingManualModel.value = false
+    }
+  }
+
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
+    const manualRefresh = refreshManualModels()
     const requestEpoch = ++modelPreferencesRequestEpoch
     modelCatalogProviderId = ''
     const accountId = activeAccountStorageId.value
@@ -3199,6 +3291,13 @@ export function useDesktopState() {
       activeProviderId.value = normalizedProviderId
       targetProviderId = readProviderIdForThread(targetThreadId)
       modelCatalogProviderId = targetProviderId
+      const modelContextId = toProviderModelContextId(targetProviderId, accountId)
+      if (loadedModelContextId !== modelContextId) {
+        automaticModelIds.value = []
+        retainedModelIds.value = []
+        availableModelReasoningEfforts.value = {}
+        loadedModelContextId = modelContextId
+      }
       const usesUpstreamCatalog = targetProviderId === 'codex'
         || (currentConfig.upstreamCatalogProviderIds ?? [])
           .map(normalizeProviderContextId)
@@ -3206,7 +3305,7 @@ export function useDesktopState() {
       const isProviderBacked = !usesUpstreamCatalog
       const selectedThreadContextId = toThreadContextId(targetThreadId)
       let modelReasoningEfforts: Record<string, ReasoningEffort[]> | null = null
-      const modelIds = await getAvailableModelIds({
+      const discoveredIds = await getAvailableModelIds({
         includeProviderModels: isProviderBacked,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
@@ -3216,7 +3315,10 @@ export function useDesktopState() {
           )
         },
       })
+      await manualRefresh
       if (!isCurrentRequest()) return
+      automaticModelIds.value = discoveredIds
+      const modelIds = [...new Set([...discoveredIds, ...manualModelIds.value])]
       if (modelReasoningEfforts) {
         availableModelReasoningEfforts.value = modelReasoningEfforts
       }
@@ -3243,8 +3345,8 @@ export function useDesktopState() {
           : targetProviderId === 'codex' && catalogModelIds.has(threadScopedModelId) ? threadScopedModelId : ''
       const selectedModel = (isNewThreadContext ? savedNewThreadModelId : threadScopedModelId)
         || validConfiguredModelId || modelIds[0] || ''
-      availableModelIds.value = selectedModel && !catalogModelIds.has(selectedModel)
-        ? [...modelIds, selectedModel] : [...modelIds]
+      retainedModelIds.value = [...new Set([selectedModel, sideConversationModelId.value]
+        .filter((id) => Boolean(id) && !catalogModelIds.has(id)))]
       if (isNewThreadContext) {
         setSelectedModelIdForThread(targetThreadId, selectedModel)
       } else {
@@ -3296,6 +3398,8 @@ export function useDesktopState() {
         codexCliMissingError.value = ''
       }
       // Keep chat UI usable even if model metadata is temporarily unavailable.
+    } finally {
+      await manualRefresh
     }
   }
 
@@ -8559,6 +8663,11 @@ export function useDesktopState() {
     selectedThreadId,
     availableCollaborationModes,
     availableModelIds,
+    removableModelIds,
+    manualModelsError,
+    isSavingManualModel,
+    addManualModel,
+    removeManualModel,
     availableModelReasoningEfforts,
     selectedCollaborationMode,
     selectedModelId,

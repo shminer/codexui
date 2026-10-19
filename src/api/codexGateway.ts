@@ -2400,10 +2400,9 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
 
     if (response.ok && Array.isArray(providerPayload?.data)) {
       return {
-        ids: providerPayload.data
+        ids: [...new Set(providerPayload.data
           .map((candidate) => typeof candidate === 'string' ? candidate.trim() : '')
-          .filter((candidate, index, candidates): candidate is string =>
-            candidate.length > 0 && candidates.indexOf(candidate) === index),
+          .filter(Boolean))],
         exclusive: providerPayload.exclusive === true,
       }
     }
@@ -2411,6 +2410,28 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
     // Keep Codex usable when the provider-models endpoint is unavailable.
   }
   return null
+}
+
+export async function getManualModelIds(): Promise<string[]> {
+  const response = await fetch('/codex-api/manual-models', { signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS) })
+  if (!response.ok) throw new Error('Failed to load manual models')
+  const payload = await response.json() as { data: string[] }
+  if (!Array.isArray(payload.data) || payload.data.some((id) => typeof id !== 'string')) {
+    throw new Error('Failed to load manual models')
+  }
+  return payload.data
+}
+
+export async function saveManualModelId(modelId: string, remove = false): Promise<string[]> {
+  const response = await fetch('/codex-api/manual-models', {
+    method: remove ? 'DELETE' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelId }),
+    signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS),
+  })
+  const payload = await response.json() as { data?: string[]; error?: string }
+  if (!response.ok || !Array.isArray(payload.data)) throw new Error(payload.error || 'Failed to save manual models')
+  return payload.data
 }
 
 export async function getAvailableModelIds(options: {
@@ -2423,8 +2444,9 @@ export async function getAvailableModelIds(options: {
   const providerModels = shouldIncludeProviderModels ? await fetchProviderModelIds(options.providerId) : null
 
   if (providerModels?.exclusive || options.requireProviderModels) {
+    if (!providerModels) throw new Error('Failed to load provider models')
     options.onModelCatalog?.([])
-    return providerModels?.ids ?? []
+    return providerModels.ids
   }
 
   const ids: string[] = []

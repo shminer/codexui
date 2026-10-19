@@ -2214,6 +2214,7 @@ function normalizeQueryParams(value: unknown): URLSearchParams {
 
 function buildProviderModelsUrl(baseUrl: string, queryParams: unknown): URL {
   const url = new URL(baseUrl)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Invalid provider URL protocol')
   url.pathname = url.pathname.endsWith('/') ? `${url.pathname}models` : `${url.pathname}/models`
   const extraParams = normalizeQueryParams(queryParams)
   for (const [key, value] of extraParams.entries()) {
@@ -2252,12 +2253,7 @@ async function fetchCustomEndpointDefaultModel(baseUrl: string, apiKey: string):
   if (!normalizedBaseUrl) return ''
 
   try {
-    const modelsUrl = buildProviderModelsUrl(normalizedBaseUrl, null)
-    const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
-    const response = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS) })
-    if (!response.ok) return ''
-    const payload = await response.json() as unknown
-    const modelIds = normalizeProviderModelsData(payload)
+    const modelIds = await fetchConfiguredProviderModelIds({ base_url: normalizedBaseUrl, experimental_bearer_token: apiKey })
     return modelIds[0] ?? ''
   } catch {
     return ''
@@ -2283,116 +2279,78 @@ function sortOpenCodeZenModelIds(modelIds: string[]): string[] {
   return [...freeIds, ...paidIds]
 }
 
-async function readProviderBackedModelIds(appServer: AppServerProcess): Promise<ProviderModelsResponse> {
-  const configPayload = asRecord(await appServer.rpc('config/read', {}))
-  const config = asRecord(configPayload?.config)
-  const providerId = readNonEmptyString(config?.model_provider)
-  if (!providerId) {
-    return { data: [], providerId: '', source: 'provider' }
-  }
-
-  const providers = asRecord(config?.model_providers)
-  const provider = asRecord(providers?.[providerId])
-  if (!provider) {
-    logProviderModelDiscoveryWarning('configured provider is missing from model_providers', { providerId })
-    return { data: [], providerId, source: 'provider' }
-  }
-
-  const wireApi = readNonEmptyString(provider.wire_api)
-  if (wireApi !== 'responses') {
-    return { data: [], providerId, source: 'provider' }
-  }
-
+export async function fetchConfiguredProviderModelIds(
+  provider: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
   const baseUrl = readNonEmptyString(provider.base_url)
-  if (!baseUrl) {
-    logProviderModelDiscoveryWarning('responses provider is missing base_url', { providerId })
-    return { data: [], providerId, source: 'provider' }
-  }
-
+  if (!baseUrl) throw new Error('Provider is missing base_url')
   const headers = new Headers()
-  const configuredHeaders = asRecord(provider.http_headers)
-  if (configuredHeaders) {
-    for (const [key, rawValue] of Object.entries(configuredHeaders)) {
-      const normalized = normalizeHeaderValue(rawValue)
-      if (!normalized) continue
-      headers.set(key, normalized)
-    }
+  for (const [key, value] of Object.entries(asRecord(provider.http_headers) ?? {})) {
+    const normalized = normalizeHeaderValue(value)
+    if (normalized) headers.set(key, normalized)
   }
-
-  const bearerToken = readNonEmptyString(provider.experimental_bearer_token)
-  if (bearerToken && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${bearerToken}`)
+  for (const [key, value] of Object.entries(asRecord(provider.env_http_headers) ?? {})) {
+    const envName = readNonEmptyString(value)
+    const normalized = envName ? normalizeHeaderValue(env[envName]) : null
+    if (normalized && !headers.has(key)) headers.set(key, normalized)
   }
-
   const envKey = readNonEmptyString(provider.env_key)
-  const envHttpHeaders = asRecord(provider.env_http_headers)
-  if (envKey || envHttpHeaders) {
-    logProviderModelDiscoveryWarning('provider discovery skipped env-backed auth/header expansion', {
-      providerId,
-      hasEnvKey: Boolean(envKey),
-      hasEnvHttpHeaders: Boolean(envHttpHeaders),
-    })
-  }
+  const bearerToken = readNonEmptyString(provider.experimental_bearer_token)
+    || (envKey ? readNonEmptyString(env[envKey]) : '')
+  if (bearerToken && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${bearerToken}`)
 
   let requestUrl: URL
   try {
     requestUrl = buildProviderModelsUrl(baseUrl, provider.query_params)
-  } catch (error) {
-    logProviderModelDiscoveryWarning('provider /models URL was invalid', {
-      providerId,
-      error: getErrorMessage(error, 'invalid url'),
-    })
-    return { data: [], providerId, source: 'provider' }
+  } catch {
+    throw new Error('Invalid provider models URL')
   }
-
   let response: Response
   try {
-    response = await fetch(requestUrl, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS),
-    })
+    response = await fetch(requestUrl, { headers, signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS) })
   } catch (error) {
-    logProviderModelDiscoveryWarning('provider /models request failed', {
-      providerId,
-      error: isTimeoutError(error) ? `request timed out after ${PROVIDER_MODELS_FETCH_TIMEOUT_MS}ms` : getErrorMessage(error, 'network error'),
-    })
-    return { data: [], providerId, source: 'provider' }
+    throw new Error(isTimeoutError(error) ? 'Provider models request timed out' : 'Provider models request failed')
   }
-
-  let payload: unknown = null
+  if (!response.ok) throw new Error(`Provider models request returned HTTP ${response.status}`)
   try {
-    payload = await response.json()
-  } catch (error) {
-    logProviderModelDiscoveryWarning('provider /models response was not valid JSON', {
-      providerId,
-      status: response.status,
-      error: getErrorMessage(error, 'invalid json'),
-    })
-    return { data: [], providerId, source: 'provider' }
+    return normalizeProviderModelsData(await response.json())
+  } catch {
+    throw new Error('Invalid provider models response')
+  }
+}
+
+export async function readProviderBackedModelIds(appServer: AppServerProcess, requestedProviderId?: string): Promise<ProviderModelsResponse> {
+  const configPayload = asRecord(await appServer.rpc('config/read', {}))
+  const config = asRecord(configPayload?.config)
+  const configuredProviderId = requestedProviderId || readNonEmptyString(config?.model_provider)
+  const providers = asRecord(config?.model_providers)
+  const providerIds = Object.keys(providers ?? {})
+  const providerId = providerIds.includes(configuredProviderId) ? configuredProviderId : providerIds.find((id) =>
+    id.trim().toLowerCase().replace(/_/g, '-') === configuredProviderId.trim().toLowerCase().replace(/_/g, '-'),
+  ) || configuredProviderId
+  if (!providerId) {
+    return { data: [], providerId: '', source: 'provider' }
   }
 
-  if (!response.ok) {
-    logProviderModelDiscoveryWarning('provider /models request returned non-2xx', {
-      providerId,
-      status: response.status,
-      statusText: response.statusText,
-    })
-    return { data: [], providerId, source: 'provider' }
+  const provider = asRecord(providers?.[providerId])
+  if (!provider) {
+    logProviderModelDiscoveryWarning('configured provider is missing from model_providers', { providerId })
+    throw new Error('Configured model provider was not found')
   }
 
   try {
     return {
-      data: normalizeProviderModelsData(payload),
+      data: await fetchConfiguredProviderModelIds(provider, appServer.getProviderEnvironment()),
       providerId,
       source: 'provider',
     }
   } catch (error) {
-    logProviderModelDiscoveryWarning('provider /models payload was invalid', {
+    logProviderModelDiscoveryWarning('provider model discovery failed', {
       providerId,
-      error: getErrorMessage(error, 'invalid payload'),
+      errorClass: error instanceof Error ? error.name : 'Error',
     })
-    return { data: [], providerId, source: 'provider' }
+    throw new Error('Failed to load provider models')
   }
 }
 
@@ -2433,7 +2391,21 @@ async function readProviderModelIdsForProvider(
     }
   }
 
-  return readProviderBackedModelIds(appServer)
+  if ((normalizedProviderId === 'custom' || normalizedProviderId === 'custom-endpoint') && fmState?.customBaseUrl) {
+    const apiKey = fmState.provider === 'custom' ? fmState.apiKey : fmState.providerKeys?.custom
+    const ids = await fetchConfiguredProviderModelIds({
+      base_url: fmState.customBaseUrl,
+      experimental_bearer_token: apiKey === 'dummy' ? '' : apiKey,
+    })
+    const currentModel = fmState.model?.trim() ?? ''
+    return {
+      data: currentModel && ids.includes(currentModel) ? [currentModel, ...ids.filter((id) => id !== currentModel)] : ids,
+      providerId: 'custom',
+      source: 'provider',
+    }
+  }
+
+  return readProviderBackedModelIds(appServer, providerId)
 }
 
 function readNonEmptyString(value: unknown): string {
@@ -5546,7 +5518,36 @@ export async function updatePinnedThread(threadId: string, pinned: boolean): Pro
 }
 
 const FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY = 'first-launch-plugins-card-dismissed'
+const CUSTOM_MODEL_IDS_KEY = 'custom-model-ids'
 const THREAD_QUEUE_STATE_KEY = 'thread-queue-state'
+
+function validateManualModelId(value: unknown): string {
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f]/u.test(value) || !value.trim()) {
+    throw new Error('Enter a valid model ID')
+  }
+  return value.trim()
+}
+
+function normalizeManualModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids = value.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()) && !/[\u0000-\u001f\u007f]/u.test(id))
+  return [...new Set(ids.map((id) => id.trim()))]
+}
+
+export async function readManualModelIds(): Promise<string[]> {
+  const state = await readCodexGlobalState()
+  return normalizeManualModelIds(state[CUSTOM_MODEL_IDS_KEY])
+}
+
+export async function updateManualModelId(value: unknown, remove = false): Promise<string[]> {
+  const id = validateManualModelId(value)
+  return updateCodexGlobalState((state) => {
+    const ids = normalizeManualModelIds(state[CUSTOM_MODEL_IDS_KEY])
+    const next = remove ? ids.filter((candidate) => candidate !== id) : [...new Set([...ids, id])]
+    state[CUSTOM_MODEL_IDS_KEY] = next
+    return next
+  })
+}
 
 type StoredQueuedMessage = {
   id: string
@@ -6307,6 +6308,7 @@ export class AppServerProcess {
   private captureVerificationRunning = false
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
+  private providerEnvironment: NodeJS.ProcessEnv = process.env
 
 
   private getCodexCommand(): CodexCommandResolution {
@@ -6335,6 +6337,10 @@ export class AppServerProcess {
     return { args, env: extraEnv }
   }
 
+  getProviderEnvironment(): NodeJS.ProcessEnv {
+    return this.providerEnvironment
+  }
+
   private getAppServerConfigSignature(config: { args: string[]; env: Record<string, string> }): string {
     return JSON.stringify({
       args: config.args,
@@ -6361,6 +6367,7 @@ export class AppServerProcess {
     const codexResolution = this.getCodexCommand()
     const invocation = getSpawnInvocation(codexResolution.command, config.args)
     const spawnEnv = { ...getCodexSpawnEnv(codexResolution), ...config.env }
+    this.providerEnvironment = spawnEnv
     const proc = spawn(invocation.command, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: spawnEnv,
@@ -8834,66 +8841,39 @@ export function createCodexBridgeMiddleware(options: {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/provider-models') {
-        try {
-          const requestedProvider = url.searchParams.get('provider')?.trim() ?? ''
-          if (requestedProvider) {
-            setJson(res, 200, {
-              ...(await readProviderModelIdsForProvider(appServer, requestedProvider)),
-              exclusive: true,
-            })
-            return
-          }
-          const fmState = ensureDefaultFreeModeStateForMissingAuthSync(join(getCodexHomeDir(), FREE_MODE_STATE_FILE))
-          if (fmState?.enabled) {
-            if (fmState.provider === 'opencode-zen') {
-              try {
-                const modelIds = filterOpenCodeZenModelsForAuthState(
-                  sortOpenCodeZenModelIds(await fetchOpenCodeZenModelIds(fmState.apiKey)),
-                  fmState.apiKey,
-                )
-                if (modelIds.length > 0) {
-                  setJson(res, 200, { data: modelIds, exclusive: true, source: 'opencode-zen' })
-                  return
-                }
-              } catch {
-                // OpenCode Zen model fetch failed
-              }
-              setJson(res, 200, { data: ['big-pickle', 'minimax-m2.5-free', 'nemotron-3-super-free', 'trinity-large-preview-free'], exclusive: true, source: 'opencode-zen' })
-              return
-            }
-            if (fmState.provider === 'custom' && fmState.customBaseUrl) {
-              try {
-                const modelsUrl = fmState.customBaseUrl.replace(/\/+$/, '') + '/models'
-                const headers: Record<string, string> = {}
-                if (fmState.apiKey && fmState.apiKey !== 'dummy') {
-                  headers['Authorization'] = `Bearer ${fmState.apiKey}`
-                }
-                const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) })
-                if (resp.ok) {
-                  const json = await resp.json() as unknown
-                  const ids = normalizeProviderModelsData(json)
-                  const currentModel = fmState.model?.trim() ?? ''
-                  const orderedIds = currentModel && ids.includes(currentModel)
-                    ? [currentModel, ...ids.filter((id) => id !== currentModel)]
-                    : ids
-                  setJson(res, 200, { data: orderedIds, exclusive: true, source: 'custom' })
-                  return
-                }
-              } catch {
-                // Custom endpoint model fetch failed — return empty list
-              }
-              setJson(res, 200, { data: [], exclusive: true, source: 'custom' })
-              return
-            }
-            const freeModels = await getFreeModels()
-            setJson(res, 200, { data: freeModels, exclusive: true })
-            return
-          }
-        } catch {
-          // No free-mode state — proceed normally
+        const requestedProvider = url.searchParams.get('provider')?.trim() ?? ''
+        const fmState = requestedProvider ? null : ensureDefaultFreeModeStateForMissingAuthSync(join(getCodexHomeDir(), FREE_MODE_STATE_FILE))
+        const providerId = requestedProvider || (fmState?.enabled ? fmState.provider || 'openrouter' : '')
+        if (providerId) {
+          setJson(res, 200, {
+            ...(await readProviderModelIdsForProvider(appServer, providerId)),
+            exclusive: true,
+          })
+          return
         }
         const data = await readProviderBackedModelIds(appServer)
         setJson(res, 200, data)
+        return
+      }
+
+      if (url.pathname === '/codex-api/manual-models' && ['GET', 'POST', 'DELETE'].includes(req.method ?? '')) {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: await readManualModelIds() })
+          return
+        }
+        let modelId: string
+        try {
+          const body = asRecord(await readJsonBody(req))
+          modelId = validateManualModelId(body?.modelId)
+        } catch {
+          setJson(res, 400, { error: 'Enter a valid model ID' })
+          return
+        }
+        try {
+          setJson(res, 200, { data: await updateManualModelId(modelId, req.method === 'DELETE') })
+        } catch {
+          setJson(res, 500, { error: 'Failed to save manual models' })
+        }
         return
       }
 

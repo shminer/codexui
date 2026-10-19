@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getSkillsList, getThreadDetail, getThreadGoal, getThreadTitleCache, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
+import { getManualModelIds, saveManualModelId, getMethodCatalog, supportsThreadRollback, rollbackThread, rollbackThreadAndFiles, clearThreadGoal, discardSideConversationThreadInBackground, discardSideConversationThreadOnPageHide, forkThread, getAvailableModelIds, getCurrentModelConfig, getSkillsList, getThreadDetail, getThreadGoal, getThreadTitleCache, listDirectoryComposioConnectors, resumeThread, setThreadGoal, startSideConversation, startThreadTurn } from './codexGateway'
 
 describe('thread title cache request failures', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -490,9 +490,38 @@ describe('listDirectoryComposioConnectors', () => {
   })
 })
 
+describe('manual model API', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('loads and mutates the server list with exact model IDs', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ data: ['vendor/model:v2'] }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await getManualModelIds()).toEqual(['vendor/model:v2'])
+    await saveManualModelId('vendor/model:v2')
+    await saveManualModelId('vendor/model:v2', true)
+    expect(fetchMock.mock.calls.map(([url, options]) => [url, options?.method ?? 'GET', options?.body])).toEqual([
+      ['/codex-api/manual-models', 'GET', undefined],
+      ['/codex-api/manual-models', 'POST', JSON.stringify({ modelId: 'vendor/model:v2' })],
+      ['/codex-api/manual-models', 'DELETE', JSON.stringify({ modelId: 'vendor/model:v2' })],
+    ])
+  })
+
+  it('propagates write errors instead of presenting an empty successful list', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: 'Failed to save manual models' }, { status: 500 })))
+    await expect(saveManualModelId('vendor/model')).rejects.toThrow('Failed to save manual models')
+  })
+})
+
 describe('getAvailableModelIds', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('rejects a failed required provider catalog so the caller can retain its last result', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getAvailableModelIds({ requireProviderModels: true, providerId: 'custom' })).rejects.toThrow('Failed to load provider models')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('uses provider models without waiting for model/list when provider models are required', async () => {

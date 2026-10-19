@@ -97,6 +97,11 @@
             :collaboration-modes="collaborationModes"
             :selected-collaboration-mode="selectedCollaborationMode"
             :models="models"
+            :removable-models="removableModels"
+            :add-model="addModel"
+            :delete-model="deleteModel"
+            :is-saving-model="isSavingModel"
+            :model-error="modelError"
             :selected-model="selectedModel"
             :supported-reasoning-efforts="supportedReasoningEfforts"
             :selected-reasoning-effort="selectedReasoningEffort"
@@ -204,6 +209,11 @@ const props = defineProps<{
   collaborationModes: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
+  removableModels?: string[]
+  addModel?: (modelId: string, threadId: string) => Promise<void>
+  deleteModel?: (modelId: string) => Promise<void>
+  isSavingModel?: boolean
+  modelError?: string
   selectedModel: string
   supportedReasoningEfforts: ReasoningEffort[]
   selectedReasoningEffort: ReasoningEffort | ''
