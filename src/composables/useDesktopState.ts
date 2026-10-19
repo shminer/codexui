@@ -1805,6 +1805,7 @@ export function useDesktopState() {
   const isSavingManualModel = ref(false)
   let manualModelsRequest: Promise<void> | null = null
   let manualModelsRevision = 0
+  let manualModelsLoaded = false
   let loadedModelContextId = ''
   const availableModelReasoningEfforts = ref<Record<string, ReasoningEffort[]>>({})
   const availableCollaborationModes = ref<CollaborationModeOption[]>([
@@ -3202,9 +3203,13 @@ export function useDesktopState() {
         const ids = await getManualModelIds()
         if (revision !== manualModelsRevision) return
         manualModelIds.value = ids
+        manualModelsLoaded = true
         manualModelsError.value = ''
       } catch {
-        if (revision === manualModelsRevision) manualModelsError.value = 'Failed to load manual models'
+        if (revision === manualModelsRevision) {
+          manualModelsLoaded = false
+          manualModelsError.value = 'Failed to load manual models'
+        }
       } finally {
         manualModelsRequest = null
       }
@@ -3223,6 +3228,7 @@ export function useDesktopState() {
     manualModelsError.value = ''
     try {
       manualModelIds.value = await saveManualModelId(modelId)
+      manualModelsLoaded = true
       if (activeAccountStorageId.value !== accountId || readProviderIdForThread(targetThreadId) !== providerId) return
       if (isSideModel) {
         if (threadId === sideConversationThreadId.value) setSideConversationModel(modelId)
@@ -3244,6 +3250,7 @@ export function useDesktopState() {
     manualModelsError.value = ''
     try {
       manualModelIds.value = await saveManualModelId(modelId, true)
+      manualModelsLoaded = true
       if (automaticModelIds.value.includes(modelId)) return
       const draftModelId = readModelIdForThread('')
       const keepCurrentThreadModel = Boolean(selectedThreadId.value) && selectedModelId.value === modelId
@@ -3259,7 +3266,9 @@ export function useDesktopState() {
       selectedModelIdByContext.value = nextModelMap
       saveSelectedModelMap(nextModelMap)
       if (draftModelId === modelId) {
-        setSelectedModelIdForThread('', automaticModelIds.value[0] || manualModelIds.value[0] || '')
+        const runtimeContextId = toProviderModelContextId(activeProviderId.value, activeAccountStorageId.value)
+        const automaticFallback = loadedModelContextId === runtimeContextId ? automaticModelIds.value[0] : ''
+        setSelectedModelIdForThread('', automaticFallback || manualModelIds.value[0] || '')
       }
     } catch (unknownError) {
       manualModelsError.value = unknownError instanceof Error ? unknownError.message : 'Failed to save manual models'
@@ -3338,7 +3347,7 @@ export function useDesktopState() {
       const validConfiguredModelId = catalogModelIds.has(configuredModelId) || allowConfiguredFallback
         ? configuredModelId
         : ''
-      const savedNewThreadModelId = modelIds.length === 0
+      const savedNewThreadModelId = modelIds.length === 0 || !manualModelsLoaded
         ? providerScopedModelId || (targetProviderId === 'codex' ? threadScopedModelId : '')
         : catalogModelIds.has(providerScopedModelId)
           ? providerScopedModelId

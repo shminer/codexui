@@ -29,6 +29,7 @@ import {
   getFreeModels,
   refreshFreeModelsInBackground,
   FREE_MODE_STATE_FILE,
+  CUSTOM_PROVIDER_ID,
   OPENCODE_ZEN_DEFAULT_MODEL,
   OPENCODE_ZEN_PROVIDER_ID,
   createDefaultOpenCodeZenFreeModeState,
@@ -2354,7 +2355,7 @@ export async function readProviderBackedModelIds(appServer: AppServerProcess, re
   }
 }
 
-async function readProviderModelIdsForProvider(
+export async function readProviderModelIdsForProvider(
   appServer: AppServerProcess,
   providerId: string,
 ): Promise<ProviderModelsResponse> {
@@ -2391,7 +2392,7 @@ async function readProviderModelIdsForProvider(
     }
   }
 
-  if ((normalizedProviderId === 'custom' || normalizedProviderId === 'custom-endpoint') && fmState?.customBaseUrl) {
+  if (normalizedProviderId === CUSTOM_PROVIDER_ID && fmState?.customBaseUrl) {
     const apiKey = fmState.provider === 'custom' ? fmState.apiKey : fmState.providerKeys?.custom
     const ids = await fetchConfiguredProviderModelIds({
       base_url: fmState.customBaseUrl,
@@ -8843,7 +8844,9 @@ export function createCodexBridgeMiddleware(options: {
       if (req.method === 'GET' && url.pathname === '/codex-api/provider-models') {
         const requestedProvider = url.searchParams.get('provider')?.trim() ?? ''
         const fmState = requestedProvider ? null : ensureDefaultFreeModeStateForMissingAuthSync(join(getCodexHomeDir(), FREE_MODE_STATE_FILE))
-        const providerId = requestedProvider || (fmState?.enabled ? fmState.provider || 'openrouter' : '')
+        const providerId = requestedProvider || (fmState?.enabled
+          ? fmState.provider === 'custom' ? CUSTOM_PROVIDER_ID : fmState.provider || 'openrouter'
+          : '')
         if (providerId) {
           setJson(res, 200, {
             ...(await readProviderModelIdsForProvider(appServer, providerId)),

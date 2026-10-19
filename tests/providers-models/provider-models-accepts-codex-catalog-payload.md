@@ -40,6 +40,7 @@ Provider-backed model discovery accepts both OpenAI-compatible and Codex catalog
 | 分别使用 `responses` 与 `chat` 对话协议配置 | 模型发现均请求 `/models`，解析结果相同；此项只验证模型目录，不代表上游对话协议兼容性 |
 | 当前活动提供商为 `provider_b` 时打开归属 `provider_a` 的线程 | 模型发现使用 `provider_a` 配置；请求参数中的 `provider-a` 能对应配置键 `provider_a` |
 | 指定不存在的提供商 | 返回失败，保留相应已有状态，避免改用活动提供商的模型目录 |
+| 同时配置原生 `[model_providers.custom]` 指向 A，并在设置页启用指向 B 的自定义端点；分别请求 `/codex-api/provider-models?provider=custom`、`?provider=custom_endpoint` 和不带 `provider` 的地址 | 显式 `custom` 使用 A 的目录及鉴权；`custom_endpoint` 与未指定提供商的请求使用 B；打开原生 `custom` 历史线程时不混入 B 的模型 |
 | 模拟超时、HTTP 401、错误 JSON 与缺少模型数组的响应 | 返回失败，客户端保留当前提供商最近成功目录；日志及响应不输出密钥或完整鉴权配置 |
 | 切回默认 Codex 提供商 | 沿用原有 `model/list` 目录，保留已有推理强度能力信息 |
 

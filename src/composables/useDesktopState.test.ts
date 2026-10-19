@@ -3362,6 +3362,56 @@ describe('shared manual models', () => {
     expect(state.removableModelIds.value).toEqual(['vendor/model'])
   })
 
+  it.each(['provider-a', 'codex'])('preserves the saved %s selection when the manual catalog fails to load', async (providerId) => {
+    const contextId = `__new-thread-provider__::account-a::${providerId}`
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({ [contextId]: 'vendor/model' }),
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'auto-model', providerId, reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getManualModelIds.mockRejectedValueOnce(new Error('Manual catalog unavailable'))
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAncillaryState()
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.availableModelIds.value).toEqual(['auto-model', 'vendor/model'])
+    expect(state.manualModelsError.value).toBe('Failed to load manual models')
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')[contextId]).toBe('vendor/model')
+
+    saved = ['vendor/model']
+    await state.refreshAncillaryState()
+    expect(state.selectedModelId.value).toBe('vendor/model')
+    expect(state.removableModelIds.value).toEqual(['vendor/model'])
+    expect(state.manualModelsError.value).toBe('')
+
+    saved = []
+    await state.refreshAncillaryState()
+    expect(state.selectedModelId.value).toBe('auto-model')
+    expect(state.availableModelIds.value).toEqual(['auto-model'])
+  })
+
+  it.each([{ remaining: [] }, { remaining: ['remaining-model'] }])('does not use a historical provider catalog for the runtime draft after deletion (remaining=$remaining)', async ({ remaining }) => {
+    saved = ['vendor/model', ...remaining]
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'history-model', modelProvider: 'provider-b', messages: [], inProgress: false,
+      activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {},
+    })
+    gatewayMocks.getAvailableModelIds.mockImplementation(async (options) => (
+      options.providerId === 'provider-b' ? ['history-model'] : ['auto-model']
+    ))
+    const state = useDesktopState()
+    state.setActiveAccountStorageId('account-a')
+    await state.refreshAncillaryState()
+    state.setSelectedModelIdForThread('', 'vendor/model')
+    await state.selectThread('history')
+    await state.refreshAncillaryState()
+    expect(state.availableModelIds.value).toContain('history-model')
+    await state.removeManualModel('vendor/model')
+    expect(state.readModelIdForThread('')).toBe(remaining[0] || '')
+    expect(state.selectedModelId.value).toBe('history-model')
+    expect(state.readModelIdForThread('history')).toBe('history-model')
+    state.stopPolling()
+  })
+
   it('removes a new-chat default without changing an existing thread model', async () => {
     const state = useDesktopState()
     await state.refreshAncillaryState()

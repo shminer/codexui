@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AppServerProcess, fetchConfiguredProviderModelIds, normalizeProviderModelsData, readProviderBackedModelIds } from './codexAppServerBridge'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppServerProcess, fetchConfiguredProviderModelIds, normalizeProviderModelsData, readProviderBackedModelIds, readProviderModelIdsForProvider } from './codexAppServerBridge'
+import { FREE_MODE_STATE_FILE } from './freeMode'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -112,5 +116,44 @@ describe('configured provider models', () => {
   ])('reports discovery errors without returning a successful empty catalog', async (response, message) => {
     vi.stubGlobal('fetch', vi.fn(response))
     await expect(fetchConfiguredProviderModelIds({ base_url: 'https://provider.example/v1' })).rejects.toThrow(message)
+  })
+})
+
+describe('custom provider catalog isolation', () => {
+  let codexHome: string
+  beforeEach(async () => {
+    codexHome = await mkdtemp(join(tmpdir(), 'codex-provider-models-'))
+    vi.stubEnv('CODEX_HOME', codexHome)
+    await writeFile(join(codexHome, FREE_MODE_STATE_FILE), JSON.stringify({
+      enabled: true, provider: 'custom', customBaseUrl: 'https://managed.example/v1',
+      apiKey: 'managed-key', model: 'managed-model',
+    }))
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    await rm(codexHome, { recursive: true, force: true })
+  })
+
+  it.each(['custom', 'custom_endpoint', 'custom-endpoint'])('loads the correct endpoint for %s while both providers exist', async (providerId) => {
+    const appServer = new AppServerProcess()
+    const rpc = vi.spyOn(appServer, 'rpc').mockResolvedValue({ config: {
+      model_provider: 'custom_endpoint',
+      model_providers: { custom: { base_url: 'https://native.example/v1', env_key: 'NATIVE_KEY' } },
+    } })
+    vi.spyOn(appServer, 'getProviderEnvironment').mockReturnValue({ NATIVE_KEY: 'native-key' })
+    const isNative = providerId === 'custom'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ data: [
+      { id: isNative ? 'native-model' : 'managed-model' },
+    ] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await readProviderModelIdsForProvider(appServer, providerId)).toEqual({
+      data: [isNative ? 'native-model' : 'managed-model'], providerId: 'custom', source: 'provider',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, options] = fetchMock.mock.calls[0] as [URL, RequestInit]
+    expect(url.href).toBe(isNative ? 'https://native.example/v1/models' : 'https://managed.example/v1/models')
+    expect(new Headers(options.headers).get('Authorization')).toBe(isNative ? 'Bearer native-key' : 'Bearer managed-key')
+    expect(rpc).toHaveBeenCalledTimes(isNative ? 1 : 0)
   })
 })
