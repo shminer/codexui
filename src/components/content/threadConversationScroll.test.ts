@@ -30,6 +30,7 @@ function setup() {
   const calls = { latestScroll: 0, bottomLock: 0, older: 0, newer: 0 }
   const state = {
     props: {
+      virtualized: true,
       isLoading: false, isLoadingPersistedAbove: false, isLoadingPersistedBelow: false,
       isHistoryWindow: true, hasMorePersistedBelow: false,
       messages: [{ id: 'answer' }], pendingRequests: [], liveOverlay: null,
@@ -157,6 +158,14 @@ describe('conversation bottom following', () => {
     handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null }, preventDefault: () => { prevented = true } })
     expect(prevented).toBe(false)
     expect(state.autoFollowOutput.value).toBe(false)
+  })
+
+  it('leaves End to native scrolling in a normal-flow side conversation', () => {
+    const { state, handlers } = setup()
+    state.props.virtualized = false
+    let prevented = false
+    handlers.onConversationKeyDown({ key: 'End', target: { closest: () => null }, preventDefault: () => { prevented = true } })
+    expect(prevented).toBe(false)
   })
 
   it('lets a user leave search navigation by scrolling back to the latest bottom', () => {

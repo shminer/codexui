@@ -7,6 +7,7 @@ describe('ThreadSideConversation wiring', () => {
     const app = await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
     const conversation = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
     expect(side).toContain(':readonly="true"')
+    expect(side).toContain(':virtualized="false"')
     expect(side).toContain(':can-implement-plan="!isOpening && Boolean(threadId) && pendingRequests.length === 0 && !isUpdatingSpeedMode && !isImplementingPlan"')
     expect(side).toContain("@implement-plan=\"emit('implement-plan', $event)\"")
     expect(app).toContain('@implement-plan="implementSideConversationPlan($event.turnId)"')

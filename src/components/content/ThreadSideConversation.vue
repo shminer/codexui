@@ -56,6 +56,7 @@
             :active-thread-id="threadId"
             :cwd="cwd"
             :readonly="true"
+            :virtualized="false"
             :owner-document="popupTarget?.ownerDocument"
             :can-implement-plan="!isOpening && Boolean(threadId) && pendingRequests.length === 0 && !isUpdatingSpeedMode && !isImplementingPlan"
             :can-edit-message="!isOpening && Boolean(threadId) && pendingRequests.length === 0"
