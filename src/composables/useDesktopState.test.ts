@@ -2384,6 +2384,66 @@ describe('side conversation lifecycle', () => {
     }))
   })
 
+  it.each(['completed', 'batched'])('keeps %s side output before steering and later output in arrival order', async (delivery) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-20T02:17:08.000Z'))
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')
+    await state.openSideConversation('thread-1')
+    const mainMessages = state.messages.value
+    await state.sendSideConversationMessage('first')
+    const params = { threadId: 'side-thread-default', turnId: 'side-turn' }
+    emit({ method: 'turn/started', params: { ...params, turn: { id: params.turnId } } })
+
+    vi.setSystemTime(new Date('2026-10-20T02:17:18.000Z'))
+    if (delivery === 'completed') {
+      emit({ method: 'item/completed', params: { ...params, item: { id: 'before', type: 'agentMessage', text: 'before steer' } } })
+    } else {
+      emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'before', delta: 'before steer' } })
+    }
+    // Starting the next item must flush text received inside the batching interval.
+    emit({ method: 'item/started', params: { ...params, item: { id: 'command-before', type: 'commandExecution', command: 'echo before' } } })
+    emit({ method: 'item/commandExecution/outputDelta', params: { ...params, itemId: 'command-before', delta: 'before output' } })
+    vi.setSystemTime(new Date('2026-10-20T02:19:17.000Z'))
+    await state.sendSideConversationMessage('steer')
+
+    const labels = () => state.sideConversationMessages.value.filter((message) => message.messageType !== 'worked')
+      .map((message) => message.role === 'user' ? message.text : message.id)
+    expect(labels()).toEqual(['first', 'before', 'command-before', 'steer'])
+    expect(state.sideConversationMessages.value.find((message) => message.id === 'command-before')?.commandExecution?.aggregatedOutput).toBe('before output')
+
+    vi.setSystemTime(new Date('2026-10-20T02:19:47.000Z'))
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'after', type: 'agentMessage', text: 'after steer' } } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'command-before', type: 'commandExecution', command: 'echo before', status: 'completed', aggregatedOutput: 'before output', exitCode: 0 } } })
+    expect(labels()).toEqual(['first', 'before', 'command-before', 'steer', 'after'])
+    expect(state.sideConversationMessages.value.find((message) => message.id === 'command-before')?.createdAtIso).toBe('2026-10-20T02:17:18.000Z')
+
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'after', delta: ' + pending tail' } })
+    await state.sendSideConversationMessage('steer again')
+    expect(state.sideConversationMessages.value.find((message) => message.id === 'after')?.text).toBe('after steer + pending tail')
+    emit({ method: 'item/agentMessage/delta', params: { ...params, itemId: 'after-again', delta: 'after again' } })
+    emit({ method: 'turn/plan/updated', params: { ...params, plan: [{ step: 'Check', status: 'inProgress' }] } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: ' + plan delta' } })
+    expect(labels()).toEqual(['first', 'before', 'command-before', 'steer', 'after', 'steer again', 'after-again', 'side-turn:plan'])
+    expect(state.sideConversationMessages.value.at(-1)?.text).toContain(' + plan delta')
+
+    const confirmed = state.sideConversationMessages.value.map((message, index) => message.role === 'user'
+      ? { ...message, id: `confirmed-${index}`, messageType: 'userMessage' } : message)
+    gatewayMocks.getLatestThreadMessages.mockResolvedValue({
+      messages: confirmed, inProgress: true, activeTurnId: params.turnId, hasMoreOlder: false,
+      turnIndexByTurnId: { [params.turnId]: 0 },
+    })
+    await state.loadLatestMessages(params.threadId)
+    expect(state.sideConversationMessages.value.map((message) => message.id)).toEqual(confirmed.map((message) => message.id))
+    emit({ method: 'turn/completed', params: { ...params, turn: { id: params.turnId, status: 'completed' } } })
+    expect(labels()).toEqual(['first', 'before', 'command-before', 'steer', 'after', 'steer again', 'after-again', 'side-turn:plan'])
+    expect(state.messages.value).toEqual(mainMessages)
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(3)
+    state.endSideConversation()
+    await state.openSideConversation('thread-1')
+    expect(state.sideConversationMessages.value).toEqual([])
+  })
+
   it('keeps confirmed steering in server order before later side turns', async () => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
     gatewayMocks.startThreadTurn.mockResolvedValue('side-turn')

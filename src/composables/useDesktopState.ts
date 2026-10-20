@@ -1761,6 +1761,7 @@ export function useDesktopState() {
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
+  const sideLiveMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const subagentsByParentThreadId = ref<Record<string, UiSubagent[]>>({})
   const inProgressById = ref<Record<string, boolean>>({})
   const threadGoalByThreadId = ref<Record<string, UiThreadGoal>>({})
@@ -2547,13 +2548,7 @@ export function useDesktopState() {
 
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
     const inHistoryWindow = historyWindowThreadIds.has(threadId)
-    const rows = inHistoryWindow ? persisted : [
-      ...persisted,
-      ...(livePlanMessagesByThreadId.value[threadId] ?? []),
-      ...(liveCommandsByThreadId.value[threadId] ?? []),
-      ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
-      ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
-    ]
+    const rows = inHistoryWindow ? persisted : [...persisted, ...getAllLiveMessagesForThread(threadId)]
     const combined = isKnownSideConversationThread(threadId)
       ? [...new Map(rows.map((message) => [message.id, message])).values()]
       : rows
@@ -2568,6 +2563,7 @@ export function useDesktopState() {
   }
   const messages = computed<UiMessage[]>(() => getMessagesForThread(selectedThreadId.value))
   function getAllLiveMessagesForThread(threadId: string): UiMessage[] {
+    if (isKnownSideConversationThread(threadId)) return sideLiveMessagesByThreadId.value[threadId] ?? []
     return [
       ...(livePlanMessagesByThreadId.value[threadId] ?? []),
       ...(liveCommandsByThreadId.value[threadId] ?? []),
@@ -3777,11 +3773,9 @@ export function useDesktopState() {
       if (isKnownSideConversationThread(threadId) && !historyWindowThreadIds.has(threadId)) {
         const messages = [
           ...(persistedMessagesByThreadId.value[threadId] ?? []),
-          ...(livePlanMessagesByThreadId.value[threadId] ?? []),
-          ...(liveCommandsByThreadId.value[threadId] ?? []),
-          ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
-          ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
+          ...getAllLiveMessagesForThread(threadId),
         ]
+        sideLiveMessagesByThreadId.value = omitKey(sideLiveMessagesByThreadId.value, threadId)
         clearLiveAgentMessagesForThread(threadId)
         clearLiveFileChangesForThread(threadId)
         setPersistedMessagesForThread(threadId, [...new Map(messages.map((message) => [message.id, message])).values()].map((message) => {
@@ -4040,7 +4034,7 @@ export function useDesktopState() {
       historyCapacityByThreadId.value = omitKey(historyCapacityByThreadId.value, threadId)
     }
     const preserveHistory = isSideConversationVisible.value && expandedHistoryThreadIds.has(threadId)
-    const liveStates = [livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]
+    const liveStates = [sideLiveMessagesByThreadId, livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId, liveAgentMessagesByThreadId]
     const states = preserveHistory ? liveStates : [persistedMessagesByThreadId, ...liveStates]
     const combined = new Map<string, UiMessage>()
     for (const state of states) {
@@ -4160,10 +4154,18 @@ export function useDesktopState() {
   }
 
   function upsertRestoredMessage(threadId: string, nextMessage: UiMessage): boolean {
-    if (historyWindowThreadIds.has(threadId)) return false
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
-    const current = previous.find((message) => message.id === nextMessage.id)
-    if (!current) return false
+    const current = historyWindowThreadIds.has(threadId) ? undefined : previous.find((message) => message.id === nextMessage.id)
+    if (!current) {
+      if (!isKnownSideConversationThread(threadId)) return false
+      // Ephemeral items share one live buffer so their arrival order survives Steer.
+      sideLiveMessagesByThreadId.value = {
+        ...sideLiveMessagesByThreadId.value,
+        [threadId]: upsertMessage(sideLiveMessagesByThreadId.value[threadId] ?? [], nextMessage),
+      }
+      enforceSideConversationBudget(threadId)
+      return true
+    }
     setPersistedMessagesForThread(threadId, upsertMessage(previous, {
       ...current, ...nextMessage,
       turnId: nextMessage.turnId || current.turnId,
@@ -4177,7 +4179,7 @@ export function useDesktopState() {
     if (isKnownSideConversationThread(threadId)) {
       // Release live copies before the merged snapshot enters the side-window budget.
       const ids = new Set(absorbed.map((message) => message.id))
-      for (const state of [liveAgentMessagesByThreadId, livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId]) {
+      for (const state of [sideLiveMessagesByThreadId, liveAgentMessagesByThreadId, livePlanMessagesByThreadId, liveCommandsByThreadId, liveFileChangeMessagesByThreadId]) {
         const previous = state.value[threadId] ?? []
         const next = previous.filter((message) => !ids.has(message.id))
         if (next.length !== previous.length) state.value = { ...state.value, [threadId]: next }
@@ -4331,6 +4333,7 @@ export function useDesktopState() {
 
     const messageId = `${turnId}:plan`
     const existing = (livePlanMessagesByThreadId.value[threadId] ?? []).find((message) => message.id === messageId)
+      ?? sideLiveMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
       ?? persistedMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
     const nextText = `${existing?.text ?? ''}${delta}`
     const nextPlan: UiPlanData | undefined = existing?.plan
@@ -5274,6 +5277,7 @@ export function useDesktopState() {
       if (threadId && pending.threadId !== threadId) continue
       pendingCommandOutputByKey.delete(key)
       const current = liveCommandsByThreadId.value[pending.threadId]?.find((message) => message.id === pending.itemId)
+        ?? sideLiveMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.itemId)
         ?? persistedMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.itemId)
       if (current) upsertLiveCommand(pending.threadId, { ...current, commandExecution: pending.data })
     }
@@ -5281,6 +5285,7 @@ export function useDesktopState() {
       if (threadId && pending.threadId !== threadId) continue
       pendingAgentTextByKey.delete(key)
       const current = liveAgentMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.messageId)
+        ?? sideLiveMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.messageId)
         ?? persistedMessagesByThreadId.value[pending.threadId]?.find((message) => message.id === pending.messageId)
       if (isKnownSideConversationThread(pending.threadId) && current?.textTruncated) continue
       upsertLiveAgentMessage(pending.threadId, {
@@ -5301,6 +5306,7 @@ export function useDesktopState() {
   function queueAgentTextDelta(threadId: string, messageId: string, turnId: string, delta: string): void {
     if (isKnownSideConversationThread(threadId)) {
       const current = liveAgentMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
+        ?? sideLiveMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
         ?? persistedMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
       if (current?.textTruncated) return
     }
@@ -5313,6 +5319,7 @@ export function useDesktopState() {
 
   function queueCommandOutputDelta(threadId: string, itemId: string, delta: string): void {
     const current = liveCommandsByThreadId.value[threadId]?.find((message) => message.id === itemId)
+      ?? sideLiveMessagesByThreadId.value[threadId]?.find((message) => message.id === itemId)
       ?? persistedMessagesByThreadId.value[threadId]?.find((message) => message.id === itemId)
     if (!current?.commandExecution) return
     const key = JSON.stringify([threadId, itemId])
@@ -5416,7 +5423,8 @@ export function useDesktopState() {
       && (notification.method.startsWith('item/') || notification.method === 'turn/started' || notification.method === 'turn/plan/updated')) {
       hasMoreNewerMessagesByThreadId.value = { ...hasMoreNewerMessagesByThreadId.value, [notificationThreadId]: true }
     }
-    if (notificationThreadId && (notification.method === 'item/completed' || notification.method === 'turn/completed' || notification.method === 'error')) {
+    if (notificationThreadId && (notification.method === 'item/completed' || notification.method === 'turn/completed' || notification.method === 'error'
+      || ((notification.method === 'item/started' || notification.method === 'turn/plan/updated') && isKnownSideConversationThread(notificationThreadId)))) {
       flushPendingContentDeltas(notificationThreadId)
     }
     if (notificationThreadId && discardedSideConversationThreadIds.has(notificationThreadId)) {
@@ -5750,6 +5758,7 @@ export function useDesktopState() {
     const commandStarted = readCommandExecutionStarted(notification)
     if (commandStarted) {
       const existing = liveCommandsByThreadId.value[notificationThreadId]?.find((message) => message.id === commandStarted.id)
+        ?? sideLiveMessagesByThreadId.value[notificationThreadId]?.find((message) => message.id === commandStarted.id)
         ?? persistedMessagesByThreadId.value[notificationThreadId]?.find((message) => message.id === commandStarted.id)
       const message = existing?.commandExecution ? { ...commandStarted, ...existing } : commandStarted
       upsertLiveCommand(notificationThreadId, message)
@@ -7225,6 +7234,7 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = omitKey(liveReasoningTextByThreadId.value, threadId)
     liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
     liveFileChangeMessagesByThreadId.value = omitKey(liveFileChangeMessagesByThreadId.value, threadId)
+    sideLiveMessagesByThreadId.value = omitKey(sideLiveMessagesByThreadId.value, threadId)
     inProgressById.value = omitKey(inProgressById.value, threadId)
     turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
     turnSummaryByThreadId.value = omitKey(turnSummaryByThreadId.value, threadId)
@@ -7516,6 +7526,13 @@ export function useDesktopState() {
       }
     }
     const steering = inProgressById.value[threadId] === true
+    flushPendingContentDeltas(threadId)
+    const live = getAllLiveMessagesForThread(threadId)
+    if (live.length) {
+      const messages = [...new Map([...(persistedMessagesByThreadId.value[threadId] ?? []), ...live].map((message) => [message.id, message])).values()]
+      removeSnapshotLiveMessages(threadId, live)
+      setPersistedMessagesForThread(threadId, messages)
+    }
     threadLifecycleRevisionByThreadId.set(threadId, (threadLifecycleRevisionByThreadId.get(threadId) ?? 0) + 1)
     const optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, steering)
     sideConversationFollowLatestRevision.value += 1
@@ -8540,6 +8557,7 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = {}
     liveCommandsByThreadId.value = {}
     liveFileChangeMessagesByThreadId.value = {}
+    sideLiveMessagesByThreadId.value = {}
     subagentsByParentThreadId.value = {}
     turnIndexByTurnIdByThreadId.value = {}
     turnActivityByThreadId.value = {}
