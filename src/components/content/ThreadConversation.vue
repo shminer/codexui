@@ -13,21 +13,18 @@
       No messages in this thread yet.
     </p>
 
-    <!-- Position rows without composited transforms to avoid blurry text after browser zoom. -->
-    <DynamicScroller
+    <component
       v-else
+      :is="virtualized ? DynamicScroller : ConversationFlowList"
       :key="scrollerGeneration"
       ref="scrollerRef"
       class="conversation-list"
       :items="timeline"
-      :min-item-size="56"
-      :buffer="400"
-      :shift="true"
-      :disable-transform="true"
-      :emit-update="true"
+      v-bind="virtualized ? { minItemSize: 56, buffer: 400, shift: true, disableTransform: true, emitUpdate: true } : { ownerDocument }"
       tabindex="0"
       role="list"
       @update="onVirtualUpdate"
+      @resize="onVirtualRowResize"
       @scroll="onConversationScroll"
       @scrollend="onConversationScrollEnd"
       @wheel.passive="onConversationWheel"
@@ -49,7 +46,7 @@
       </div>
       </template>
       <template #default="{ item, index, active }">
-      <ConversationVirtualRow :item="item" :index="index" :active="active" class="conversation-virtual-row" @resize="onVirtualRowResize">
+      <component :is="virtualized ? ConversationVirtualRow : 'div'" v-bind="virtualized ? { item, index, active } : {}" class="conversation-virtual-row" @resize="onVirtualRowResize">
       <template v-for="message in [item.message]" :key="item.id">
       <div v-if="message === null && liveOverlay" class="conversation-item conversation-item-overlay" role="listitem">
         <div class="message-row">
@@ -837,7 +834,7 @@
         </div>
       </div>
       </template>
-      </ConversationVirtualRow>
+      </component>
       </template>
       <template #after>
       <div v-if="hasMoreBelow && !searchTargetId" class="conversation-load-more conversation-load-more-later">
@@ -847,7 +844,7 @@
       <p v-if="messageSourceError" class="conversation-history-error" role="status">{{ messageSourceError }}</p>
       <div class="conversation-bottom-anchor" />
       </template>
-    </DynamicScroller>
+    </component>
     <button
       v-if="showJumpToLatestButton"
       type="button"
@@ -1018,6 +1015,7 @@ import { encodeLocalPathForUrl, isAbsoluteLikePath, isWindowsLikePath } from '..
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { DynamicScroller, type DynamicScrollerExposed } from 'vue-virtual-scroller'
 import ConversationVirtualRow from './ConversationVirtualRow.vue'
+import ConversationFlowList from './ConversationFlowList.vue'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import type { ThreadHistorySource, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { getThreadResourceSource, updateThreadFileChanges } from '../../api/codexGateway'
@@ -1451,6 +1449,7 @@ const props = withDefaults(defineProps<{
   activeThreadId: string
   cwd: string
   readonly?: boolean
+  virtualized?: boolean
   externalPanelControls?: boolean
   canEditMessage?: boolean
   canImplementPlan?: boolean
@@ -1466,7 +1465,7 @@ const props = withDefaults(defineProps<{
   loadLaterMessages?: (threadId: string) => Promise<void>
   loadLatestMessages?: (threadId: string) => Promise<void>
   historyCapacityReached?: boolean
-}>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined })
+}>(), { recoverableHistory: true, isHistoryWindow: false, canImplementPlan: undefined, virtualized: true })
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnId: string }]
@@ -1478,7 +1477,7 @@ const emit = defineEmits<{
 }>()
 
 type TimelineRow = { id: string; message: UiMessage | null }
-const scrollerRef = ref<(Omit<DynamicScrollerExposed<TimelineRow>, 'cacheSnapshot'> & { $el: HTMLElement }) | null>(null)
+const scrollerRef = ref<(Pick<DynamicScrollerExposed<TimelineRow>, 'scrollToItem'> & { $el: HTMLElement }) | null>(null)
 const conversationListRef = computed(() => scrollerRef.value?.$el ?? null)
 const scrollerGeneration = ref(0)
 const virtualStart = ref(0)
@@ -1548,6 +1547,10 @@ let conversationScrollFrame = 0
 let bottomLockFrame = 0
 let bottomLockFramesLeft = 0
 let conversationScrollPromise: Promise<void> | null = null
+let resolveConversationScroll: (() => void) | null = null
+let scrollWindow: Window | null = null
+let scrollGeneration = 0
+let disposed = false
 const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const highlightJsModule = ref<HighlightJsModule | null>(null)
 const highlightCacheVersion = ref(0)
@@ -2061,7 +2064,7 @@ const timeline = computed<TimelineRow[]>(() => {
   rows.splice(steeringIndex < 0 ? rows.length : steeringIndex, 0, { id: 'conversation:live-overlay', message: null })
   return rows
 })
-const visibleMessages = computed(() => timeline.value.slice(virtualStart.value, virtualEnd.value).flatMap((row) => row.message ? [row.message] : []))
+const visibleMessages = computed(() => (props.virtualized ? timeline.value.slice(virtualStart.value, virtualEnd.value) : timeline.value).flatMap((row) => row.message ? [row.message] : []))
 function onVirtualUpdate(start: number, end: number): void {
   virtualStart.value = start
   virtualEnd.value = end
@@ -4198,6 +4201,21 @@ function shouldLockToBottom(): boolean {
   return autoFollowOutput.value && !props.isHistoryWindow && !props.hasMorePersistedBelow
 }
 
+function getScrollWindow(): Window {
+  return scrollWindow ??= (props.ownerDocument ?? conversationListRef.value?.ownerDocument ?? document).defaultView ?? window
+}
+
+function cancelConversationScroll(): void {
+  scrollGeneration += 1
+  if (conversationScrollFrame) scrollWindow?.cancelAnimationFrame(conversationScrollFrame)
+  if (bottomLockFrame) scrollWindow?.cancelAnimationFrame(bottomLockFrame)
+  conversationScrollFrame = bottomLockFrame = bottomLockFramesLeft = 0
+  scrollWindow = null
+  resolveConversationScroll?.()
+  resolveConversationScroll = null
+  conversationScrollPromise = null
+}
+
 function runBottomLockFrame(): void {
   if (!shouldLockToBottom()) {
     bottomLockFramesLeft = 0
@@ -4211,17 +4229,17 @@ function runBottomLockFrame(): void {
     bottomLockFrame = 0
     return
   }
-  bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
+  bottomLockFrame = getScrollWindow().requestAnimationFrame(runBottomLockFrame)
 }
 
 function scheduleBottomLock(frames = 6): void {
-  if (!shouldLockToBottom()) return
+  if (disposed || !shouldLockToBottom()) return
   if (bottomLockFrame) {
-    cancelAnimationFrame(bottomLockFrame)
+    getScrollWindow().cancelAnimationFrame(bottomLockFrame)
     bottomLockFrame = 0
   }
   bottomLockFramesLeft = Math.max(frames, 1)
-  bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
+  bottomLockFrame = getScrollWindow().requestAnimationFrame(runBottomLockFrame)
 }
 
 function onPendingImageSettled(): void {
@@ -4273,7 +4291,7 @@ async function locateMessage(itemId: string): Promise<void> {
   autoFollowOutput.value = false
   resumeFollowOnBottom = false
   // Explicit navigation replaces the old measurement anchor with the search target.
-  scrollerGeneration.value += 1
+  if (props.virtualized) scrollerGeneration.value += 1
   await nextTick()
   if (threadId !== props.activeThreadId || searchTargetId.value !== itemId) return
   scrollerRef.value?.scrollToItem(index, { align: 'center' })
@@ -4298,17 +4316,21 @@ const historyEdgeArmed = { earlier: true, later: true }
 
 watch(autoFollowOutput, (following) => emit('readingHistoryChange', !following), { immediate: true, flush: 'sync' })
 
-// A popup uses another document/ResizeObserver context. Remount measurements there.
+// Teleport changes the owning window, including its animation-frame scheduler.
 watch(() => props.ownerDocument, async () => {
   const anchor = autoFollowOutput.value ? null : captureConversationAnchor()
+  cancelConversationScroll()
+  const generation = scrollGeneration
   resumeFollowOnBottom = false
-  scrollerGeneration.value += 1
+  if (props.virtualized) scrollerGeneration.value += 1
   await nextTick()
+  if (disposed || generation !== scrollGeneration) return
   if (autoFollowOutput.value) await scheduleConversationScroll()
   else if (anchor) {
     const index = timeline.value.findIndex((row) => row.id === anchor.id)
     if (index >= 0) scrollerRef.value?.scrollToItem(index)
     await nextTick()
+    if (disposed || generation !== scrollGeneration) return
     restoreConversationAnchor(anchor)
   }
 })
@@ -4347,6 +4369,7 @@ async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> 
   const generation = ++navigationGeneration
   historyLoadError.value = ''
 
+  const anchor = props.virtualized ? null : captureConversationAnchor()
   try {
     if (direction === 'earlier' && props.hasMorePersistedAbove) {
       if (!props.loadEarlierMessages) throw new Error('Earlier message loading is not available.')
@@ -4357,6 +4380,8 @@ async function moveHistoryWindow(direction: 'earlier' | 'later'): Promise<void> 
     }
     if (props.activeThreadId !== threadIdAtStart || generation !== navigationGeneration) return
     await nextTick()
+    if (props.activeThreadId !== threadIdAtStart || generation !== navigationGeneration) return
+    if (anchor) restoreConversationAnchor(anchor)
     lastConversationScrollTop = container.scrollTop
   } catch (cause) {
     if (props.activeThreadId === threadIdAtStart && generation === navigationGeneration) {
@@ -4395,21 +4420,25 @@ function bindPendingImageHandlers(): void {
 }
 
 async function scheduleConversationScroll(): Promise<void> {
+  if (disposed) return
   if (conversationScrollPromise) return conversationScrollPromise
 
-  conversationScrollPromise = nextTick().then(() => new Promise<void>((resolve) => {
-    if (conversationScrollFrame) {
-      cancelAnimationFrame(conversationScrollFrame)
-    }
-    conversationScrollFrame = requestAnimationFrame(() => {
-      conversationScrollFrame = 0
-      conversationScrollPromise = null
-      applyConversationScrollState()
-      bindPendingImageHandlers()
-      scheduleBottomLock()
-      resolve()
+  const generation = scrollGeneration
+  conversationScrollPromise = new Promise<void>((resolve) => {
+    resolveConversationScroll = resolve
+    void nextTick().then(() => {
+      if (disposed || generation !== scrollGeneration) return
+      conversationScrollFrame = getScrollWindow().requestAnimationFrame(() => {
+        conversationScrollFrame = 0
+        conversationScrollPromise = null
+        resolveConversationScroll = null
+        applyConversationScrollState()
+        bindPendingImageHandlers()
+        scheduleBottomLock()
+        resolve()
+      })
     })
-  }))
+  })
 
   return conversationScrollPromise
 }
@@ -4519,6 +4548,7 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    cancelConversationScroll()
     searchOpen.value = resourcesOpen.value = false
     messageSourceGeneration += 1
     messageSourceError.value = ''
@@ -4646,7 +4676,7 @@ function onConversationKeyDown(event: KeyboardEvent): void {
     paginationIntent = 'later'
     resumeFollowOnBottom = true
     // Native End uses the old scroll height while virtual rows are still being measured.
-    if (event.key === 'End' && !hasMoreBelow.value) {
+    if (props.virtualized && event.key === 'End' && !hasMoreBelow.value) {
       event.preventDefault()
       scrollToBottom()
     }
@@ -4732,18 +4762,12 @@ watch(() => props.ownerDocument ?? document, (owner, _previous, onCleanup) => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  disposed = true
   messageSourceGeneration += 1
   navigationGeneration += 1
   if (streamRenderTimer) clearTimeout(streamRenderTimer)
   clearRenderCaches()
-  if (conversationScrollFrame) {
-    cancelAnimationFrame(conversationScrollFrame)
-    conversationScrollFrame = 0
-  }
-  if (bottomLockFrame) {
-    cancelAnimationFrame(bottomLockFrame)
-    bottomLockFrame = 0
-  }
+  cancelConversationScroll()
   messageCopy.reset()
 })
 </script>
