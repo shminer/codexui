@@ -52,7 +52,7 @@ import {
   type UiSubagent,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
-import { normalizeFileChangeStatus, toUiFileChanges, toUiImageView } from '../api/normalizers/v2'
+import { normalizeFileChangeStatus, toUiFileChanges, toUiImageView, toUiPlan } from '../api/normalizers/v2'
 import { collectSubagents, mergeSubagents } from '../agentCollaboration'
 import type {
   CollaborationModeKind,
@@ -4236,6 +4236,25 @@ export function useDesktopState() {
     livePlanMessagesByThreadId.value = omitKey(livePlanMessagesByThreadId.value, threadId)
   }
 
+  function retainTurnPlans(threadId: string, turnId: string, completed: boolean): void {
+    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
+    const live = livePlanMessagesByThreadId.value[threadId] ?? []
+    const plans = [...new Map([...persisted, ...live]
+      .filter(message => message.turnId === turnId && (message.messageType === 'plan' || message.messageType === 'plan.live'))
+      .map(message => [message.id, completed ? {
+        ...message, messageType: 'plan', plan: message.plan ? { ...message.plan, isStreaming: false } : undefined,
+      } : message])).values()]
+    if (!plans.length) return
+    if (historyWindowThreadIds.has(threadId)) {
+      setLivePlanMessagesForThread(threadId, mergeMessages(live, plans, { preserveMissing: true }))
+      return
+    }
+    // Completion must not clear the only copy while persisted history is still catching up.
+    const ids = new Set(plans.map(message => message.id))
+    setLivePlanMessagesForThread(threadId, live.filter(message => !ids.has(message.id)))
+    setPersistedMessagesForThread(threadId, mergeMessages(persisted, plans, { preserveMissing: true }))
+  }
+
   function clearLiveFileChangesForThread(threadId: string): void {
     if (!threadId) return
     if (!(threadId in liveFileChangeMessagesByThreadId.value)) return
@@ -4329,13 +4348,10 @@ export function useDesktopState() {
     const delta = readString(params?.delta)
     if (!threadId || !turnId || !delta) return null
 
-    const messageId = `${turnId}:plan`
+    const messageId = readString(params?.itemId) || readString(params?.item_id) || `${turnId}:plan`
     const existing = (livePlanMessagesByThreadId.value[threadId] ?? []).find((message) => message.id === messageId)
       ?? persistedMessagesByThreadId.value[threadId]?.find((message) => message.id === messageId)
     const nextText = `${existing?.text ?? ''}${delta}`
-    const nextPlan: UiPlanData | undefined = existing?.plan
-      ? { ...existing.plan, isStreaming: true }
-      : undefined
 
     return {
       threadId,
@@ -4346,7 +4362,8 @@ export function useDesktopState() {
         role: 'assistant',
         text: nextText,
         messageType: 'plan.live',
-        plan: nextPlan,
+        // Text deltas are the proposed plan, not the turn/plan/updated task checklist.
+        plan: undefined,
       },
     }
   }
@@ -5594,6 +5611,7 @@ export function useDesktopState() {
         shouldRetryWithFallback,
         completedTurn.threadId === selectedThreadId.value,
       )
+      retainTurnPlans(completedTurn.threadId, completedTurn.turnId, completedTurn.status === 'completed')
       const isSideConversationTurn = isKnownSideConversationThread(completedTurn.threadId)
       if (!isSideConversationTurn && !shouldRetryWithFallback && completedTurn.status !== 'completed') {
         suppressUnreadForNonSuccessCompletion(completedTurn.threadId)
@@ -5685,6 +5703,29 @@ export function useDesktopState() {
       })
     }
 
+    if (notificationThreadId && notification.method === 'item/completed') {
+      const item = asRecord(asRecord(notification.params)?.item)
+      const plan = item ? toUiPlan(item) : null
+      const planTurnId = readString(asRecord(notification.params)?.turnId)
+        || readString(asRecord(notification.params)?.turn_id)
+        || activeTurnIdByThreadId.value[notificationThreadId] || ''
+      if (plan?.text.trim()) {
+        // Deltas without itemId use a temporary turn key; replace it with the canonical item.
+        const legacyId = `${planTurnId}:plan`
+        if (plan.id !== legacyId) {
+          const keep = (message: UiMessage) => message.id !== legacyId || Boolean(message.plan)
+          const live = livePlanMessagesByThreadId.value[notificationThreadId] ?? []
+          const persisted = persistedMessagesByThreadId.value[notificationThreadId] ?? []
+          if (live.some(message => !keep(message))) setLivePlanMessagesForThread(notificationThreadId, live.filter(keep))
+          if (persisted.some(message => !keep(message))) setPersistedMessagesForThread(notificationThreadId, persisted.filter(keep))
+        }
+        upsertLivePlanMessage(notificationThreadId, {
+          ...plan, turnId: planTurnId,
+          turnIndex: turnIndexByTurnIdByThreadId.value[notificationThreadId]?.[planTurnId],
+        })
+      }
+    }
+
     const selectedThreadIdForNotification = selectedThreadId.value
     const isSelectedSubagent = selectedThreadIdForNotification
       ? (subagentsByParentThreadId.value[selectedThreadIdForNotification] ?? [])
@@ -5711,6 +5752,7 @@ export function useDesktopState() {
     if (completedAgentMessage) {
       upsertLiveAgentMessage(notificationThreadId, completedAgentMessage, liveAgentTurnId)
     }
+
 
     const completedImageView = readCompletedImageView(notification)
     if (completedImageView) {
