@@ -48,3 +48,15 @@ Completed plan cards show an `Implement plan` button that turns plan mode off an
 工程验证：类型检查、`pnpm run build`、`codexui --help`、`codexui-safe doctor`、`git diff --check` 通过；全量测试为 901 通过／19 失败／6 跳过，另一个套件因 Windows 调用 pnpm 的 ENOENT 失败，失败名称与上轮基线一致。本机未安装 Docker，未运行 provider/auth 容器矩阵；未完成 Android 真机及 Linux 实机复测。
 
 清理／回滚：脚本卸载组件、停止通知订阅并关闭隔离上下文，不写真实会话。4173 保持运行；产物位于忽略目录 `output/playwright/`。仅回滚本次实时 Plan 修复提交并重新构建即可恢复旧行为，不涉及配置或数据迁移。
+
+### main 合并兼容回归
+
+前提：侧窗实时消息使用统一事件缓冲；运行 `pnpm exec vitest run src/composables/useDesktopState.test.ts -t "realtime plan completion"`。
+
+操作：分别在主对话和侧窗只发送 Plan delta 后完成回合；另测无 itemId 草稿后收到带真实 ID 的最终条目，并保留独立任务清单。
+
+预期：完成正文转为 plan；旧文本草稿被去重，任务清单保留。侧窗在原缓冲位置更新，不改变其他实时消息的先后顺序，也不将新消息插入用户正在阅读的历史窗口。新增两个侧窗回归在适配前失败，适配后与原有八例全部通过。
+
+性能核对：仅在既有有界消息数组上建立 Map 并线性更新；不增加网络请求、定时器或订阅。回滚／清理：测试采用隔离 mock，不写真实会话；回滚兼容提交即可。
+
+合并验证：定向消息状态测试 25 通过（其中实时 Plan 10 例）；全量 905 通过、19 失败、6 跳过，另有 Windows pnpm 启动失败套件；失败名称与本次 main 基线逐项一致。build、CLI help、safe doctor、diff 检查通过。两套浏览器脚本通过；Plan 主列表 1440×1000／普通列表 375×812 明暗主题均保持单张卡片，完成展示约 34ms／27ms。侧窗 375×812、768×1024、1440×1000 明暗主题及后台恢复场景通过；真实 Linux 环境未复测。

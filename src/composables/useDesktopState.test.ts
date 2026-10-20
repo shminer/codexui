@@ -215,17 +215,19 @@ describe('realtime plan completion', () => {
     expect(state.messages.value.find(message => message.id === params.itemId)).toMatchObject({ text: 'Complete background plan', messageType: 'plan' })
   })
 
-  it('reconciles legacy deltas with the real completed item without dropping the task checklist', async () => {
+  it.each([false, true])('reconciles legacy deltas without dropping the checklist (side=%s)', async side => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
-    const params = { threadId: 'thread-1', turnId: 'plan-turn' }
+    if (side) await state.openSideConversation('thread-1')
+    const rows = () => side ? state.sideConversationMessages.value : state.messages.value
+    const params = { threadId: side ? 'side-thread-default' : 'thread-1', turnId: 'plan-turn' }
     emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
     emit({ method: 'item/plan/delta', params: { ...params, delta: 'legacy draft' } })
     emit({ method: 'item/completed', params: { ...params, item: { id: 'actual-plan', type: 'plan', text: 'Final proposed plan' } } })
-    expect(state.messages.value.filter(message => message.messageType?.startsWith('plan')).map(message => message.id)).toEqual(['actual-plan'])
+    expect(rows().filter(message => message.messageType?.startsWith('plan')).map(message => message.id)).toEqual(['actual-plan'])
     emit({ method: 'turn/plan/updated', params: { ...params, plan: [{ step: 'Inspect code', status: 'completed' }] } })
     emit({ method: 'item/completed', params: { ...params, item: { id: 'actual-plan', type: 'plan', text: 'Final proposed plan' } } })
-    expect(state.messages.value.find(message => message.id === 'plan-turn:plan')?.plan?.steps).toHaveLength(1)
-    expect(state.messages.value.filter(message => message.id === 'actual-plan')).toHaveLength(1)
+    expect(rows().find(message => message.id === 'plan-turn:plan')?.plan?.steps).toHaveLength(1)
+    expect(rows().filter(message => message.id === 'actual-plan')).toHaveLength(1)
   })
 
   it.each(['completed', 'interrupted'])('does not erase streamed text when an empty final item precedes %s', async status => {
@@ -277,13 +279,14 @@ describe('realtime plan completion', () => {
     expect(state.messages.value.find(message => message.id === 'final-plan')?.text).toBe('Final without deltas')
   })
 
-  it('retains a delta-only plan when the turn completes successfully', async () => {
+  it.each([false, true])('retains a delta-only plan when the turn completes (side=%s)', async side => {
     const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
-    const params = { threadId: 'thread-1', turnId: 'plan-turn' }
+    if (side) await state.openSideConversation('thread-1')
+    const params = { threadId: side ? 'side-thread-default' : 'thread-1', turnId: 'plan-turn' }
     emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
     emit({ method: 'item/plan/delta', params: { ...params, delta: 'Complete streamed plan' } })
     emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } } })
-    expect(state.messages.value.find(message => message.id === 'plan-turn:plan')).toMatchObject({ text: 'Complete streamed plan', messageType: 'plan' })
+    expect((side ? state.sideConversationMessages.value : state.messages.value).find(message => message.id === 'plan-turn:plan')).toMatchObject({ text: 'Complete streamed plan', messageType: 'plan' })
   })
 })
 

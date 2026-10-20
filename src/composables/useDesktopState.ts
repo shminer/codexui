@@ -4240,13 +4240,24 @@ export function useDesktopState() {
 
   function retainTurnPlans(threadId: string, turnId: string, completed: boolean): void {
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const live = livePlanMessagesByThreadId.value[threadId] ?? []
+    const side = isKnownSideConversationThread(threadId)
+    const live = (side ? sideLiveMessagesByThreadId : livePlanMessagesByThreadId).value[threadId] ?? []
     const plans = [...new Map([...persisted, ...live]
       .filter(message => message.turnId === turnId && (message.messageType === 'plan' || message.messageType === 'plan.live'))
       .map(message => [message.id, completed ? {
         ...message, messageType: 'plan', plan: message.plan ? { ...message.plan, isStreaming: false } : undefined,
       } : message])).values()]
     if (!plans.length) return
+    if (side) {
+      // Keep side event order and historical windows; turn completion absorbs this buffer.
+      const byId = new Map(plans.map(message => [message.id, message]))
+      sideLiveMessagesByThreadId.value = {
+        ...sideLiveMessagesByThreadId.value,
+        [threadId]: live.map(message => byId.get(message.id) ?? message),
+      }
+      setPersistedMessagesForThread(threadId, persisted.map(message => byId.get(message.id) ?? message))
+      return
+    }
     if (historyWindowThreadIds.has(threadId)) {
       setLivePlanMessagesForThread(threadId, mergeMessages(live, plans, { preserveMissing: true }))
       return
@@ -5724,6 +5735,13 @@ export function useDesktopState() {
           const keep = (message: UiMessage) => message.id !== legacyId || Boolean(message.plan)
           const live = livePlanMessagesByThreadId.value[notificationThreadId] ?? []
           const persisted = persistedMessagesByThreadId.value[notificationThreadId] ?? []
+          const sideLive = sideLiveMessagesByThreadId.value[notificationThreadId] ?? []
+          if (sideLive.some(message => !keep(message))) {
+            sideLiveMessagesByThreadId.value = {
+              ...sideLiveMessagesByThreadId.value,
+              [notificationThreadId]: sideLive.filter(keep),
+            }
+          }
           if (live.some(message => !keep(message))) setLivePlanMessagesForThread(notificationThreadId, live.filter(keep))
           if (persisted.some(message => !keep(message))) setPersistedMessagesForThread(notificationThreadId, persisted.filter(keep))
         }
