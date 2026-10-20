@@ -24,6 +24,7 @@
       :buffer="400"
       :shift="true"
       :disable-transform="true"
+      :flow-mode="historySource === 'ephemeral'"
       :emit-update="true"
       tabindex="0"
       role="list"
