@@ -419,6 +419,12 @@ export function toUiFileChanges(changes: unknown): UiFileChange[] {
   return normalized
 }
 
+export function toUiPlan(item: Record<string, unknown>): UiMessage | null {
+  if (item.type !== 'plan' || typeof item.id !== 'string' || !item.id) return null
+  const text = typeof item.text === 'string' ? item.text : ''
+  return { id: item.id, role: 'assistant', text, messageType: 'plan', plan: parsePlanText(text) ?? undefined }
+}
+
 function toUiMessages(item: ThreadItem): UiMessage[] {
   if (item.type === 'contextCompaction') {
     return [{ id: item.id, role: 'system', text: 'Context compacted', messageType: 'contextCompaction' }]
@@ -485,16 +491,8 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
 
 
   if (item.type === 'plan') {
-    const text = typeof item.text === 'string' ? item.text : ''
-    return [
-      {
-        id: item.id,
-        role: 'assistant',
-        text,
-        messageType: 'plan',
-        plan: parsePlanText(text) ?? undefined,
-      },
-    ]
+    const plan = toUiPlan(item)
+    return plan ? [plan] : []
   }
 
   if (item.type === 'commandExecution') {

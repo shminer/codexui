@@ -203,6 +203,90 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+describe('realtime plan completion', () => {
+  it('retains the final plan for an unselected thread', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1', [thread('other-thread', '/tmp/project')])
+    const params = { threadId: 'other-thread', turnId: 'background-turn', itemId: 'background-plan' }
+    emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'Partial' } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: params.itemId, type: 'plan', text: 'Complete background plan' } } })
+    emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } } })
+    state.primeSelectedThread(params.threadId)
+    expect(state.messages.value.find(message => message.id === params.itemId)).toMatchObject({ text: 'Complete background plan', messageType: 'plan' })
+  })
+
+  it('reconciles legacy deltas with the real completed item without dropping the task checklist', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'plan-turn' }
+    emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'legacy draft' } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'actual-plan', type: 'plan', text: 'Final proposed plan' } } })
+    expect(state.messages.value.filter(message => message.messageType?.startsWith('plan')).map(message => message.id)).toEqual(['actual-plan'])
+    emit({ method: 'turn/plan/updated', params: { ...params, plan: [{ step: 'Inspect code', status: 'completed' }] } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'actual-plan', type: 'plan', text: 'Final proposed plan' } } })
+    expect(state.messages.value.find(message => message.id === 'plan-turn:plan')?.plan?.steps).toHaveLength(1)
+    expect(state.messages.value.filter(message => message.id === 'actual-plan')).toHaveLength(1)
+  })
+
+  it.each(['completed', 'interrupted'])('does not erase streamed text when an empty final item precedes %s', async status => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'plan-turn', itemId: 'plan-item' }
+    emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'Streamed text' } })
+    emit({ method: 'item/completed', params: { ...params, item: { id: params.itemId, type: 'plan', text: '' } } })
+    emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status } } })
+    expect(state.messages.value.find(message => message.id === params.itemId)).toMatchObject({
+      text: 'Streamed text', messageType: status === 'completed' ? 'plan' : 'plan.live',
+    })
+  })
+
+  it.each([false, true])('keeps a completed plan without a history refresh (side=%s)', async side => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    if (side) await state.openSideConversation('thread-1')
+    const threadId = side ? 'side-thread-default' : 'thread-1'
+    const params = { threadId, turnId: 'plan-turn', itemId: 'plan-item' }
+    const rows = () => side ? state.sideConversationMessages.value : state.messages.value
+    emit({ method: 'turn/started', params: { threadId, turn: { id: params.turnId } } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'Partial plan' } })
+    expect(rows().find(message => message.id === params.itemId)?.text).toBe('Partial plan')
+    emit({ method: 'item/completed', params: { ...params, item: { id: params.itemId, type: 'plan', text: '# Final plan\n\nComplete final content' } } })
+    expect(rows().filter(message => message.id === params.itemId)).toEqual([
+      expect.objectContaining({ text: '# Final plan\n\nComplete final content', messageType: 'plan', turnId: params.turnId }),
+    ])
+    gatewayMocks.getLatestThreadMessages.mockRejectedValue(new Error('History unavailable'))
+    emit({ method: 'turn/completed', params: { threadId, turn: { id: params.turnId, status: 'completed' } } })
+    await flushMicrotasks()
+    expect(rows().find(message => message.id === params.itemId)?.text).toContain('Complete final content')
+    emit({ method: 'turn/started', params: { threadId, turn: { id: 'next-turn' } } })
+    expect(rows().find(message => message.id === params.itemId)?.messageType).toBe('plan')
+  })
+
+  it('shows a completed plan without deltas and keeps it through a stale snapshot', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'plan-turn' }
+    emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
+    let finish!: (value: unknown) => void
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const reading = state.loadMessages(params.threadId, { force: true, silent: true })
+    await flushMicrotasks()
+    emit({ method: 'item/completed', params: { ...params, item: { id: 'final-plan', type: 'plan', text: 'Final without deltas' } } })
+    expect(state.messages.value.find(message => message.id === 'final-plan')?.messageType).toBe('plan')
+    emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } } })
+    finish({ messages: [], inProgress: false, activeTurnId: '', turnIndexByTurnId: {}, hasMoreOlder: false, subagents: [] })
+    await reading
+    expect(state.messages.value.find(message => message.id === 'final-plan')?.text).toBe('Final without deltas')
+  })
+
+  it('retains a delta-only plan when the turn completes successfully', async () => {
+    const { state, emit } = await setupTurnLifecycleNotificationState('thread-1')
+    const params = { threadId: 'thread-1', turnId: 'plan-turn' }
+    emit({ method: 'turn/started', params: { threadId: params.threadId, turn: { id: params.turnId } } })
+    emit({ method: 'item/plan/delta', params: { ...params, delta: 'Complete streamed plan' } })
+    emit({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: params.turnId, status: 'completed' } } })
+    expect(state.messages.value.find(message => message.id === 'plan-turn:plan')).toMatchObject({ text: 'Complete streamed plan', messageType: 'plan' })
+  })
+})
+
 describe('recent thread preview', () => {
   it('forgets a deleted cached thread and preserves the selected conversation', async () => {
     installTestWindow()
