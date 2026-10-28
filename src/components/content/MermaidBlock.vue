@@ -56,7 +56,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import { createOutputBlockCopyController } from './outputBlockCopyController'
 import { renderMermaid } from './mermaidRenderer'
-import { mermaidWheelZoom, zoomMermaidViewport, type MermaidViewport } from './mermaidViewport'
+import { mermaidWheelZoom, prepareMermaidSvg, zoomMermaidViewport, type MermaidViewport } from './mermaidViewport'
 
 const props = defineProps<{ source: string; streaming?: boolean; ownerDocument?: Document }>()
 const { t } = useUiLanguage()
@@ -267,18 +267,21 @@ watch([() => props.source, () => props.streaming, dark, visible], async ([source
   try {
     const result = await renderMermaid(source, isDark, isCurrent)
     if (!result || !isCurrent()) return
-    const parsedSvg = new DOMParser().parseFromString(result, 'image/svg+xml').documentElement
-    const dimensions = parsedSvg.getAttribute('viewBox')?.trim().split(/[\s,]+/u).map(Number)
-    if (parsedSvg.localName !== 'svg' || !dimensions || dimensions.length !== 4 || !dimensions.every(Number.isFinite)
-      || dimensions[2] <= 0 || dimensions[3] <= 0) throw new Error('Invalid diagram dimensions')
-    diagramSize.value = { width: dimensions[2], height: dimensions[3] }
+    svg.value = result
+    await nextTick()
+    if (!isCurrent()) return
+    const element = canvas.value?.querySelector('svg')
+    if (!element) throw new Error('Missing diagram SVG')
+    diagramSize.value = prepareMermaidSvg(element)
     renderedSource = source
     renderedDark = isDark
-    svg.value = result
     if (expanded.value) inlineView = { zoom: 1, x: 0, y: 0 }
     fit()
   } catch {
-    if (isCurrent()) error.value = true
+    if (isCurrent()) {
+      svg.value = ''
+      error.value = true
+    }
   }
 }, { immediate: true })
 

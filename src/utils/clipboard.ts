@@ -1,6 +1,8 @@
 export function copyTextWithSelectionFallback(text: string, ownerDocument = typeof document === 'undefined' ? undefined : document): boolean {
   if (!ownerDocument) return false
 
+  const previousFocus = ownerDocument.activeElement as HTMLElement | null
+  const container = previousFocus?.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? ownerDocument.body
   const textarea = ownerDocument.createElement('textarea')
   textarea.value = text
   textarea.setAttribute('readonly', 'true')
@@ -8,17 +10,18 @@ export function copyTextWithSelectionFallback(text: string, ownerDocument = type
   textarea.style.left = '-9999px'
   textarea.style.opacity = '0'
   textarea.style.pointerEvents = 'none'
-  ownerDocument.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  textarea.setSelectionRange(0, text.length)
+  container.appendChild(textarea)
 
   try {
+    textarea.focus()
+    textarea.select()
+    textarea.setSelectionRange(0, text.length)
     return ownerDocument.execCommand('copy')
   } catch {
     return false
   } finally {
-    ownerDocument.body.removeChild(textarea)
+    container.removeChild(textarea)
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
   }
 }
 

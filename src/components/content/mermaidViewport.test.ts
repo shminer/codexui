@@ -1,5 +1,34 @@
-import { describe, expect, it } from 'vitest'
-import { isMermaidLanguage, mermaidWheelZoom, zoomMermaidViewport } from './mermaidViewport'
+import { describe, expect, it, vi } from 'vitest'
+import { isMermaidLanguage, mermaidWheelZoom, prepareMermaidSvg, zoomMermaidViewport } from './mermaidViewport'
+
+describe('Mermaid SVG dimensions', () => {
+  function mockSvg(viewBox: { x: number; y: number; width: number; height: number } | null) {
+    return {
+      hasAttribute: () => viewBox !== null,
+      viewBox: { baseVal: viewBox },
+      getBBox: vi.fn(() => ({ x: 50, y: 10, width: 100, height: 40 })),
+      setAttribute: vi.fn(),
+    }
+  }
+
+  it('keeps an existing viewBox without measuring or rewriting the diagram', () => {
+    const svg = mockSvg({ x: -12, y: -4, width: 640, height: 480 })
+    expect(prepareMermaidSvg(svg as unknown as SVGSVGElement)).toEqual({ width: 640, height: 480 })
+    expect(svg.getBBox).not.toHaveBeenCalled()
+    expect(svg.setAttribute).not.toHaveBeenCalled()
+  })
+
+  it('fits an info-style SVG without a viewBox around its content and padding', () => {
+    const svg = mockSvg(null)
+    expect(prepareMermaidSvg(svg as unknown as SVGSVGElement)).toEqual({ width: 116, height: 56 })
+    expect(svg.setAttribute).toHaveBeenCalledWith('viewBox', '42 2 116 56')
+  })
+
+  it.each([0, -1, Infinity, NaN])('rejects invalid viewBox widths (%s)', (width) => {
+    const svg = mockSvg({ x: 0, y: 0, width, height: 100 })
+    expect(() => prepareMermaidSvg(svg as unknown as SVGSVGElement)).toThrow('Invalid diagram dimensions')
+  })
+})
 
 describe('Mermaid viewport', () => {
   it('recognizes Mermaid without capturing other fenced languages', () => {
