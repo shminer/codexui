@@ -20,7 +20,7 @@ describe('ThreadConversation per-block copy integration', () => {
   it('renders fenced code nested in list items through the recursive copyable block renderer', async () => {
     const conversationSource = await readFile(new URL('./ThreadConversation.vue', import.meta.url), 'utf8')
     expect(conversationSource).toContain("import MessageBlockRenderer from './MessageBlockRenderer.vue'")
-    expect(conversationSource.match(/<MessageBlockRenderer\b/gu)).toHaveLength(2)
+    expect(conversationSource.match(/<MessageBlockRenderer\s+:item="item"/gu)).toHaveLength(2)
     expect(conversationSource).not.toContain('v-html="renderListItemContentAsHtml(item)"')
 
     const rendererSource = await readFile(new URL('./MessageBlockRenderer.vue', import.meta.url), 'utf8')

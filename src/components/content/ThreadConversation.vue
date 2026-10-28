@@ -391,8 +391,16 @@
                   <div
                     v-if="readPlanExplanation(message)"
                     class="plan-card-explanation plan-card-markdown"
-                    v-html="renderMarkdownBlocksAsHtml(readPlanExplanation(message))"
-                  />
+                  >
+                    <MessageBlockRenderer
+                      :blocks="getMarkdownBlocks(readPlanExplanation(message))"
+                      :streaming="message.messageType === 'plan.live'"
+                      :owner-document="ownerDocument"
+                      :render-inline-html="renderInlineSegmentsAsHtml"
+                      :render-block-html="renderMessageBlockAsHtml"
+                      :render-highlighted-code-html="renderCachedHighlightedCodeAsHtml"
+                    />
+                  </div>
                   <ol v-if="readPlanSteps(message).length > 0" class="plan-step-list">
                     <li
                       v-for="(step, stepIndex) in readPlanSteps(message)"
@@ -401,10 +409,28 @@
                       :data-status="step.status"
                     >
                       <span class="plan-step-status" :data-status="step.status">{{ planStepStatusIcon(step.status) }}</span>
-                      <div class="plan-step-text plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(step.step)" />
+                      <div class="plan-step-text plan-card-markdown">
+                        <MessageBlockRenderer
+                          :blocks="getMarkdownBlocks(step.step)"
+                          :streaming="message.messageType === 'plan.live'"
+                          :owner-document="ownerDocument"
+                          :render-inline-html="renderInlineSegmentsAsHtml"
+                          :render-block-html="renderMessageBlockAsHtml"
+                          :render-highlighted-code-html="renderCachedHighlightedCodeAsHtml"
+                        />
+                      </div>
                     </li>
                   </ol>
-                  <div v-else class="plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(message.text)" />
+                  <div v-else class="plan-card-markdown">
+                    <MessageBlockRenderer
+                      :blocks="getMarkdownBlocks(message.text)"
+                      :streaming="message.messageType === 'plan.live'"
+                      :owner-document="ownerDocument"
+                      :render-inline-html="renderInlineSegmentsAsHtml"
+                      :render-block-html="renderMessageBlockAsHtml"
+                      :render-highlighted-code-html="renderCachedHighlightedCodeAsHtml"
+                    />
+                  </div>
                   <div v-if="showImplementPlanButton(message)" class="plan-card-actions">
                     <button
                       type="button"
@@ -1570,7 +1596,7 @@ const markdownImageFailureVersion = ref(0)
 let highlightJsLoader: Promise<void> | null = null
 const MESSAGE_BLOCK_CACHE_LIMIT = 300
 const INLINE_SEGMENT_CACHE_LIMIT = 1200
-const MARKDOWN_HTML_CACHE_LIMIT = 300
+const MARKDOWN_BLOCK_CACHE_LIMIT = 300
 const HIGHLIGHT_HTML_CACHE_LIMIT = 250
 
 type MessageBlockCacheEntry = {
@@ -1579,16 +1605,9 @@ type MessageBlockCacheEntry = {
   blocks: MessageBlock[]
 }
 
-type MarkdownHtmlCacheEntry = {
-  text: string
-  cwd: string
-  highlightVersion: number
-  html: string
-}
-
 const messageBlockCache = new BoundedRenderCache<string, MessageBlockCacheEntry>()
 const inlineSegmentCache = new BoundedRenderCache<string, InlineSegment[]>()
-const markdownHtmlCache = new BoundedRenderCache<string, MarkdownHtmlCacheEntry>()
+const markdownBlockCache = new BoundedRenderCache<string, MessageBlock[]>()
 const highlightHtmlCache = new BoundedRenderCache<string, string>()
 
 function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: number): V {
@@ -1650,7 +1669,6 @@ function ensureHighlightJsLoaded(): Promise<void> {
       .then((module) => {
         highlightJsModule.value = module.default
         highlightHtmlCache.clear()
-        markdownHtmlCache.clear()
         highlightCacheVersion.value += 1
       })
       .finally(() => {
@@ -3737,28 +3755,21 @@ function renderMessageBlockAsHtml(block: MessageBlock): string {
   return `<img class="message-image-preview message-markdown-image" src="${escapeHtml(block.url)}" alt="${escapeHtml(block.alt || 'Embedded message image')}" loading="lazy">`
 }
 
-function renderMarkdownBlocksAsHtml(text: string): string {
-  const cacheKey = `${props.cwd}\u0000${highlightCacheVersion.value}\u0000${text}`
-  const cached = markdownHtmlCache.get(cacheKey)
-  if (cached && cached.text === text && cached.cwd === props.cwd && cached.highlightVersion === highlightCacheVersion.value) {
-    markdownHtmlCache.touch(cacheKey)
-    return cached.html
+function getMarkdownBlocks(text: string): MessageBlock[] {
+  const cacheKey = `${props.cwd}\u0000${text}`
+  const cached = markdownBlockCache.get(cacheKey)
+  if (cached) {
+    markdownBlockCache.touch(cacheKey)
+    return cached
   }
-  const html = parseMessageBlocks(text)
-    .map((block) => renderMessageBlockAsHtml(block))
-    .join('')
-  if (hasStreamingMarkdown.value) return html
+  const blocks = parseMessageBlocks(text)
+  if (hasStreamingMarkdown.value) return blocks
   return setBoundedCacheEntry(
-    markdownHtmlCache,
+    markdownBlockCache,
     cacheKey,
-    {
-      text,
-      cwd: props.cwd,
-      highlightVersion: highlightCacheVersion.value,
-      html,
-    },
-    MARKDOWN_HTML_CACHE_LIMIT,
-  ).html
+    blocks,
+    MARKDOWN_BLOCK_CACHE_LIMIT,
+  )
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -4458,7 +4469,7 @@ async function scheduleConversationScroll(): Promise<void> {
 function clearRenderCaches(): void {
   messageBlockCache.clear()
   inlineSegmentCache.clear()
-  markdownHtmlCache.clear()
+  markdownBlockCache.clear()
   highlightHtmlCache.clear()
 }
 

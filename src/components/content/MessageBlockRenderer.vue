@@ -1,11 +1,11 @@
 <template>
   <div
-    v-for="(paragraph, paragraphIndex) in item.paragraphs"
+    v-for="(paragraph, paragraphIndex) in item?.paragraphs ?? []"
     :key="`paragraph-${paragraphIndex}`"
     class="message-list-item-text message-list-item-paragraph"
     v-html="renderInlineHtml(paragraph)"
   />
-  <template v-for="(block, blockIndex) in item.children ?? []" :key="`block-${blockIndex}`">
+  <template v-for="(block, blockIndex) in blocks ?? item?.children ?? []" :key="`block-${blockIndex}`">
     <MermaidBlock
       v-if="block.kind === 'codeBlock' && isMermaidLanguage(block.language)"
       :source="block.value"
@@ -63,7 +63,8 @@ import { isMermaidLanguage } from './mermaidViewport'
 defineOptions({ name: 'MessageBlockRenderer' })
 
 defineProps<{
-  item: ListItem
+  item?: ListItem
+  blocks?: MessageBlock[]
   streaming?: boolean
   ownerDocument?: Document
   renderInlineHtml: (text: string) => string
