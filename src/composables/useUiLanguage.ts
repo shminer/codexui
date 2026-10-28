@@ -491,6 +491,18 @@ const zhCN: Record<string, string> = {
   'Standard': '标准',
   'Wide': '宽',
   'Extra wide': '超宽',
+  'Mermaid diagram': 'Mermaid 图表',
+  'Zoom out': '缩小',
+  'Zoom in': '放大',
+  'Fit diagram': '适应窗口',
+  'Copy Mermaid source': '复制 Mermaid 源码',
+  'Copied': '已复制',
+  'Copy failed': '复制失败',
+  'Expand diagram': '全屏查看',
+  'Close diagram': '关闭图表',
+  'Could not render Mermaid diagram': 'Mermaid 绘图失败，请检查下方源码',
+  'Rendering diagram...': '正在绘制图表…',
+  'Diagram: scroll to zoom, drag to pan, arrow keys to move': '图表：滚轮缩放，按住拖动，方向键移动',
 }
 
 const LANGUAGE_LABELS: Record<UiLanguage, string> = {

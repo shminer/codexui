@@ -6,7 +6,13 @@
     v-html="renderInlineHtml(paragraph)"
   />
   <template v-for="(block, blockIndex) in item.children ?? []" :key="`block-${blockIndex}`">
-    <div v-if="block.kind === 'codeBlock'" class="message-code-block">
+    <MermaidBlock
+      v-if="block.kind === 'codeBlock' && isMermaidLanguage(block.language)"
+      :source="block.value"
+      :streaming="streaming"
+      :owner-document="ownerDocument"
+    />
+    <div v-else-if="block.kind === 'codeBlock'" class="message-code-block">
       <CopyableOutputBlock :copy-text="block.value" label="Copy code block">
         <div v-if="block.language" class="message-code-language">{{ block.language }}</div>
         <pre class="message-code-pre"><code class="hljs" v-html="renderHighlightedCodeHtml(block.language, block.value)"></code></pre>
@@ -17,6 +23,8 @@
         <div class="message-list-item-content">
           <MessageBlockRenderer
             :item="childItem"
+            :streaming="streaming"
+            :owner-document="ownerDocument"
             :render-inline-html="renderInlineHtml"
             :render-block-html="renderBlockHtml"
             :render-highlighted-code-html="renderHighlightedCodeHtml"
@@ -33,6 +41,8 @@
         <div class="message-list-item-content">
           <MessageBlockRenderer
             :item="childItem"
+            :streaming="streaming"
+            :owner-document="ownerDocument"
             :render-inline-html="renderInlineHtml"
             :render-block-html="renderBlockHtml"
             :render-highlighted-code-html="renderHighlightedCodeHtml"
@@ -47,11 +57,15 @@
 <script setup lang="ts">
 import type { ListItem, MessageBlock } from './messageBlockTypes'
 import CopyableOutputBlock from './CopyableOutputBlock.vue'
+import MermaidBlock from './MermaidBlock.vue'
+import { isMermaidLanguage } from './mermaidViewport'
 
 defineOptions({ name: 'MessageBlockRenderer' })
 
 defineProps<{
   item: ListItem
+  streaming?: boolean
+  ownerDocument?: Document
   renderInlineHtml: (text: string) => string
   renderBlockHtml: (block: MessageBlock) => string
   renderHighlightedCodeHtml: (language: string, value: string) => string

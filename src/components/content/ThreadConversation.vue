@@ -522,6 +522,8 @@
                         <div class="message-list-item-content">
                           <MessageBlockRenderer
                             :item="item"
+                            :streaming="(message.messageType ?? '').endsWith('.live')"
+                            :owner-document="ownerDocument"
                             :render-inline-html="renderInlineSegmentsAsHtml"
                             :render-block-html="renderMessageBlockAsHtml"
                             :render-highlighted-code-html="renderCachedHighlightedCodeAsHtml"
@@ -572,6 +574,8 @@
                         <div class="message-list-item-content">
                           <MessageBlockRenderer
                             :item="item"
+                            :streaming="(message.messageType ?? '').endsWith('.live')"
+                            :owner-document="ownerDocument"
                             :render-inline-html="renderInlineSegmentsAsHtml"
                             :render-block-html="renderMessageBlockAsHtml"
                             :render-highlighted-code-html="renderCachedHighlightedCodeAsHtml"
@@ -659,6 +663,12 @@
                         </tbody>
                       </table>
                     </div>
+                    <MermaidBlock
+                      v-else-if="block.kind === 'codeBlock' && isMermaidLanguage(block.language)"
+                      :source="block.value"
+                      :streaming="(message.messageType ?? '').endsWith('.live')"
+                      :owner-document="ownerDocument"
+                    />
                     <div v-else-if="block.kind === 'codeBlock'" class="message-code-block">
                       <CopyableOutputBlock :copy-text="block.value" label="Copy code block">
                         <div v-if="block.language" class="message-code-language">{{ block.language }}</div>
@@ -1035,6 +1045,8 @@ import type { ListItem, MessageBlock, TableAlignment, TaskListItem } from './mes
 import CopyableOutputBlock from './CopyableOutputBlock.vue'
 import CommandOutput from './CommandOutput.vue'
 import MessageBlockRenderer from './MessageBlockRenderer.vue'
+import MermaidBlock from './MermaidBlock.vue'
+import { isMermaidLanguage } from './mermaidViewport'
 import ThreadSearchPanel from './ThreadSearchPanel.vue'
 import ThreadResourcesPanel from './ThreadResourcesPanel.vue'
 import type { UiThreadResource } from '../../threadResources'
